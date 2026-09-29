@@ -1,19 +1,21 @@
 /**
  * Reactive state for cords: the signed-in account's cord list with the
- * create form behind it, one cord's page, and the instance admins' ops list.
+ * create form behind it, one cord, and the instance admins' ops list.
  *
  * Each class holds `AsyncSlot`s from fuz_app, one per operation, and calls
  * the throwing RPC proxy. The root layout provides the one `CordsState`
  * through `cords_state_context`, which the rail and the home page share;
- * pages construct the others with the `api` from `cord_rpc_context`.
+ * pages construct the others with the `api` from `cord_rpc_context`
+ * (`CordState` through a cord's `CordPageState`).
  * Unlike the member, invite, and join states, these slots keep
  * `AsyncSlot`'s default error message rather than mapping it through
- * `cord_errors.ts`; the cord page reads a load's refusal reason with
+ * `cord_errors.ts`; `CordPageState` reads a load's refusal reason with
  * `rpc_error_reason`.
  *
  * @module
  */
 
+import { untrack } from 'svelte';
 import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { AsyncSlot } from '@fuzdev/fuz_app/ui/async_slot.svelte.ts';
 import type { Uuid } from '@fuzdev/fuz_util/id.ts';
@@ -113,7 +115,7 @@ export class CordsState {
  */
 export const cords_state_context = create_context<CordsState>();
 
-/** One cord, as its page shows it, and renaming it. */
+/** One cord, as its pages show it, and renaming it. */
 export class CordState {
 	readonly #api: ThrowingApi<FrontendActionsApi>;
 
@@ -129,10 +131,18 @@ export class CordState {
 		this.#api = options.api;
 	}
 
-	/** Load the cord `cord_id`, clearing any cord shown before. */
+	/**
+	 * Load the cord `cord_id`, clearing any cord shown before. Moving to
+	 * another cord also drops a rename of the last one, running or done, so
+	 * its result and error stay with the cord it named.
+	 */
 	async fetch(cord_id: Uuid): Promise<void> {
-		this.cord_id = cord_id;
-		this.cord = null;
+		// untracked: an effect calling this must not depend on the `cord_id` it writes
+		untrack(() => {
+			if (this.cord_id !== cord_id) this.rename.reset();
+			this.cord_id = cord_id;
+			this.cord = null;
+		});
 		await this.load.run(async (signal) => {
 			const { cord } = await this.#api.cord_get({ cord_id }, { signal });
 			// a superseded fetch (another cord's, or an older one) keeps out

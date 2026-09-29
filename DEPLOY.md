@@ -93,18 +93,18 @@ token once it's used, and the claim can't be made again.
 ## 6. The first cord
 
 Signed in as the admin, the home page offers "create your first cord".
-From the cord's page you can make invite links, including ones that bring
-someone new onto the instance; `/admin/invites` mints plain signup
-invites.
+From the cord's invites tab you can make invite links, including ones
+that bring someone new onto the instance; `/admin/invites` mints plain
+signup invites.
 
 ## 7. Smoke test
 
 - `curl -i https://<domain>/health` and `curl -i https://<domain>/ready`
   both answer 200
 - log out and back in
-- an invite round trip: from the cord's page, make a link for someone new,
-  open it in a private window, choose a username, sign up, and join; the
-  new account shows in the cord's members
+- an invite round trip: from the cord's invites tab, make a link for
+  someone new, open it in a private window, choose a username, sign up,
+  and join; the new account shows in the cord's members
 - `/admin/audit`: the new events list your real IP, not `127.0.0.1`; press
   "stream", leave it idle for more than a minute, and it still reads
   "connected"; a login elsewhere then shows up live

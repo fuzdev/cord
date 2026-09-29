@@ -49,8 +49,9 @@ Skill(fuz-stack).
   `cord_roles.ts` (the roles and member rules' twin), `action_specs.ts` and
   the generated `action_*` modules; `ui/` holds `rpc.ts`, `cord_errors.ts`
   (refusal reasons to words), the `*_state.svelte.ts` classes, and the
-  components (`CordNav`, the rail; `CordNameForm`, `CordMembers`,
-  `CordInvites`, `CordInviteForm`, `CordNewcomerForm`)
+  components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs;
+  `CordNameForm`, `CordMembers`, `CordInvites`, `CordInviteForm`,
+  `CordNewcomerForm`)
 - `src/test/` — vitest tests; `cross_backend/` holds the end-to-end suites
 - `crates/cord_server/` — the server library and `cordd`, plus the
   `expected_schema.json` fixture; `tests/` holds the Postgres suites
@@ -214,7 +215,7 @@ the rail shows only the links both shapes share. Its log out goes through
 `auth_state.logout` and then home. The rail and the home page read the one
 `CordsState`, loaded on sign-in and refetched each time the home page
 mounts after that. A cord created, left, or joined here shows in the rail at
-once; the cord page puts its own view of the cord (its name, renamed there,
+once; a cord's layout puts its own view of the cord (its name, renamed there,
 and the viewer's role, from the member list once loaded) into the rail's
 entry, and drops the entry when the server doesn't find the cord for you.
 Other changes (another tab's, or another member's) show when you come home,
@@ -231,6 +232,21 @@ through `ui/cord_errors.ts`; `cords_state.svelte.ts` keeps `AsyncSlot`'s
 default messages. Per-cord states drop responses for a cord they've moved
 off, and their `fetch` is safe to call from an `$effect`.
 
+A cord's pages share a layout that owns one `CordPageState`
+(`ui/cord_page_state.svelte.ts`: the cord, its members, and the viewer's
+role, from the member list once loaded, else from the cord), provided
+through `cord_page_state_context`. Its cord, role, and member-list views
+answer only for the cord the route names, so a navigation to another cord
+drops the last one's in the same update. The layout holds the session
+gates, the not-found view, and the loading and error states, each titling
+the page, and mounts a tab page only once the route's cord has loaded,
+with the viewer's role in it; no tab page mounts, or fetches, against a
+cord the route has left. The members page refreshes the list when it
+opens, so a role changed elsewhere catches up there. The invites page
+builds its own `CordInvitesState`. The invites and settings tabs show only
+to owners and admins, and their pages guard themselves too, fetching
+nothing for anyone else.
+
 The typed surface is generated: `action_specs.ts` lists every spec the
 server mounts (the protocol actions work only over `/api/ws`), and
 `action_collections.gen.ts` / `action_metatypes.gen.ts` generate the typed
@@ -241,9 +257,11 @@ Routes, prerendered anonymous and filled in client-side:
 
 - `/` — the intro; signed in, your cords, and a create form for admins
 - `/about` — about the project, with the fuz ecosystem links
-- `/c/[cord_id]` — a cord's page: members, and for owners and admins,
-  rename and invite links; the one route not prerendered, so the web
-  server must fall back to the build's `spa.html`
+- `/c/[cord_id]` — a cord's pages, as tabs: the overview (your role, and
+  where spaces will go), `members` (the members, and leaving), and for
+  owners and admins `invites` (invite links) and `settings` (rename); the
+  one section not prerendered, so the web server must fall back to the
+  build's `spa.html` for all of it
 - `/join` — where an invite link lands (`/join#<token>`)
 - `/login`, `/signup` — fuz_app's forms; signup is invite-gated by default
 - `/account` — your account and sessions
@@ -333,11 +351,11 @@ What's cord-specific, beyond the stock fuz_app recipes:
 - **nginx** falls back with `$uri $uri.html $uri/index.html /spa.html`:
   prerendered pages are `<route>.html`, `admin/` has no `index.html` (a
   `$uri/` entry would 403 on `/admin/`), and `spa.html` serves
-  `/c/<cord_id>` and the SPA's 404. `/api/admin/audit/stream` gets its own
-  exact-match location, unbuffered with an hour's read timeout, since the
-  `/api` block's 60s timeout would cut the idle stream. `/api/ws` rides the
-  `/api` block and its 60s timeout, to revisit when the frontend holds a
-  WebSocket open.
+  `/c/<cord_id>` and its tabs, and the SPA's 404.
+  `/api/admin/audit/stream` gets its own exact-match location, unbuffered
+  with an hour's read timeout, since the `/api` block's 60s timeout would
+  cut the idle stream. `/api/ws` rides the `/api` block and its 60s
+  timeout, to revisit when the frontend holds a WebSocket open.
 - **The deploy** builds locally (`cargo xtask check-release`, the release
   `cordd`, `gro build`, then the binary into `dist_artifacts/`, after
   `gro build` since it deletes `dist_*`) and gates on `/ready`. A rollback

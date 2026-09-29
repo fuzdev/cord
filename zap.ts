@@ -158,8 +158,8 @@ const EXTRA_LOCATIONS = `    # Admin audit log stream (server-sent events): unbu
 // The SPA fallback. The static build prerenders `/admin` as `admin.html` beside
 // an `admin/` directory with no `index.html`, so `$uri.html` must come before
 // any directory match (a `$uri/` entry would 403 on `/admin/`), and the
-// fallback is the build's `spa.html`, which serves `/c/<cord_id>` and renders
-// the SPA's 404 for unknown paths.
+// fallback is the build's `spa.html`, which serves `/c/<cord_id>` and its tabs
+// and renders the SPA's 404 for unknown paths.
 const SPA_TRY_FILES = '$uri $uri.html $uri/index.html /spa.html';
 
 //

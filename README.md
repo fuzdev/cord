@@ -108,7 +108,7 @@ gro build  # production build of the static frontend
 
 The build in `build/` is static files plus `spa.html`, which whatever
 serves them must fall back to for paths with no prerendered page (a cord's
-page, `/c/<id>`).
+pages, `/c/<id>` and its tabs).
 
 ### The server
 

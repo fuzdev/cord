@@ -214,4 +214,24 @@ describe('CordState', () => {
 		await first;
 		assert.strictEqual(state.cord?.name, 'the yard');
 	});
+
+	test('moving to another cord drops a rename of the last one', async () => {
+		const yard = { ...cord('the yard'), id: '22222222-2222-4222-8222-222222222222' } as CordJson;
+		let resolve_update!: (v: { cord: CordJson }) => void;
+		const state = new CordState({
+			api: stub_api({
+				cord_get: (input: { cord_id: string }) =>
+					Promise.resolve({ cord: input.cord_id === yard.id ? yard : cord('the porch') }),
+				cord_update: () => new Promise((r) => (resolve_update = r))
+			})
+		});
+		await state.fetch(cord('x').id);
+		const renaming = state.rename_cord('the stoop');
+		assert.isTrue(state.rename.loading);
+		await state.fetch(yard.id);
+		assert.isTrue(state.rename.initial);
+		resolve_update({ cord: cord('the stoop') });
+		assert.isFalse(await renaming);
+		assert.strictEqual(state.cord?.name, 'the yard', 'the porch’s rename stays off the yard');
+	});
 });

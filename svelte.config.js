@@ -10,7 +10,7 @@ export default {
 	compilerOptions: { runes: true },
 	vitePlugin: { inspector: true },
 	kit: {
-		// `spa.html` serves the routes that opt out of prerendering (`/c/[cord_id]`);
+		// `spa.html` serves the routes that opt out of prerendering (`/c/[cord_id]` and its tabs);
 		// the web server falls back to it for any path with no prerendered file
 		adapter: adapter({ fallback: 'spa.html' }),
 		paths: { relative: false }, // use root-absolute paths for SSR path comparison: https://svelte.dev/docs/kit/configuration#paths
