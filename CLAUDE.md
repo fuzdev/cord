@@ -63,7 +63,8 @@ Skill(fuz-stack).
 
 - `main.rs` (`cordd`, `cordd db-status`), `runtime.rs` (`run_app`,
   `RunAppOptions`, signals, drain, the sweep task), `env.rs` (`CordEnv`),
-  `app.rs` (`CordApp`, the composition root), `error.rs` (`StartupError`)
+  `app.rs` (`CordApp`, the composition root), `error.rs` (`StartupError`),
+  `transaction_isolation.rs` (the READ COMMITTED boot check)
 - `router.rs` — the routes, middleware, migration chain, action registry,
   and the `cord_session` cookie
 - `roles.rs`, `cord_authz.rs` — the cord roles; the exact-scope predicates
@@ -114,9 +115,10 @@ The load-bearing rules. Each module named holds the full reasoning.
 - **Serialization.** Every membership change (role set, remove, leave,
   accept) locks the cord's cell row, then re-reads membership and applies
   the rules to that read, never the request's snapshot; this relies on
-  READ COMMITTED. The other managing writes (rename, invite create and
-  revoke) take no cord lock and read the caller's role afresh inside the
-  transaction; minting a newcomer link also re-reads the caller's global
+  READ COMMITTED, which `cordd` checks at boot, refusing to serve (exit
+  `2`) when `default_transaction_isolation` is anything else. The other
+  managing writes (rename, invite create and revoke) take no cord lock and
+  read the caller's role afresh inside the transaction; minting a newcomer link also re-reads the caller's global
   `admin` grant, under a share lock. Lock order is link, then
   cord, then redemption; revoke must not take the cord lock, or it would
   deadlock against accept. Redeem takes the link lock and, for a new
@@ -138,8 +140,11 @@ The load-bearing rules. Each module named holds the full reasoning.
   signed in, spending nothing; accept stays open until
   `CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS` past expiry, while a revoke
   refuses at once. Revoke and the expiry sweep release waiting
-  reservations. (`invite/redemption_queries.rs`, `invite/queries.rs`,
-  `invite/sweep.rs`)
+  reservations. Redeem answers whether a username is free, so beyond the
+  spine's shared IP class it has its own per-IP limiter
+  (`CORD_INVITE_REDEEM_RATE_LIMIT`, charged in the handler; none under
+  `testing_cordd`). (`invite/redemption_queries.rs`, `invite/queries.rs`,
+  `invite/sweep.rs`, `invite/actions.rs`)
 - **Cord names** refuse, before trimming, the ranges in
   `CORD_NAME_FORBIDDEN_CHAR_RANGES` (control, format, and invisible
   characters, except the join characters and emoji variation selectors,
@@ -256,11 +261,15 @@ and Vite in dev proxies `/api` and `/health` to `cordd` on port 4061. Without
 `DATABASE_URL` it runs boot-only (`/health` and `/`). `FUZ_ALLOWED_ORIGINS`
 is required always, boot-only included, since an empty allowlist would
 admit every origin; with a database, `SECRET_FUZ_COOKIE_KEYS` is required
-too, and migrations run before serving. The README's table lists every
-variable; spine-wide names stay unprefixed and cord-only ones take `CORD_`.
+too, migrations run before serving, and `cordd` refuses to serve unless
+Postgres's `default_transaction_isolation` is `read committed`. The
+README's table lists every variable; spine-wide names stay unprefixed and
+cord-only ones take `CORD_`.
 Exit codes: `0` success, `2` the caller must fix something, `1` everything
 else; `check-release` keeps fuz_audit's `0` clean, `65` a policy
-violation, and `69`/`70` a tooling failure.
+violation, and `69`/`70` a tooling failure. Logs go to stdout in color
+unless `NO_COLOR` is set; set `NO_COLOR=1` in production so journald gets
+plain text.
 
 The spine crates are path deps into a sibling checkout of the fuz Rust
 workspace (paths in the root `Cargo.toml`); they aren't published, so cargo
@@ -290,12 +299,16 @@ truncate**, or rows outlive a test. Never ship it: only it links
 (`cord_action_specs.test.ts`, `cord_roles.test.ts`), the generated surface
 (`action_specs.test.ts`), and the state classes (`src/test/ui/`).
 
-Rust unit tests live in `#[cfg(test)]` modules and need no database. The
-Postgres suites in `crates/cord_server/tests/` are `#[ignore]`d and reset
-the `public` schema of their database: `schema_ready.rs` (the fixture's
-drift guard), `columns.rs` (the column projections), `cords.rs`,
-`cord_members.rs`, `cord_invites.rs`, and `cord_newcomers.rs`, sharing
-`tests/common/`; each module doc lists what it covers.
+Rust unit tests live in `#[cfg(test)]` modules and need no database,
+except `router.rs`'s `#[ignore]`d redeem-budget test, which drives the
+dispatcher over a live connection but no schema. The Postgres suites in
+`crates/cord_server/tests/` are `#[ignore]`d and reset the `public` schema
+of their database: `schema_ready.rs` (the fixture's drift guard),
+`columns.rs` (the column projections), `cords.rs`, `cord_members.rs`,
+`cord_invites.rs`, and `cord_newcomers.rs`, sharing `tests/common/`; each
+module doc lists what it covers. `transaction_isolation.rs` resets no
+schema: it sets and resets the database's own
+`default_transaction_isolation`.
 
 ```bash
 createdb cord_schema_ready_test

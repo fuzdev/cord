@@ -195,6 +195,9 @@ pub(crate) fn cord_owner_count(members: &[CordMember]) -> usize {
 /// wait sees what the previous holder committed. Under REPEATABLE READ the
 /// transaction's snapshot would predate that commit, the post-lock read
 /// would be stale, and two owners could both pass the last-owner check.
+/// `cordd` enforces it at boot: it refuses to serve unless the database's
+/// `default_transaction_isolation` is `read committed`
+/// ([`crate::transaction_isolation`]).
 ///
 /// # Errors
 ///

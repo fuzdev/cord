@@ -31,6 +31,8 @@ import {
 	to_cord_join_view
 } from '#lib/ui/cord_join_state.svelte.ts';
 
+import { CORD_RATE_LIMITED_MESSAGE } from '#lib/ui/cord_errors.ts';
+
 import { rpc_error, stub_api } from './stub_api.ts';
 
 const CORD = {
@@ -1043,6 +1045,32 @@ describe('CordJoinState', () => {
 		await state.fetch_preview(null);
 		assert.deepEqual(view_of(state), { kind: 'dead' });
 		assert.isNull(to_cord_join_recheck_error(view_input_of(state)));
+	});
+
+	test('a rate-limited redeem keeps the form and says to wait', async () => {
+		// the server's rate limit: its code and a retry_after, but no reason
+		const rate_limited = Object.assign(new Error('rate limited'), {
+			code: -32006,
+			data: { retry_after: 600 }
+		});
+		const { storage, stored } = memory_storage({ token: TOKEN, redeemed: REDEEMED });
+		const state = new CordJoinState({
+			api: stub_api({
+				cord_invite_preview: () => Promise.resolve(preview_output()),
+				cord_invite_redeem: () => Promise.reject(rate_limited)
+			}),
+			storage
+		});
+		state.load('');
+		await state.fetch_preview(null);
+		const outcome = await state.join_as_newcomer(REDEEMED.username, password, password, () => {
+			throw new Error('no signup expected');
+		});
+		assert.deepEqual(outcome, { kind: 'redeem_failed', message: CORD_RATE_LIMITED_MESSAGE });
+		assert.isFalse(is_dead_link_error(rate_limited));
+		assert.isFalse(state.dead);
+		assert.deepEqual(view_of(state), { kind: 'newcomer', cord: REDEEMED.cord });
+		assert.deepEqual(stored(), { token: TOKEN, redeemed: REDEEMED }, 'the reservation stays');
 	});
 
 	test('another account signed in leaves the stored redemption be, unused', async () => {

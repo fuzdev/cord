@@ -3,13 +3,15 @@
  * refusal carries, and the words to show for it.
  *
  * The throwing RPC proxy throws an `Error` carrying the JSON-RPC `code` and
- * `data`; the cord verbs put their refusal's reason in `data.reason`.
+ * `data`; the cord verbs put their refusal's reason in `data.reason`. A rate
+ * limit carries no reason, only its code and a `data.retry_after`.
  *
  * @module
  */
 
 import { to_error_message } from '@fuzdev/fuz_util/error.ts';
 import { USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN } from '@fuzdev/fuz_app/primitive_schemas.ts';
+import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import {
 	ERROR_CORD_INVITE_EXHAUSTED,
@@ -37,6 +39,14 @@ export const rpc_error_reason = (e: unknown): string | undefined => {
 	const reason = (e as { data?: { reason?: unknown } } | null)?.data?.reason;
 	return typeof reason === 'string' ? reason : undefined;
 };
+
+/** Whether a thrown RPC error is the server's rate limit, which carries no reason. */
+export const is_rpc_rate_limited = (e: unknown): boolean =>
+	(e as { code?: unknown } | null)?.code === JSONRPC_ERROR_CODES.rate_limited;
+
+/** The words for a rate limit, whichever action hit it. */
+export const CORD_RATE_LIMITED_MESSAGE =
+	'Too many tries for now. Wait a few minutes and try again.';
 
 /** The instance's username rules, in words, for both the form's own check and the server's refusal. */
 export const CORD_USERNAME_RULE = `A username is ${USERNAME_LENGTH_MIN} to ${USERNAME_LENGTH_MAX} characters: letters, numbers, dashes, and underscores, starting with a letter and ending with a letter or number.`;
@@ -67,11 +77,14 @@ export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 
 /**
  * The words to show for a thrown RPC error: the cord copy for its reason
- * when there is some, otherwise the error's own message.
+ * when there is some, the rate-limit copy for a rate limit, otherwise the
+ * error's own message.
  */
 export const to_cord_error_message = (e: unknown): string => {
 	const reason = rpc_error_reason(e);
-	return (reason && CORD_ERROR_MESSAGES[reason]) || to_error_message(e, 'Something went wrong.');
+	if (reason && CORD_ERROR_MESSAGES[reason]) return CORD_ERROR_MESSAGES[reason];
+	if (is_rpc_rate_limited(e)) return CORD_RATE_LIMITED_MESSAGE;
+	return to_error_message(e, 'Something went wrong.');
 };
 
 /**

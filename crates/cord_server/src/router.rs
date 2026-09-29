@@ -373,7 +373,9 @@ fn build_action_registry(
         Arc::new(crate::offer_authorize::CordOfferAuthorize),
         Arc::new(crate::roles::cord_role_registry()),
     ));
-    specs.extend(crate::cord_actions::cord_action_specs());
+    specs.extend(crate::cord_actions::cord_action_specs(
+        app.cord_invite_redeem_rate_limiter.clone(),
+    ));
     // The `testing_cordd` seam for the `_testing_*` actions; production
     // passes no factory, so `fuz_testing` stays out of the `cordd` graph.
     if let Some(factory) = extra_action_specs_factory {
@@ -494,8 +496,15 @@ mod tests {
     /// A full app over a lazy pool: `create_pool` doesn't connect, so nothing
     /// here contacts a database unless a handler queries it.
     fn lazy_app() -> CordApp {
+        lazy_app_over(
+            "postgres://localhost/cord_unused",
+            RateLimiterMode::Enforced,
+        )
+    }
+
+    fn lazy_app_over(database_url: &str, rate_limiters: RateLimiterMode) -> CordApp {
         let env = CordEnv::from_vars(|k| match k {
-            "DATABASE_URL" => Some("postgres://localhost/cord_unused".to_owned()),
+            "DATABASE_URL" => Some(database_url.to_owned()),
             "FUZ_ALLOWED_ORIGINS" => Some("http://localhost:*".to_owned()),
             "SECRET_FUZ_COOKIE_KEYS" => {
                 Some("a-cookie-signing-key-that-is-long-enough-to-pass".to_owned())
@@ -506,19 +515,22 @@ mod tests {
         CordApp::build(
             &env,
             Arc::new(fuz_auth::Argon2idHasher::new()),
-            RateLimiterMode::Enforced,
+            rate_limiters,
             None,
         )
         .expect("app builds without touching the DB")
     }
 
     fn full_router() -> Router {
-        let app = lazy_app();
+        full_router_over(&lazy_app())
+    }
+
+    fn full_router_over(app: &CordApp) -> Router {
         let ready = fuz_http::ready_router(fuz_http::ReadyRouteState {
             pool: app.pool.clone(),
             expected: Arc::new(expected_ready_schema().expect("fixture parses")),
         });
-        compose_full_router(&app, Vec::new(), ready, None, RateLimiterMode::Enforced)
+        compose_full_router(app, Vec::new(), ready, None, RateLimiterMode::Enforced)
             .expect("router composes")
     }
 
@@ -582,6 +594,82 @@ mod tests {
     }
 
     #[test]
+    fn redeem_gets_its_own_limiter_only_when_enforced() {
+        assert!(lazy_app().cord_invite_redeem_rate_limiter.is_some());
+        // `testing_cordd`'s mode, so the cross suite redeems unthrottled
+        let disabled = lazy_app_over(
+            "postgres://localhost/cord_unused",
+            RateLimiterMode::DisabledForTesting,
+        );
+        assert!(disabled.cord_invite_redeem_rate_limiter.is_none());
+    }
+
+    /// POST one JSON-RPC request from `peer` and return the HTTP status and
+    /// the response body.
+    async fn post_rpc(
+        router: Router,
+        peer: &str,
+        body: &serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/rpc")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request builds");
+        req.extensions_mut().insert(axum::extract::ConnectInfo(
+            peer.parse::<std::net::SocketAddr>().expect("peer parses"),
+        ));
+        let res = router.oneshot(req).await.expect("router responds");
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
+            .await
+            .expect("body reads");
+        (
+            status,
+            serde_json::from_slice(&bytes).expect("a JSON-RPC response"),
+        )
+    }
+
+    /// Redeem through the whole router and the spine's dispatcher, which
+    /// needs a live connection (it opens redeem's transaction before the
+    /// handler runs) but no schema: an empty token is refused before any
+    /// query.
+    #[tokio::test]
+    #[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
+    async fn redeem_refuses_past_its_budget_per_ip() {
+        use crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS;
+
+        let url = std::env::var("CORD_SCHEMA_READY_TEST_URL")
+            .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned());
+        let router = full_router_over(&lazy_app_over(&url, RateLimiterMode::Enforced));
+        let redeem = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "cord_invite_redeem",
+            "params": { "token": "", "username": "newcomer" },
+        });
+        for attempt in 0..CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS {
+            let (status, body) = post_rpc(router.clone(), "203.0.113.7:50000", &redeem).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "attempt {attempt}: {body}");
+            assert_eq!(
+                body["error"]["data"]["reason"], "cord_invite_not_found",
+                "{body}"
+            );
+        }
+        let (status, body) = post_rpc(router.clone(), "203.0.113.7:50000", &redeem).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["error"]["code"], -32006, "{body}");
+        assert!(
+            body["error"]["data"]["retry_after"].as_u64().is_some(),
+            "{body}"
+        );
+        // another IP keeps its own budget
+        let (status, body) = post_rpc(router, "198.51.100.9:50000", &redeem).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+
+    #[test]
     fn expected_schema_parses_and_covers_the_migration_chain() {
         let schema = expected_ready_schema().expect("committed fixture parses");
         // the tracker must be expected, so a never-migrated DB fails readiness
@@ -609,7 +697,7 @@ mod tests {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
         // every cord spec, however the list grows
-        for spec in crate::cord_actions::cord_action_specs() {
+        for spec in crate::cord_actions::cord_action_specs(None) {
             assert!(
                 registry.get(spec.method).is_some(),
                 "missing action {}",

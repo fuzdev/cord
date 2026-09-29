@@ -33,6 +33,10 @@ pub struct CordApp {
     pub bootstrap_available: Arc<AtomicBool>,
     pub login_ip_rate_limiter: Option<Arc<RateLimiter>>,
     pub login_account_rate_limiter: Option<Arc<RateLimiter>>,
+    /// `cord_invite_redeem`'s own per-IP limiter
+    /// ([`crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT`]), charged
+    /// in the handler on top of the spine's shared IP class.
+    pub cord_invite_redeem_rate_limiter: Option<Arc<RateLimiter>>,
     /// The daemon-token credential. Always `None` in production: only the
     /// `testing_cordd` binary mints one and injects it through
     /// `RunAppOptions::daemon_token_state`. The keeper it resolves to is
@@ -121,6 +125,8 @@ impl CordApp {
         let login_ip_rate_limiter = rate_limiters.limiter(fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT);
         let login_account_rate_limiter =
             rate_limiters.limiter(fuz_auth::DEFAULT_LOGIN_ACCOUNT_RATE_LIMIT);
+        let cord_invite_redeem_rate_limiter =
+            rate_limiters.limiter(crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT);
 
         Ok(Self {
             pool,
@@ -130,6 +136,7 @@ impl CordApp {
             bootstrap_available,
             login_ip_rate_limiter,
             login_account_rate_limiter,
+            cord_invite_redeem_rate_limiter,
             daemon_token_state,
             realtime: Arc::new(ConnectionRegistry::new()),
             audit_sse: Arc::new(SseRegistry::new()),

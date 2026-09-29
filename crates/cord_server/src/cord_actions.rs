@@ -429,10 +429,18 @@ async fn handle_cord_admin_list<C: GenericClient + ?Sized>(
 
 /// Cord's action specs, folded into the registry beside the spine's: the
 /// cord verbs, then the invite verbs, then the member verbs.
+///
+/// `invite_redeem_rate_limiter` is `cord_invite_redeem`'s own per-IP limiter
+/// ([`crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT`]); `None`, as
+/// under `testing_cordd`, leaves redeem to the spine's shared IP class alone.
 #[must_use]
-pub fn cord_action_specs() -> Vec<ActionSpec> {
+pub fn cord_action_specs(
+    invite_redeem_rate_limiter: Option<Arc<fuz_auth::RateLimiter>>,
+) -> Vec<ActionSpec> {
     let mut specs = cord_domain_action_specs();
-    specs.extend(crate::invite::actions::cord_invite_action_specs());
+    specs.extend(crate::invite::actions::cord_invite_action_specs(
+        invite_redeem_rate_limiter,
+    ));
     specs.extend(crate::cord_member_actions::cord_member_action_specs());
     specs
 }

@@ -81,6 +81,14 @@ export const CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS = 60 * 60;
 export const CORD_INVITE_MAX_USES_MAX = 1000;
 /** The longest invite token the server looks up; the twin of the server's constant. */
 export const CORD_INVITE_TOKEN_LENGTH_MAX = 128;
+/**
+ * The most `cord_invite_redeem` calls one IP may make per
+ * `CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS`, on top of the IP budget the
+ * public actions share; the twin of the server's constant.
+ */
+export const CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS = 10;
+/** The window of `CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS`, in milliseconds (15 minutes); the twin of the server's constant. */
+export const CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS = 15 * 60_000;
 
 /** The longest cord name, in characters; the twin of the server's constant. */
 export const CORD_NAME_LENGTH_MAX = 100;
@@ -592,8 +600,7 @@ export const cord_invite_redeem_action_spec = {
 	output: CordInviteRedeemOutput,
 	async: true,
 	rate_limit: 'ip',
-	description:
-		'Reserve a username on the instance through a newcomer link, spending one of its uses; the newcomer then signs up with that username and accepts the link. Needs no session, and ignores one. Redeeming the same username through the same link again, before its signup, changes nothing and answers `created: false` wherever accept would still take it: once the link is used up, expired within the accept grace, or closed because its minter is no longer an instance admin. A new username needs an active link whose minter is still an instance admin. A dead link (revoked, expired past the grace, or not for newcomers) refuses a waiting username as it would any other.'
+	description: `Reserve a username on the instance through a newcomer link, spending one of its uses; the newcomer then signs up with that username and accepts the link. Needs no session, and ignores one. Redeeming the same username through the same link again, before its signup, changes nothing and answers \`created: false\` wherever accept would still take it: once the link is used up, expired within the accept grace, or closed because its minter is no longer an instance admin. A new username needs an active link whose minter is still an instance admin. A dead link (revoked, expired past the grace, or not for newcomers) refuses a waiting username as it would any other. Besides the IP budget the public actions share, each IP gets ${CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS} redeems per ${CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS / 60_000} minutes.`
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_accept_action_spec = {

@@ -25,7 +25,9 @@
 //! and [`cord_member_actions`]; invite links, in [`invite`], over cord's own
 //! `cord_invite` and `cord_invite_redemption` tables ([`migrations`]).
 //! [`offer_authorize`] restates, as defense in depth, the spine's refusal to
-//! offer a scoped builtin role.
+//! offer a scoped builtin role. [`transaction_isolation`] is the boot check
+//! that Postgres runs transactions at READ COMMITTED, which the membership
+//! serialization relies on.
 
 pub mod app;
 pub mod cord_actions;
@@ -41,3 +43,4 @@ pub mod offer_authorize;
 pub mod roles;
 pub mod router;
 pub mod runtime;
+pub mod transaction_isolation;

@@ -63,7 +63,22 @@
 //! [`RateLimitClass::Account`], as on `role_grant_assign`), since each call
 //! mints a live credential. Preview and redeem, which anonymous callers
 //! reach, are rate-limited per IP ([`RateLimitClass::Ip`], the one class a
-//! public action can carry).
+//! public action can carry), in the budget the spine's IP class shares
+//! across every such action. Redeem answers whether a username is free, so
+//! it is also held to its own, tighter per-IP budget,
+//! [`CORD_INVITE_REDEEM_RATE_LIMIT`] ([`CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS`]
+//! calls per [`CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS`]): a real join takes
+//! one or two redeems, and a few more after a taken username. The spine's
+//! spec rate limit takes only its fixed classes over the shared limiters, so
+//! the redeem handler charges its own limiter first thing, before it parses
+//! its input or runs a query (the dispatcher has already opened the
+//! transaction by then, which a refusal rolls back), through the spine's
+//! `check_action_rate_limit`, which refuses with the dispatcher's own
+//! `rate_limited` error (a `retry_after` in seconds in its `data`). A caller
+//! over the budget has already spent a unit of the shared budget; the
+//! dispatcher charges that before the handler runs. `testing_cordd` builds
+//! no limiters ([`fuz_auth::RateLimiterMode::DisabledForTesting`]), this one
+//! included.
 //!
 //! ## What a token tells its holder
 //!
@@ -77,8 +92,9 @@
 //! Past what an anonymous preview shows, redeem on a live newcomer link
 //! also tells its caller whether a username is free (no account has it and
 //! no unclaimed invite reserves it), the cord's name, and whether this link
-//! already holds a waiting reservation for that username. The rest is
-//! bounded:
+//! already holds a waiting reservation for that username, at most
+//! [`CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS`] times per IP per window.
+//! The rest is bounded:
 //!
 //! - A dead link (revoked, expired past the accept grace, or not for
 //!   newcomers) answers every username alike.
@@ -103,12 +119,14 @@
 //! account whose signup claimed none, trusts the username no more than the
 //! spine's own claim would have.
 
+use std::sync::Arc;
+
 use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};
 use fuz_auth::primitive_schemas::{USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN};
 use fuz_auth::{
-    AuditEventType, AuthSpec, CredentialGate, RateLimitClass, RequestActorContext,
-    is_valid_username_for_creation,
+    AuditEventType, AuthSpec, CredentialGate, DEFAULT_RATE_LIMITER_MAX_KEYS, RateLimitClass,
+    RateLimiter, RateLimiterOptions, RequestActorContext, is_valid_username_for_creation,
 };
 use fuz_http::{
     JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params, not_found,
@@ -165,6 +183,32 @@ pub const ERROR_CORD_INVITE_NEWCOMERS_CLOSED: &str = "cord_invite_newcomers_clos
 pub const ERROR_CORD_INVITE_USERNAME_INVALID: &str = "cord_invite_username_invalid";
 /// Error reason: an account has the username, or an invite reserves it.
 pub const ERROR_CORD_INVITE_USERNAME_UNAVAILABLE: &str = "cord_invite_username_unavailable";
+
+/// The most `cord_invite_redeem` calls one IP may make per
+/// [`CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS`].
+pub const CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS: u32 = 10;
+/// The sliding window of [`CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS`], in
+/// milliseconds (15 minutes).
+pub const CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS: u64 = 15 * 60_000;
+/// The per-IP budget of `cord_invite_redeem`, on top of the spine's shared
+/// IP class: tighter, since redeem answers whether a username is free.
+pub const CORD_INVITE_REDEEM_RATE_LIMIT: RateLimiterOptions = RateLimiterOptions {
+    max_attempts: CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS,
+    window_ms: CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS,
+    max_keys: Some(DEFAULT_RATE_LIMITER_MAX_KEYS),
+};
+
+/// Charge one redeem to the caller's IP in `limiter`, refusing with the
+/// spine's `rate_limited` error once the IP is over
+/// [`CORD_INVITE_REDEEM_RATE_LIMIT`]. An unresolved IP buckets under the
+/// spine's shared sentinel rather than passing; no limiter (under
+/// `testing_cordd`) passes everything.
+fn check_cord_invite_redeem_rate_limit(
+    limiter: Option<&RateLimiter>,
+    client_ip: Option<&str>,
+) -> Result<(), JsonrpcError> {
+    fuz_actions::check_action_rate_limit(Some(RateLimitClass::Ip), None, client_ip, None, limiter)
+}
 
 // -- Wire inputs --------------------------------------------------------------
 
@@ -684,8 +728,12 @@ async fn handle_cord_invite_accept<C: GenericClient + ?Sized>(
 
 // -- Specs --------------------------------------------------------------------
 
-/// The invite-link action specs.
-pub(crate) fn cord_invite_action_specs() -> Vec<ActionSpec> {
+/// The invite-link action specs; `redeem_rate_limiter` is redeem's own
+/// per-IP limiter ([`CORD_INVITE_REDEEM_RATE_LIMIT`]), `None` under
+/// `testing_cordd`.
+pub(crate) fn cord_invite_action_specs(
+    redeem_rate_limiter: Option<Arc<RateLimiter>>,
+) -> Vec<ActionSpec> {
     vec![
         ActionSpec::with_side_effects(
             "cord_invite_create",
@@ -736,8 +784,15 @@ pub(crate) fn cord_invite_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_invite_redeem",
             AuthSpec::public(),
-            handler(|params, ctx| {
+            handler(move |params, ctx| {
+                // first thing, so a flood of malformed input spends the budget
+                // and a throttled caller costs no query of its own
+                let throttled = check_cord_invite_redeem_rate_limit(
+                    redeem_rate_limiter.as_deref(),
+                    ctx.client_ip.as_deref(),
+                );
                 Box::pin(async move {
+                    throttled?;
                     let input: CordInviteRedeemInput = parse_strict_params(params)?;
                     dispatch_db_ctx!(ctx, handle_cord_invite_redeem(&input))
                 })
@@ -765,7 +820,7 @@ mod tests {
 
     #[test]
     fn specs_declare_their_auth_and_effects() {
-        let specs = cord_invite_action_specs();
+        let specs = cord_invite_action_specs(None);
         let find = |method: &str| {
             specs
                 .iter()
@@ -811,13 +866,51 @@ mod tests {
 
     #[test]
     fn minting_is_rate_limited_per_account_and_anonymous_reach_per_ip() {
-        for spec in cord_invite_action_specs() {
+        for spec in cord_invite_action_specs(None) {
             let expected = match spec.method {
                 "cord_invite_create" => Some(RateLimitClass::Account),
                 "cord_invite_preview" | "cord_invite_redeem" => Some(RateLimitClass::Ip),
                 _ => None,
             };
             assert_eq!(spec.rate_limit, expected, "{}", spec.method);
+        }
+    }
+
+    #[test]
+    fn redeem_has_its_own_per_ip_budget() {
+        use fuz_http::JsonrpcErrorCode;
+
+        let limiter = RateLimiter::new(CORD_INVITE_REDEEM_RATE_LIMIT);
+        let ip = Some("203.0.113.7");
+        for attempt in 0..CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS {
+            check_cord_invite_redeem_rate_limit(Some(&limiter), ip)
+                .unwrap_or_else(|e| panic!("attempt {attempt} is within the budget: {e:?}"));
+        }
+        let err = check_cord_invite_redeem_rate_limit(Some(&limiter), ip)
+            .expect_err("one past the budget is refused");
+        // the spine dispatcher's own refusal, so the frontend reads it alike
+        assert_eq!(err.code, JsonrpcErrorCode::RateLimited);
+        assert_eq!(err.message, "rate limited");
+        let retry_after = err
+            .data
+            .and_then(|d| d["retry_after"].as_u64())
+            .expect("carries retry_after");
+        assert!(
+            retry_after > 0 && retry_after <= CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS / 1000,
+            "{retry_after}"
+        );
+        // per IP: another address keeps its own budget
+        check_cord_invite_redeem_rate_limit(Some(&limiter), Some("198.51.100.9"))
+            .expect("another IP is unaffected");
+        // an unresolved IP is a bucket, not an exemption
+        for _ in 0..CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS {
+            check_cord_invite_redeem_rate_limit(Some(&limiter), None).expect("within the budget");
+        }
+        check_cord_invite_redeem_rate_limit(Some(&limiter), None)
+            .expect_err("the unresolved bucket is held to the budget");
+        // no limiter, as under `testing_cordd`: never throttled
+        for _ in 0..=CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS {
+            check_cord_invite_redeem_rate_limit(None, ip).expect("no limiter, no gate");
         }
     }
 

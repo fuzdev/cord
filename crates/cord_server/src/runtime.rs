@@ -1,6 +1,7 @@
 //! The server lifecycle, owned by [`run_app`].
 //!
-//! [`run_app`] loads env, installs the signal handler, builds the router,
+//! [`run_app`] loads env, installs the signal handler, builds the router
+//! (running migrations), checks the database's transaction isolation,
 //! starts the invite expiry sweep, binds the listener, and drains on
 //! shutdown, so the binary's `main` is tracing init, hasher selection, and
 //! one call.
@@ -13,6 +14,7 @@ use crate::env::CordEnv;
 use crate::error::StartupError;
 use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, run_cord_invite_sweep};
 use crate::router::{BuiltRouter, build_router};
+use crate::transaction_isolation::ensure_read_committed;
 
 /// cord's instantiation of the spine's extra-action-specs factory, over
 /// [`crate::app::CordApp`].
@@ -80,13 +82,16 @@ pub struct RunAppOptions {
 /// have run, then every [`CORD_INVITE_SWEEP_INTERVAL`]. It stops when
 /// shutdown begins.
 ///
+/// With a database, it refuses to serve unless Postgres runs transactions at
+/// READ COMMITTED ([`crate::transaction_isolation`]).
+///
 /// Returns once SIGINT or SIGTERM arrives and connections have drained.
 ///
 /// # Errors
 ///
 /// [`StartupError`] for env or config validation failures, database
-/// connectivity or migration failures, listener bind failures, and serve
-/// errors.
+/// connectivity or migration failures, a `default_transaction_isolation`
+/// other than `read committed`, listener bind failures, and serve errors.
 pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     let RunAppOptions {
         password_hasher,
@@ -114,6 +119,12 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         pre_migration_hook,
     )
     .await?;
+
+    // The membership serialization relies on READ COMMITTED; refuse before
+    // the listener binds, so a misconfigured database never serves.
+    if let Some(app) = &app {
+        ensure_read_committed(&app.pool).await?;
+    }
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
