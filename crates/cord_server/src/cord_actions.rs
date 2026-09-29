@@ -13,8 +13,9 @@
 //! - `cord_update`: rename a cord; its owner or admins only, by their role
 //!   read afresh in the action's transaction, not the request's snapshot.
 //! - `cord_admin_list`: every cord with its member count, for instance
-//!   admins' operations. It's the only place an instance admin sees a cord
-//!   they aren't in.
+//!   admins' operations. It's the one verb that shows an instance admin a
+//!   cord they aren't in; the admin audit log also names such cords,
+//!   through their `cord_create` and `cord_update` events.
 //!
 //! Every cord-role check goes through [`crate::cord_authz`], which matches
 //! grant scope exactly. A caller who isn't in a cord gets the same

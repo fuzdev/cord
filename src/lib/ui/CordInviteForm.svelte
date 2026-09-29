@@ -1,9 +1,10 @@
 <script lang="ts">
 	/**
-	 * The form for minting a cord's invite link: an expiry (7 days to start,
-	 * or never), an optional use limit, and, for instance admins, whether the
-	 * link also lets someone new join the instance, which needs both an expiry
-	 * of at most 30 days and a use limit.
+	 * The form for minting a cord's invite link: an expiry
+	 * (`CORD_INVITE_EXPIRES_IN_SECONDS_DEFAULT` to start, or never), an
+	 * optional use limit, and, for instance admins, whether the link also
+	 * lets someone new join the instance, which needs both a use limit and an
+	 * expiry of at most `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`.
 	 *
 	 * @module
 	 */
@@ -14,6 +15,7 @@
 	import { CORD_INVITE_MAX_USES_MAX } from '../cord_action_specs.ts';
 	import {
 		CORD_INVITE_EXPIRES_IN_SECONDS_DEFAULT,
+		CORD_INVITE_NEWCOMER_EXPIRES_IN_DAYS_MAX,
 		cord_invite_expiry_choices,
 		to_cord_invite_create_request,
 		type CordInviteCreateRequest
@@ -91,8 +93,8 @@
 		{#if admits_newcomers}
 			<p class="font_size_sm">
 				Someone without an account here picks a username and password with this link, then joins the
-				cord. It needs an expiry of up to 30 days and a use limit; keep the limit to the people you
-				have in mind.
+				cord. It needs an expiry of up to {CORD_INVITE_NEWCOMER_EXPIRES_IN_DAYS_MAX} days and a use
+				limit; keep the limit to the people you have in mind.
 			</p>
 		{/if}
 	{/if}

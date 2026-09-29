@@ -539,8 +539,7 @@ export const cord_invite_create_action_spec = {
 	output: CordInviteCreateOutput,
 	async: true,
 	rate_limit: 'account',
-	description:
-		"Create an invite link to a cord, with an optional expiry and use limit. The cord's owner or admins only; a link that admits newcomers also needs an instance admin (a global `admin` grant) and both limits, with an expiry of at most 30 days. Returns the link's token, which is never shown again."
+	description: `Create an invite link to a cord, with an optional expiry and use limit. The cord's owner or admins only; a link that admits newcomers also needs an instance admin (a global \`admin\` grant) and both limits, with an expiry of at most ${CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX / (24 * 60 * 60)} days. Returns the link's token, which is never shown again.`
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_list_action_spec = {
@@ -606,8 +605,7 @@ export const cord_invite_accept_action_spec = {
 	input: CordInviteAcceptInput,
 	output: CordInviteAcceptOutput,
 	async: true,
-	description:
-		'Join a cord through an invite link, as a member. A cookie session only. Someone already in the cord keeps their role and spends no use of the link, and so does a newcomer who redeemed the link before signing up, whose use was spent then; they may accept until an hour after the link expires.'
+	description: `Join a cord through an invite link, as a member. A cookie session only. Someone already in the cord keeps their role and spends no use of the link, and so does a newcomer who redeemed the link before signing up, whose use was spent then; they may accept until ${CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS / 60} minutes after the link expires.`
 } satisfies RequestResponseActionSpec;
 
 export const cord_member_list_action_spec = {

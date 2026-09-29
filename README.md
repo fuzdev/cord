@@ -25,7 +25,8 @@ A **cord** is your group ("join our cord"). Inside it, everything is a
 - **forum**: threads with nested comments and reactions, sorted by
   activity, newest, or top.
 - **feed**: a Bluesky feed, list, or account the cord pins so everyone sees
-  the same thing, read as reddit-style threads or as a timeline.
+  the same thing, read as a list of posts that each open into their
+  thread, or as a timeline.
 
 The same spaces can be seen through different views: on desktop, a sidebar
 with the active space beside it, or a dashboard of spaces in columns side
@@ -58,15 +59,10 @@ database.
   the first), each cord has a page with its name, your role, and its
   members, its owners and admins can rename it, and the admin area lists
   every cord with its member count
-- cord invites and members: a cord's owners and admins make invite links
-  (expiring in 7 days unless they choose otherwise, with an optional use
-  limit), see who made each one and how it's been used, and revoke them.
-  A link brings in people who already have an account on the instance,
-  and an instance admin can make one that also welcomes someone new, who
-  picks a username and password on the join page and lands in the cord.
-  Owners set members' roles, owners and admins can remove members, and
-  anyone can leave, as long as the cord keeps an owner. A cord's spaces
-  and everything inside them come next
+- invites and members: owners and admins share invite links, including
+  ones that welcome someone new to the instance, and the cord's members
+  can be given roles, removed, or leave, as long as the cord keeps an
+  owner. A cord's spaces and everything inside them come next
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
   sessions, invite-gated signup, first-account bootstrap, the cord,
   invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,
@@ -85,11 +81,10 @@ Bluesky feeds layer on after it.
 - **Calls**: WebRTC in a full mesh, which suits small groups, with a TURN
   server (coturn) the operator runs.
 - **Self-hosting**: one instance can host several cords, each invite-gated.
-  Deploy with docker compose behind your own reverse proxy, or with zap,
-  the fuz stack's deploy tool; both are planned, along with a self-hosting
-  guide. Only the optional Bluesky connection needs the instance at a
-  public HTTPS origin; everything else runs fine on a LAN. There is no
-  hosted service.
+  Deploying with docker compose behind your own reverse proxy is planned,
+  along with a self-hosting guide. Only the optional Bluesky connection
+  needs the instance at a public HTTPS origin; everything else runs fine
+  on a LAN. There is no hosted service.
 
 ## Developing
 
@@ -100,11 +95,13 @@ Prerequisites:
   automatically)
 - [Gro](https://github.com/fuzdev/gro) for the `gro` commands, installed
   globally (`npm i -g @fuzdev/gro`); the `npm run` scripts work without it
+- for the server only, fuz's Rust server crates checked out beside this
+  repo (see [The server](#the-server)); the frontend builds without them
 
 ```bash
 npm i
 gro dev    # or `npm run dev`, the frontend dev server
-gro check  # typecheck, test, lint, format check
+gro check  # typecheck, test, gen check, lint, format check
 gro build  # production build of the static frontend
 ```
 
@@ -115,9 +112,10 @@ page, `/c/<id>`).
 ### The server
 
 `cordd` is built on fuz's Rust server crates, which aren't published yet.
-Building it needs those crates checked out beside this repo, at the path
-named in the root `Cargo.toml`; without them, cargo can't resolve the
-workspace. The frontend builds and checks without them.
+Building it needs a checkout of them beside this repo, at the paths the
+root `Cargo.toml` names; without one, cargo can't resolve the workspace,
+so the server doesn't build from this repo alone. The frontend builds and
+checks on its own.
 
 The Rust side uses cargo directly:
 
@@ -150,7 +148,7 @@ cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
 | Variable                   | Purpose                                                                |
 | -------------------------- | ---------------------------------------------------------------------- |
 | `DATABASE_URL`             | Postgres connection; unset runs a boot-only server with just `/health` |
-| `FUZ_ALLOWED_ORIGINS`      | required origin allowlist, comma-separated (`http://localhost:*`)      |
+| `FUZ_ALLOWED_ORIGINS`      | always required: comma-separated origins (`http://localhost:*`)        |
 | `SECRET_FUZ_COOKIE_KEYS`   | required with a database: cookie-signing keys, 32+ characters each     |
 | `FUZ_BOOTSTRAP_TOKEN_PATH` | token file that opens first-account bootstrap                          |
 | `HOST`, `PORT`             | bind address, default `127.0.0.1:4061`                                 |
@@ -176,22 +174,14 @@ The server's routes:
 - `/api/account/{status,login,logout,password}`: sessions and the account
 - `POST /api/account/bootstrap`: first-account creation, token-gated
 - `POST /api/account/signup`: invite-gated signup
-- `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account, admin, and
-  cord actions
+- `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account, admin,
+  role-grant offer, and cord actions
 - `/api/ws`: the WebSocket for realtime actions
 - `GET /api/admin/audit/stream`: the audit log as a live server-sent event
   stream, for admins signed in with a session
 
 `cordd db-status` prints a read-only report of the database's tables and
 migrations.
-
-Built with the fuz stack: TypeScript,
-[Svelte](https://github.com/sveltejs/svelte),
-[SvelteKit](https://github.com/sveltejs/kit),
-[fuz_css](https://github.com/fuzdev/fuz_css),
-[fuz_ui](https://github.com/fuzdev/fuz_ui),
-[fuz_app](https://github.com/fuzdev/fuz_app),
-[Gro](https://github.com/fuzdev/gro), and Rust.
 
 ### Tests that need Postgres
 
@@ -200,17 +190,29 @@ and each wipes the `public` schema of its database, so give them throwaway
 ones:
 
 ```bash
-# end-to-end auth tests: spawn testing_cordd and drive it over HTTP
+# end-to-end tests of auth, cords, members, invites, and newcomer links:
+# spawn testing_cordd and drive it over HTTP
 createdb cord_test_rust
 npm run test:cross
 
-# the schema fixture, column guards, and cord storage
+# the schema fixture, column guards, and the cord, member, invite, and
+# newcomer queries
 createdb cord_schema_ready_test
 cargo test -p cord_server -- --ignored
 ```
 
 `CORD_CROSS_BACKEND_TEST_URL` and `CORD_SCHEMA_READY_TEST_URL` override
 their database URLs.
+
+## Built with
+
+The fuz stack: TypeScript,
+[Svelte](https://github.com/sveltejs/svelte),
+[SvelteKit](https://github.com/sveltejs/kit),
+[fuz_css](https://github.com/fuzdev/fuz_css),
+[fuz_ui](https://github.com/fuzdev/fuz_ui),
+[fuz_app](https://github.com/fuzdev/fuz_app),
+[Gro](https://github.com/fuzdev/gro), and Rust.
 
 ## License
 

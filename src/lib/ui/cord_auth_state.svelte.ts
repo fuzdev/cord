@@ -30,7 +30,11 @@ export class CordAuthState extends AuthState {
 
 	/**
 	 * Call `listener` after each `logout`, to drop what belonged to whoever
-	 * was signed in (the join page's stored link and redemption).
+	 * was signed in (the join page's stored link and redemption). Only
+	 * `logout` calls it: a session that ends another way (fuz_app's
+	 * `AccountSessions` revoking every session, which signs this one out
+	 * without `logout`, or an expiry) leaves what the listeners would drop
+	 * in place.
 	 *
 	 * @returns a function that removes the listener, fit to return from an `$effect`
 	 */

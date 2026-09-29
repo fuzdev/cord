@@ -61,7 +61,18 @@ export const CORD_INVITE_EXPIRY_CHOICES: ReadonlyArray<CordInviteExpiryChoice> =
 /** The mint form's starting expiry: 7 days. */
 export const CORD_INVITE_EXPIRES_IN_SECONDS_DEFAULT = 7 * DAY;
 
-/** The expiry choices open to a link, which for a newcomer link means bounded and at most 30 days. */
+/**
+ * The longest expiry a newcomer link may be given, in whole days, for copy
+ * that states it: `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX` in days.
+ */
+export const CORD_INVITE_NEWCOMER_EXPIRES_IN_DAYS_MAX = Math.floor(
+	CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX / DAY
+);
+
+/**
+ * The expiry choices open to a link, which for a newcomer link means bounded
+ * and at most `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`.
+ */
 export const cord_invite_expiry_choices = (
 	admits_newcomers: boolean
 ): ReadonlyArray<CordInviteExpiryChoice> =>
@@ -87,7 +98,8 @@ export type CordInviteCreateRequest = Omit<CordInviteCreateInput, 'acting'>;
 /**
  * Check the mint form and build its request, as the server would judge it: a
  * use limit is a whole number from 1 to `CORD_INVITE_MAX_USES_MAX`, and a
- * newcomer link needs both an expiry of at most 30 days and a use limit.
+ * newcomer link needs both a use limit and an expiry of at most
+ * `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`.
  */
 export const to_cord_invite_create_request = (
 	cord_id: Uuid,
@@ -106,7 +118,10 @@ export const to_cord_invite_create_request = (
 			return { ok: false, message: 'A link for someone new needs an expiry.' };
 		}
 		if (expires_in_seconds > CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX) {
-			return { ok: false, message: 'A link for someone new expires within 30 days.' };
+			return {
+				ok: false,
+				message: `A link for someone new expires within ${CORD_INVITE_NEWCOMER_EXPIRES_IN_DAYS_MAX} days.`
+			};
 		}
 		if (!has_max_uses) {
 			return { ok: false, message: 'A link for someone new needs a use limit.' };

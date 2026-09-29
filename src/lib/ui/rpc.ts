@@ -2,10 +2,11 @@
  * cord's typed RPC client.
  *
  * `create_cord_rpc` builds a JSON-RPC-over-HTTP client for `POST /api/rpc`,
- * typed by the generated `FrontendActionsApi`. The auth shell needs nothing
- * pushed from the server, so it runs over HTTP alone; authed calls carry the
- * same-origin session cookie. The WebSocket transport joins when the live
- * room needs server-pushed events.
+ * typed by the generated `FrontendActionsApi`. No RPC the frontend makes yet
+ * needs a server push (the admin audit log streams over its own SSE route),
+ * so it runs over HTTP alone; authed calls
+ * carry the same-origin session cookie. The WebSocket transport joins when
+ * the live room needs server-pushed events.
  *
  * The handle is `api`, the throwing Proxy: `await api.foo(input)` returns the
  * value or throws an `Error` carrying the JSON-RPC `{code, data}`, whose

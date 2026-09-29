@@ -7,10 +7,11 @@
 //! `extra_action_specs_factory` seam, so the production `cordd` graph never
 //! links `fuz_testing`. Three guardrails keep it out of production:
 //!
-//! 1. The `testing_` binary-name prefix excludes it from release packaging.
+//! 1. The `testing_` binary-name prefix marks it unshippable, and is what
+//!    exempts it, by name, from the release audit below.
 //! 2. `cargo xtask check-release` asserts no production binary's package
-//!    depends on `fuz_testing`; this is a separate crate, so `cord_server`
-//!    stays clean.
+//!    reaches `fuz_testing` or `fuz_audit`; this is a separate crate, so
+//!    `cord_server` stays clean.
 //! 3. `TestingArgon2idHasher::new` logs `WARN: test-mode argon2 hasher active`,
 //!    and the disabled rate limiters print their own banner.
 //!

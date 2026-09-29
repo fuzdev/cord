@@ -5,7 +5,8 @@
 //!   the token is ever shown. Audited as `cord_invite_create`. A link that
 //!   admits newcomers (`admits_newcomers`) also needs the caller to be an
 //!   instance admin (a global `admin` grant) and carries both a use limit
-//!   and an expiry, of at most 30 days.
+//!   and an expiry, of at most
+//!   [`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`].
 //! - `cord_invite_list`: the owner or admins. The cord's links with their
 //!   status and redemption counts, never their tokens.
 //! - `cord_invite_revoke`: the owner or admins. Idempotent: revoking a
@@ -40,11 +41,9 @@
 //!   the redemption's spine invite (the caller's signup claimed none), the
 //!   event names it (`claimed_signup_invite_id`).
 //!
-//! The token is the secret, so a real token's refusals name their reason
-//! (revoked, expired, exhausted, and for redeem, not for newcomers or no
-//! longer admitting them), and any other string gets
-//! `cord_invite_not_found`. The managing verbs answer `cord_not_found` to
-//! anyone outside the cord, as `cord_get` does.
+//! The managing verbs answer `cord_not_found` to anyone outside the cord, as
+//! `cord_get` does; what a token's holder learns is below. No audit event
+//! carries a token or its digest.
 //!
 //! Redeem takes no session: it grants its caller nothing, only reserves a
 //! username for an account that doesn't exist yet, so who calls it doesn't
@@ -65,6 +64,44 @@
 //! mints a live credential. Preview and redeem, which anonymous callers
 //! reach, are rate-limited per IP ([`RateLimitClass::Ip`], the one class a
 //! public action can carry).
+//!
+//! ## What a token tells its holder
+//!
+//! The token is the secret, so a real token's refusals name their reason
+//! (`cord_invite_revoked`, `cord_invite_expired`, `cord_invite_exhausted`,
+//! and for redeem `cord_invite_not_for_newcomers` and
+//! `cord_invite_newcomers_closed`, all `conflict`), while any other string
+//! gets `cord_invite_not_found`. A member who can't manage links gets
+//! `cord_invite_forbidden`.
+//!
+//! Past what an anonymous preview shows, redeem on a live newcomer link
+//! also tells its caller whether a username is free (no account has it and
+//! no unclaimed invite reserves it), the cord's name, and whether this link
+//! already holds a waiting reservation for that username. The rest is
+//! bounded:
+//!
+//! - A dead link (revoked, expired past the accept grace, or not for
+//!   newcomers) answers every username alike.
+//! - A link that is exhausted, expired within the grace, or closed (its
+//!   minter no longer an instance admin) refuses every other username with
+//!   that one refusal, checked before the username is, so it says nothing
+//!   about whether a name is free. It still answers a waiting username with
+//!   `created: false` and the cord's name, which only someone who knows a
+//!   waiting username can learn.
+//! - A reservation whose username an account took without claiming its
+//!   invite (under open signup, or through an older email invite) isn't
+//!   answered as waiting: its signup could never succeed, so a redeem of the
+//!   name falls through to the new-username path and its refusal, and the
+//!   newcomer can pick another name.
+//!
+//! A reserved username belongs to whoever signs up with it first: the
+//! spine's username invites carry no secret, and its signup matches a
+//! username-only invite on the username alone. The join page keeps that
+//! window short by running redeem and signup back to back, and a revoke or
+//! the expiry sweep ([`crate::invite::sweep`]) deletes what a link still
+//! reserves. Accept's fallback, which claims a waiting reservation for an
+//! account whose signup claimed none, trusts the username no more than the
+//! spine's own claim would have.
 
 use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};
@@ -303,6 +340,9 @@ async fn require_newcomer_minter_fresh<C: GenericClient + ?Sized>(
     validate_newcomer_bounds(input)
 }
 
+/// Seconds in a day, for stating the newcomer expiry cap in days.
+const SECONDS_PER_DAY: u32 = 24 * 60 * 60;
+
 /// A newcomer link must expire, within
 /// [`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`], and must have a use
 /// limit.
@@ -320,7 +360,8 @@ fn validate_newcomer_bounds(input: &CordInviteCreateInput) -> Result<(), Jsonrpc
         return Err(invalid_params(
             &format!(
                 "a link that admits newcomers expires within \
-                 {CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX} seconds (30 days)"
+                 {CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX} seconds ({} days)",
+                CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX / SECONDS_PER_DAY
             ),
             Some(ERROR_CORD_INVITE_INVALID),
         ));

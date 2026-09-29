@@ -4,10 +4,41 @@
  * session and a preview, and the newcomer form's checks.
  *
  * The token rides in the URL fragment, which browsers never send to a
- * server. The page reads it once, keeps it in `sessionStorage` with the
- * newcomer's redemption once there is one, and drops the fragment from the
- * address bar and history, so a reload in the same tab still finds both
- * while the link stops sitting in the URL.
+ * server, so it stays out of access logs and `Referer` headers, and `/join`
+ * prerenders like any other page. The page reads it once, keeps it in
+ * `sessionStorage` with the newcomer's redemption once there is one (the
+ * cord and the reserved username), and replaces the URL with a bare `/join`,
+ * dropping the token from the address bar and that history entry. So a
+ * reload mid-join still finds the link, and a newcomer whose signup failed
+ * after redeeming can retry, even on a link their own redemption used up.
+ * The browser's own history and autocomplete may still record
+ * `/join#<token>` before the page drops it, which is why links carry an
+ * expiry and can be revoked.
+ *
+ * The stored link's lifecycle:
+ *
+ * - A retry keeps the reserved username: the form shows it read-only, so a
+ *   retry never spends another use on a new name. If redeem refuses the
+ *   reserved name as taken or invalid, the reservation is gone, and the
+ *   page drops it and opens the field again.
+ * - While the page previews the link again after a failed attempt, the view
+ *   keeps the last preview, so the form stays mounted with its input and
+ *   error. A re-preview that fails for a reason that says nothing about the
+ *   link (the network) keeps the view on the last preview with a quiet note
+ *   (`to_cord_join_recheck_error`); a dead-link refusal ends it.
+ * - A redemption answers only for whoever it reserved a username for:
+ *   anyone signed out, or the account with that username (lowercased, as
+ *   the spine compares them). Another account signed in on the tab gets its
+ *   own view, and the stored redemption stays for the newcomer to come back
+ *   to.
+ * - The stored link is forgotten once it has done its job or can't do one
+ *   (unless it holds a redemption for someone other than the signed-in
+ *   account), and when `logout` runs, which also drops the redemption. A
+ *   session ended another way, as by `AccountSessions`' revoke-all, doesn't
+ *   forget it (see `CordAuthState.on_logout`).
+ * - A restored redemption dies with a revoked link at once. On an expired
+ *   link it lasts until redeem or accept refuses, since the preview can't
+ *   show accept's grace.
  *
  * @module
  */

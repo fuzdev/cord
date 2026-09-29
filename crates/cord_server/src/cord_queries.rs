@@ -14,8 +14,8 @@
 //! cord mounts serves cells through those paths today).
 //! They do **not** enable any spine edit path: `can_edit_cell` treats a
 //! `created_by = NULL` cell as admin-only and ignores its editor grants. So
-//! cord cells change only through Cord's own verbs, and later slices must not
-//! rely on the spine's cell edit paths for them.
+//! cord cells change only through Cord's own verbs, and nothing may rely on
+//! the spine's cell edit paths for them.
 //!
 //! Every function takes any `GenericClient`, so it composes on a pooled
 //! client or inside the action's transaction. Cell reads project through

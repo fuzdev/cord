@@ -28,7 +28,9 @@
 //! Redeem refuses it new reservations, but the ones it already made were
 //! authorized when made, and accept doesn't re-read the minter, so they're
 //! still pending. They go when the link expires past the grace (a newcomer
-//! link expires within 30 days), or sooner if the link is revoked.
+//! link expires within
+//! [`crate::invite::queries::CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`]),
+//! or sooner if the link is revoked.
 //!
 //! Failures never stop the server: a failed link is logged and the pass
 //! moves on, and a pass that can't reach the database is logged and retried

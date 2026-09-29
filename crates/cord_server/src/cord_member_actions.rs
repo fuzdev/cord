@@ -12,11 +12,13 @@
 //!   records a leave as a leave.
 //! - `cord_leave`: any member, except the last owner.
 //!
-//! Each change is audited as the spine's `role_grant_revoke` (and, for a
-//! role change, `role_grant_create`) with the cord as the scope. The rules
-//! apply to membership read inside the transaction under the cord's row
-//! lock ([`crate::cord_member_queries`]); the request's role-grant snapshot
-//! only answers `cord_not_found` early to anyone outside the cord.
+//! Each change is audited as the spine's `role_grant_revoke`, one per
+//! revoked grant with a `reason` naming the verb (`cord_member_role_set`,
+//! `cord_member_remove`, or `cord_leave`), and, for a role change,
+//! `role_grant_create`, with the cord as the scope. The rules apply to
+//! membership read inside the transaction under the cord's row lock
+//! ([`crate::cord_member_queries`]); the request's role-grant snapshot only
+//! answers `cord_not_found` early to anyone outside the cord.
 
 use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};

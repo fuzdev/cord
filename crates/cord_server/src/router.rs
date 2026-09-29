@@ -6,7 +6,8 @@
 //! - `fuz_auth::bootstrap_routes::bootstrap_router` → `/api/account/bootstrap`
 //! - `fuz_auth::signup_routes::signup_router` → `/api/account/signup`
 //! - `fuz_actions::create_rpc_router` → `/api/rpc` (GET + POST)
-//! - `fuz_actions::register_action_ws` → `/api/ws`
+//! - `fuz_actions::register_action_ws` → `/api/ws`, over the same registry;
+//!   the protocol actions in it work only here, not over `/api/rpc`
 //! - `fuz_realtime::audit_stream_router` → `/api/admin/audit/stream`
 //! - `fuz_http::ready_router` → `/ready`
 //!
@@ -22,7 +23,7 @@
 //! cord runs the spine's `fuz_auth::AUTH_MIGRATIONS` and
 //! `fuz_cell::CELL_MIGRATIONS` (cords are cells), then its own `cord`
 //! namespace ([`crate::migrations::CORD_MIGRATIONS`], the `cord_invite`
-//! table), via `fuz_db::run_migrations`.
+//! and `cord_invite_redemption` tables), via `fuz_db::run_migrations`.
 
 use std::sync::Arc;
 

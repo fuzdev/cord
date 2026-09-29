@@ -4,7 +4,10 @@
  *
  * Each class holds `AsyncSlot`s from fuz_app, one per operation, and calls
  * the throwing RPC proxy. Pages construct them with the `api` from
- * `cord_rpc_context`.
+ * `cord_rpc_context`. Unlike the member, invite, and join states, these
+ * slots keep `AsyncSlot`'s default error message rather than mapping it
+ * through `cord_errors.ts`; the cord page reads a load's refusal reason
+ * with `rpc_error_reason`.
  *
  * @module
  */

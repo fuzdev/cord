@@ -569,7 +569,9 @@ pub struct CordInviteAccepted {
 ///   the link was redeemed, and it confers nothing here but the cord role.
 /// - Anyone else needs an active link, and spends a use.
 ///
-/// A join grants the link's role on the cord, in the caller's transaction.
+/// A join grants the link's role on the cord, in the caller's transaction,
+/// with the link's minter as its `granted_by` (who may since have left the
+/// cord).
 ///
 /// # Errors
 ///
