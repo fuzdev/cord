@@ -390,7 +390,7 @@ pub async fn query_cord_invite_revoke<C: GenericClient + ?Sized>(
 /// # Errors
 ///
 /// [`CellError::Db`] on a driver failure.
-async fn query_cord_invite_expired_beyond<C: GenericClient + ?Sized>(
+pub(crate) async fn query_cord_invite_expired_beyond<C: GenericClient + ?Sized>(
     client: &C,
     invite_id: Uuid,
     grace_seconds: u32,

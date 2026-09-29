@@ -4,11 +4,16 @@
 //!
 //! What only the database can show: a redemption creates the spine's
 //! username invite in the minter's name, records the redemption, and spends
-//! one use; redeeming the same username again changes nothing while the
-//! link is live, and answers as a fresh redemption once it isn't; a taken or
-//! reserved username is refused; the minter's global `admin` is re-read at
-//! every redemption, so a demoted, deleted, or purged minter closes the
-//! link; concurrent redemptions never spend more uses than the link has;
+//! one use; redeeming the same username again changes nothing wherever
+//! accept would still honor it (an exhausted link, one expired within the
+//! grace, one whose minter is no longer an admin), is refused on a link
+//! expired past the grace, and answers as a fresh redemption once its spine
+//! invite is gone, or once an account holds its username; a taken or
+//! reserved username is refused, though a closed or expired link answers it
+//! with its own refusal, as it does a free one; the minter's global `admin`
+//! is re-read at every new reservation, so a demoted, deleted, or purged
+//! minter closes the link to new usernames; concurrent redemptions never
+//! spend more uses than the link has;
 //! the newcomer's accept after signing up spends nothing, even from an
 //! exhausted link or within the grace after expiry, and finds the
 //! redemption by username when their signup claimed no invite; and a
@@ -403,18 +408,30 @@ async fn newcomer_links_admit_new_people() {
         redeem(&pool, &expiring, "later").await,
         Err(CordInviteRedeemError::Expired)
     ));
-    // a dead link answers a waiting username as any other
-    assert!(matches!(
-        redeem(&pool, &expiring, "late").await,
-        Err(CordInviteRedeemError::Expired)
-    ));
+    // within the grace, a waiting username is answered as accept would take it
+    let late_again = redeem(&pool, &expiring, "late")
+        .await
+        .expect("a waiting username within the grace");
+    assert!(!late_again.created);
+    assert_eq!(use_count(&pool, expiring_id).await, 2, "no new use");
     let late = sign_up(&pool, "late").await;
     let joined = accept(&pool, &expiring, late).await.expect("accept");
     assert!(joined.redemption_id.is_some());
     assert_eq!(use_count(&pool, expiring_id).await, 2);
-    // past the grace, the ordinary expired refusal
     let grace = i64::from(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS);
+    // past the grace, a dead link answers a waiting username as any other
+    backdate(&pool, expiring_id, grace + 1).await;
+    assert!(matches!(
+        redeem(&pool, &expiring, "tardy").await,
+        Err(CordInviteRedeemError::Expired)
+    ));
     backdate(&pool, expiring_id, grace - 60).await;
+    assert!(
+        !redeem(&pool, &expiring, "tardy")
+            .await
+            .expect("still within the grace")
+            .created
+    );
     let tardy = sign_up(&pool, "tardy").await;
     backdate(&pool, expiring_id, grace + 1).await;
     assert!(matches!(
@@ -543,6 +560,33 @@ async fn newcomer_links_admit_new_people() {
         Some(opener)
     );
 
+    // -- an account that took a waiting username ends its waiting -------------
+    // open signup gives someone the name without claiming its invite, so the
+    // reservation could never be signed up; a re-redeem of the name falls
+    // through to the new-username path instead of answering `created: false`
+    let (drifting, drifting_id) = mint(&pool, cord.id, admin, 3, true).await;
+    let drifter_redeemed = redeem(&pool, &drifting, "drifter").await.expect("redeem");
+    let drifter_invite = drifter_redeemed
+        .redemption
+        .signup_invite_id
+        .expect("invite");
+    // the spine compares usernames lowercased
+    let drifter = seed_actor(&pool, "Drifter").await;
+    assert!(matches!(
+        redeem(&pool, &drifting, "drifter").await,
+        Err(CordInviteRedeemError::UsernameUnavailable)
+    ));
+    assert_eq!(
+        use_count(&pool, drifting_id).await,
+        1,
+        "a refusal spends nothing"
+    );
+    // accept still completes the reservation through the fallback by username
+    let joined = accept(&pool, &drifting, drifter).await.expect("accept");
+    assert_eq!(joined.redemption_id, Some(drifter_redeemed.redemption.id));
+    assert_eq!(joined.claimed_signup_invite_id, Some(drifter_invite));
+    assert_eq!(use_count(&pool, drifting_id).await, 1, "no second use");
+
     // -- an older email-only invite won the signup's claim ----------------------
     {
         let client = pool.get().await.expect("pool.get");
@@ -615,11 +659,13 @@ async fn newcomer_links_admit_new_people() {
         redeem(&pool, &demoted_link, "after").await,
         Err(CordInviteRedeemError::NewcomersClosed)
     ));
-    // a closed link answers a waiting username as any other
-    assert!(matches!(
-        redeem(&pool, &demoted_link, "before").await,
-        Err(CordInviteRedeemError::NewcomersClosed)
-    ));
+    // a closed link still answers a waiting username, whose accept it would take
+    assert!(
+        !redeem(&pool, &demoted_link, "before")
+            .await
+            .expect("a waiting username on a closed link")
+            .created
+    );
 
     // -- a scoped admin grant is no authority ---------------------------------
     {
@@ -674,6 +720,7 @@ async fn newcomer_links_admit_new_people() {
     // -- a purged minter (a null created_by) fails closed ---------------------
     let purged = seed_admin(&pool, "purged").await;
     let (purged_link, purged_id) = mint(&pool, cord.id, purged, 3, true).await;
+    redeem(&pool, &purged_link, "kept").await.expect("redeem");
     {
         let client = pool.get().await.expect("pool.get");
         client
@@ -694,7 +741,74 @@ async fn newcomer_links_admit_new_people() {
         redeem(&pool, &purged_link, "someone").await,
         Err(CordInviteRedeemError::NewcomersClosed)
     ));
-    assert_eq!(use_count(&pool, purged_id).await, 0);
+    assert!(
+        !redeem(&pool, &purged_link, "kept")
+            .await
+            .expect("a waiting username outlives its minter")
+            .created
+    );
+    assert_eq!(use_count(&pool, purged_id).await, 1);
+
+    // -- a closed or expired link never says whether a username is free -------
+    // someone else's waiting reservation, through another link
+    let (holding, _) = mint(&pool, cord.id, admin, 3, true).await;
+    redeem(&pool, &holding, "holder").await.expect("redeem");
+    let closer = seed_admin(&pool, "closer").await;
+    let (closed, _) = mint(&pool, cord.id, closer, 3, true).await;
+    {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .execute(
+                "UPDATE role_grant SET revoked_at = NOW() WHERE actor_id = $1 AND role = $2",
+                &[&closer, &ROLE_ADMIN],
+            )
+            .await
+            .expect("demote");
+    }
+    let (in_grace, in_grace_id) = mint(&pool, cord.id, admin, 3, true).await;
+    backdate(&pool, in_grace_id, 1).await;
+    let (past_grace, past_grace_id) = mint(&pool, cord.id, admin, 3, true).await;
+    backdate(&pool, past_grace_id, grace + 1).await;
+    let (revoked, revoked_id) = mint(&pool, cord.id, admin, 3, true).await;
+    {
+        let client = pool.get().await.expect("pool.get");
+        query_cord_invite_revoke(&client, cord.id, revoked_id)
+            .await
+            .expect("revoke")
+            .expect("exists");
+    }
+    // a live account's name, a soft-deleted one's, a reservation, and a free
+    // name all get the link's own refusal, never `UsernameUnavailable`
+    for username in ["admin", "taken", "holder", "unheard"] {
+        assert!(
+            matches!(
+                redeem(&pool, &closed, username).await,
+                Err(CordInviteRedeemError::NewcomersClosed)
+            ),
+            "closed: {username}"
+        );
+        assert!(
+            matches!(
+                redeem(&pool, &in_grace, username).await,
+                Err(CordInviteRedeemError::Expired)
+            ),
+            "expired within the grace: {username}"
+        );
+        assert!(
+            matches!(
+                redeem(&pool, &past_grace, username).await,
+                Err(CordInviteRedeemError::Expired)
+            ),
+            "expired past the grace: {username}"
+        );
+        assert!(
+            matches!(
+                redeem(&pool, &revoked, username).await,
+                Err(CordInviteRedeemError::Revoked)
+            ),
+            "revoked: {username}"
+        );
+    }
 
     // -- concurrency: redemptions never overshoot max_uses --------------------
     let max_uses = 3;

@@ -26,7 +26,10 @@
 //!   the instance through a newcomer link, spending one of its uses
 //!   ([`crate::cord_invite_redemption_queries`]); the newcomer then signs up
 //!   through the stock invite-gated signup with that username and accepts
-//!   the link. Audited as `cord_invite_redeem` when it reserves.
+//!   the link. Redeeming a username already waiting on the link answers
+//!   `created: false` and spends nothing wherever accept would still take
+//!   it (exhausted, expired within the grace, or its minter no longer an
+//!   admin). Audited as `cord_invite_redeem` when it reserves.
 //! - `cord_invite_accept`: a cookie session only, like the spine's other
 //!   self-service grant paths. Grants `cord_member` on the cord and spends a
 //!   use, or completes the caller's redemption of the link, whose use was

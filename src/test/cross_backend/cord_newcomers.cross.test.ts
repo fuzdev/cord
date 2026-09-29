@@ -34,6 +34,7 @@ import {
 	CordMemberRoleSetOutput,
 	CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX,
 	ERROR_CORD_INVITE_EXHAUSTED,
+	ERROR_CORD_INVITE_EXPIRED,
 	ERROR_CORD_INVITE_INVALID,
 	ERROR_CORD_INVITE_NEWCOMERS_CLOSED,
 	ERROR_CORD_INVITE_REVOKED,
@@ -319,6 +320,47 @@ describe('the newcomer path', () => {
 		assert.isTrue(accepted.joined);
 		const [link] = await list_invites(fixture, cord.id);
 		assert.deepInclude(link, { use_count: 1, status: 'exhausted', redemption_accepted_count: 1 });
+	});
+
+	test('a waiting username is redeemed again within the grace after expiry', async () => {
+		const fixture = await setup_test();
+		const cord = await create_cord(fixture);
+		const minted = await mint_newcomer(fixture, cord.id);
+		assert.isTrue((await redeem_anonymous(fixture, minted.token, 'newcomer')).created);
+		// backdates the expiry by a second, well inside the accept grace
+		const expire = await cross_rpc_call(
+			fixture.fresh_transport({ origin: null }),
+			rpc_path,
+			'_testing_cord_invite_expire',
+			{ invite_id: minted.invite.id },
+			fixture.create_daemon_token_headers()
+		);
+		assert.ok(expire.ok, JSON.stringify(expire.error));
+
+		// a retry after a failed signup: the reservation stands, spending nothing
+		assert.deepEqual(await redeem_anonymous(fixture, minted.token, 'newcomer'), {
+			cord: { id: cord.id, name: 'the porch' },
+			username: 'newcomer',
+			created: false
+		});
+		// a new username needs a live link
+		assert_refused(
+			await call_anonymous(fixture, 'cord_invite_redeem', {
+				token: minted.token,
+				username: 'another'
+			}),
+			ERROR_CORD_INVITE_EXPIRED,
+			JSONRPC_ERROR_CODES.conflict
+		);
+		const transport = await sign_up(fixture, { username: 'newcomer' });
+		assert.isTrue((await accept_on(transport, minted.token)).joined);
+		const [link] = await list_invites(fixture, cord.id);
+		assert.deepInclude(link, {
+			status: 'expired',
+			use_count: 1,
+			redemption_count: 1,
+			redemption_accepted_count: 1
+		});
 	});
 
 	test('an existing account accepts a newcomer link as any other, spending a use', async () => {
@@ -698,6 +740,7 @@ describe('newcomer links and their minter', () => {
 			admits_newcomers: true
 		});
 		assert.isTrue((await preview_anonymous(fixture, token)).newcomers_open);
+		assert.isTrue((await redeem_anonymous(fixture, token, 'early')).created);
 
 		const accounts = expect_output(
 			await call(fixture, fixture, 'admin_account_list', {}),
@@ -719,6 +762,8 @@ describe('newcomer links and their minter', () => {
 			ERROR_CORD_INVITE_NEWCOMERS_CLOSED,
 			JSONRPC_ERROR_CODES.conflict
 		);
+		// a username already waiting keeps its reservation, which accept still takes
+		assert.isFalse((await redeem_anonymous(fixture, token, 'early')).created);
 		// still active, but closed to newcomers, so an anonymous preview names no cord
 		assert.deepEqual(await preview_anonymous(fixture, token), {
 			status: 'active',
@@ -731,7 +776,7 @@ describe('newcomer links and their minter', () => {
 			await call(fixture, second, 'cord_invite_list', { cord_id: cord.id }),
 			CordInviteListOutput
 		).invites;
-		assert.deepInclude(link, { use_count: 0, redemption_count: 0 });
+		assert.deepInclude(link, { use_count: 1, redemption_count: 1 });
 	});
 
 	test('a newcomer link expires within the newcomer limit', async () => {

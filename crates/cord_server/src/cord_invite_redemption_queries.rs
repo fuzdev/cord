@@ -26,10 +26,12 @@
 //!
 //! Redemption locks the link's row first, as accept does, so concurrent
 //! redemptions and accepts of one link run one at a time and never spend
-//! more uses than it has. It then reads the minter's global `admin` grant
-//! under a share lock (the spine's own offer-accept re-check does the
-//! same), so a revoke of it either commits first and refuses the
-//! redemption, or waits for the redemption to commit.
+//! more uses than it has. A new reservation then reads the minter's global
+//! `admin` grant under a share lock (the spine's own offer-accept re-check
+//! does the same), so a revoke of it either commits first and refuses the
+//! redemption, or waits for the redemption to commit. Redeeming a username
+//! already waiting on the link skips that read, as accept does: the
+//! reservation was authorized when it was made.
 //!
 //! Every function takes any `GenericClient`; call the writers inside a
 //! transaction.
@@ -46,7 +48,8 @@ use fuz_db::{col, is_pg_unique_violation, iso8601_timestamp_expr, qualify_column
 use uuid::Uuid;
 
 use crate::cord_invite_queries::{
-    CordInviteRow, CordInviteStatus, query_cord_invite_lock_by_token_hash,
+    CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, CordInviteRow, CordInviteStatus,
+    query_cord_invite_expired_beyond, query_cord_invite_lock_by_token_hash,
 };
 use crate::cord_queries::{CordRow, query_cord_get};
 
@@ -210,22 +213,26 @@ pub struct CordInviteRedeemed {
 /// rules and lowercased.
 ///
 /// In order: lock the link; refuse it unknown (or its cord gone), revoked,
-/// without `admits_newcomers`, or expired; refuse unless the link's minter
-/// still holds a global `admin` ([`query_actor_holds_global_admin`]; a
-/// purged minter's null `created_by` refuses too). Then, when this
+/// without `admits_newcomers`, or expired more than
+/// [`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`] ago. Then, when this
 /// username's redemption through the link is still waiting (unaccepted, its
-/// signup invite unclaimed), return it unchanged, spending nothing: the
-/// reservation holds a use already, so exhaustion doesn't refuse it.
-/// Otherwise refuse an exhausted link; refuse a username an account has
-/// (live or soft-deleted) or an unclaimed spine invite reserves; then create
-/// the spine username invite in the minter's name, record the redemption,
-/// and spend one use.
+/// signup invite unclaimed, and no account holding the username), return it
+/// unchanged, spending nothing: accept
+/// would still honor that reservation, so a newcomer retrying after a failed
+/// signup can redeem it again. Otherwise the link must be open to a new
+/// reservation: refuse it expired, or closed because its minter no longer
+/// holds a global `admin` ([`query_actor_holds_global_admin`]; a purged
+/// minter's null `created_by` refuses too), or exhausted; refuse a username
+/// an account has (live or soft-deleted) or an unclaimed spine invite
+/// reserves; then create the spine username invite in the minter's name,
+/// record the redemption, and spend one use.
 ///
-/// A dead link (revoked, expired, not for newcomers, or closed because its
-/// minter no longer holds a global `admin`) refuses a waiting username as it
-/// would any other, so it tells nobody which usernames are waiting on it. An
-/// exhausted link isn't dead in this sense: it still answers a waiting
-/// username with `created: false`.
+/// So a waiting username is answered with `created: false` wherever accept
+/// would take it: on an active or exhausted link, on one expired within the
+/// grace, and on one whose minter is no longer an admin (accept doesn't
+/// re-read the minter). A dead link, revoked, expired past the grace, or not
+/// for newcomers, refuses a waiting username as it would any other, so it
+/// tells nobody which usernames are waiting on it.
 ///
 /// # Errors
 ///
@@ -250,10 +257,17 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     if !invite.admits_newcomers {
         return Err(CordInviteRedeemError::NotForNewcomers);
     }
-    if status == CordInviteStatus::Expired {
+    if status == CordInviteStatus::Expired
+        && query_cord_invite_expired_beyond(
+            client,
+            invite.id,
+            CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
+        )
+        .await?
+    {
         return Err(CordInviteRedeemError::Expired);
     }
-    let minted_by = require_admin_minter(client, &invite).await?;
+    // a waiting reservation is answered wherever accept would still honor it
     if let Some(redemption) = query_waiting_redemption(client, invite.id, username).await? {
         return Ok(CordInviteRedeemed {
             cord,
@@ -262,6 +276,11 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
             created: false,
         });
     }
+    // a new reservation needs a live link and a minter who is still an admin
+    if status == CordInviteStatus::Expired {
+        return Err(CordInviteRedeemError::Expired);
+    }
+    let minted_by = require_admin_minter(client, &invite).await?;
     if status == CordInviteStatus::Exhausted {
         return Err(CordInviteRedeemError::Exhausted);
     }
@@ -326,7 +345,14 @@ async fn require_admin_minter<C: GenericClient + ?Sized>(
 
 /// The redemption of `username` through the link `cord_invite_id` that is
 /// still waiting on its newcomer: unaccepted, with its signup invite still
-/// there and unclaimed.
+/// there and unclaimed, and no account (live or soft-deleted) holding the
+/// username, compared lowercased as the spine compares usernames. An account
+/// can take a waiting username without claiming its invite (under open
+/// signup, or through an older email invite); the reservation can then never
+/// be signed up, so redeem doesn't answer it as waiting: a redeem of the name
+/// falls through to the new-username path, which refuses it. (Release and the
+/// sweep still count it among a link's waiting reservations; dropping its
+/// stale signup invite is harmless.)
 async fn query_waiting_redemption<C: GenericClient + ?Sized>(
     client: &C,
     cord_invite_id: Uuid,
@@ -338,7 +364,10 @@ async fn query_waiting_redemption<C: GenericClient + ?Sized>(
          WHERE r.cord_invite_id = $1
            AND r.username = $2
            AND r.accepted_at IS NULL
-           AND i.claimed_at IS NULL",
+           AND i.claimed_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM account a WHERE LOWER(a.username) = LOWER($2)
+           )",
         redemption_cols("r"),
     );
     Ok(client

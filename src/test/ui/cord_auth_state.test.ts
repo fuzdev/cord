@@ -166,4 +166,17 @@ describe('CordAuthState', () => {
 		assert.isFalse(auth_state.signed_in);
 		assert.isNull(auth_state.account);
 	});
+
+	test('logout calls the on_logout listeners until they’re removed', async () => {
+		vi.stubGlobal('fetch', () => Promise.resolve(json_response(200, { ok: true })));
+		const auth_state = new CordAuthState();
+		const calls: Array<string> = [];
+		const remove_a = auth_state.on_logout(() => calls.push('a'));
+		auth_state.on_logout(() => calls.push(`b:${auth_state.verified}`));
+		await auth_state.logout();
+		assert.deepEqual(calls, ['a', 'b:false'], 'after the local state is cleared');
+		remove_a();
+		await auth_state.logout();
+		assert.deepEqual(calls, ['a', 'b:false', 'b:false']);
+	});
 });

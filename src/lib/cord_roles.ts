@@ -37,3 +37,39 @@ export const CORD_ROLE_LABELS: Record<CordRole, string> = {
  */
 export const cord_role_can_manage = (role: CordRole): boolean =>
 	role === CORD_OWNER || role === CORD_ADMIN;
+
+/**
+ * Whether a role may set members' roles (to owner, admin, or member): owners
+ * only. The twin of the server's `CordRole::can_set_member_roles`.
+ */
+export const cord_role_can_set_member_roles = (role: CordRole): boolean => role === CORD_OWNER;
+
+/**
+ * Whether `role` may remove a member holding `target`: an owner removes
+ * anyone, an admin removes plain members only, and a member removes no one.
+ * The last-owner rule (`cord_leaves_no_owner`) applies on top, and nobody
+ * removes themself; they leave instead. The twin of the server's
+ * `CordRole::can_remove`.
+ */
+export const cord_role_can_remove = (role: CordRole, target: CordRole): boolean => {
+	switch (role) {
+		case CORD_OWNER:
+			return true;
+		case CORD_ADMIN:
+			return target === CORD_MEMBER;
+		case CORD_MEMBER:
+			return false;
+	}
+};
+
+/**
+ * Whether moving one member from `current` to `next` (`null` when they leave
+ * or are removed) would leave the cord with no owner, given `owner_count`
+ * owners before the change. A cord always keeps an owner: the last one can't
+ * leave, be removed, or step down. The twin of the server's `leaves_no_owner`.
+ */
+export const cord_leaves_no_owner = (
+	owner_count: number,
+	current: CordRole,
+	next: CordRole | null
+): boolean => current === CORD_OWNER && next !== CORD_OWNER && owner_count <= 1;

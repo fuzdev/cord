@@ -13,10 +13,10 @@ rename), their invite links (for people who already have an account, and
 admin-minted ones that bring someone new onto the instance), and their
 members (list, role changes, remove, leave); see Cords below. The
 frontend is the auth shell over that server (login, signup, bootstrap,
-account, admin) with the cord list, a minimal cord page, and the admin
-cords list; it has no invite, join, or member screens yet. Nothing happens
-inside a cord yet (no spaces); don't describe planned features as
-working.
+account, admin) with the cord list, a cord page with its members and (for
+its owners and admins) its invite links, the join page an invite link
+opens, and the admin cords list. Nothing happens inside a cord yet (no
+spaces); don't describe planned features as working.
 
 The intended shape, briefly:
 
@@ -57,10 +57,10 @@ For coding conventions, see Skill(fuz-stack).
 - `src/routes/` — SvelteKit routes; `+layout.ts` prerenders everything for
   the static adapter except the dynamic cord page (see Frontend below)
 - `src/lib/` — frontend library code: `ui/rpc.ts` (the RPC client),
-  `ui/cord_auth_state.svelte.ts` (the session state),
-  `ui/cords_state.svelte.ts` (cord list, one cord, the admin list),
-  `ui/CordNameForm.svelte`, `cord_action_specs.ts` and `cord_roles.ts`
-  (the cord wire), `action_specs.ts` and the generated `action_*` modules
+  `ui/cord_auth_state.svelte.ts` (the session state), the state classes
+  and components under `ui/` (see Frontend below), `cord_action_specs.ts`
+  and `cord_roles.ts` (the cord wire and the member rules' twins),
+  `action_specs.ts` and the generated `action_*` modules
 - `src/test/` — vitest tests (not co-located); `src/test/cross_backend/`
   holds the end-to-end suites against a spawned server (see Testing below)
 - `static/` — files copied as-is into the frontend build
@@ -136,9 +136,10 @@ recorded in the `cord_create` audit event instead.
   newcomer link reads the caller's global `admin` grant the same way
   (under a share lock). Revoke must not lock the cord: accept locks the
   link and then the cord, so the reverse order would deadlock. Redeem
-  locks the link and then share-locks its minter's global `admin` grant,
-  and takes no cord lock. The read-only verbs (`cord_get`,
-  `cord_invite_list`, `cord_member_list`) trust the snapshot.
+  locks the link and then, only for a new reservation, share-locks its
+  minter's global `admin` grant; it takes no cord lock. The read-only
+  verbs (`cord_get`, `cord_invite_list`, `cord_member_list`) trust the
+  snapshot.
 - **No scoped builtin roles.** A builtin role (`admin`, `keeper`) is
   only ever granted globally. The spine enforces this on every grant path
   (`role_grant_offer_create`, `role_grant_assign`,
@@ -186,9 +187,10 @@ who is also the cord's owner or admin mints one, and it must carry both
 a use limit and an expiry of at most 30 days
 (`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`). The newcomer, signed
 out, **redeems** the link for a username: in one transaction under the
-link's lock, that checks the link, re-checks that its minter still holds
-a global `admin` on a live actor and account (a purged minter's null
-`created_by` fails closed), reserves the username as a spine username
+link's lock, that checks the link and, for a new reservation (not a
+username already waiting on the link), re-checks that its minter still
+holds a global `admin` on a live actor and account (a purged minter's
+null `created_by` fails closed), reserves the username as a spine username
 invite created in the minter's name (`query_create_invite`), records a
 row in the `cord_invite_redemption` table
 (`cord_invite_redemption_queries.rs`), and spends one use. They then sign
@@ -277,11 +279,21 @@ trusts the username no more than the spine's own claim would have.
   an account has or an unclaimed spine invite reserves
   (`cord_invite_username_unavailable`, one answer for both). Redeeming the
   same username through the same link again, while its redemption waits
-  (unaccepted, its spine invite unclaimed), succeeds with
-  `created: false` and changes nothing, even on an exhausted link, since
-  the reservation holds a use already. A dead link (revoked, expired, not
-  for newcomers, or closed because its minter is no longer an instance
-  admin) refuses it as it would any other username. Audits
+  (unaccepted, its spine invite unclaimed, and no account, live or
+  soft-deleted, holding the username), succeeds with
+  `created: false` and changes nothing wherever accept would still take
+  it: on an exhausted link, since the reservation holds a use already, on
+  one expired within the accept grace, and on one whose minter is no
+  longer an instance admin, since accept doesn't re-read the minter. So a
+  newcomer whose signup failed can retry. A new username needs an active
+  link whose minter is still an instance admin. A dead link (revoked,
+  expired past the grace, or not for newcomers) refuses a waiting username
+  as it would any other. A reservation whose username an account took
+  without claiming its invite (under open signup, or through an older
+  email invite) isn't answered as waiting: its signup could never
+  succeed, so a redeem of the name falls through to the new-username path and gets
+  `cord_invite_username_unavailable` (or the link's closed or expired
+  refusal), and the newcomer can pick another name. Audits
   `cord_invite_redeem` (no actor; never the token)
 - `cord_invite_accept` — cookie session only; locks the link, then the
   cord, then the caller's pending redemption of the link if any; a
@@ -304,9 +316,14 @@ string gets `cord_invite_not_found`. Past what an anonymous preview
 shows, redeem on a live newcomer link also tells its caller whether a
 username is free (no account has it and no unclaimed invite reserves it),
 the cord's name, and whether this link already holds a waiting
-reservation for that username; a dead link (revoked, expired, not for
-newcomers, or closed) answers every username alike, while an exhausted
-one still answers a waiting username with `created: false`.
+reservation for that username. A dead link (revoked, expired past the
+accept grace, or not for newcomers) answers every username alike. A link
+that is exhausted, expired within the grace, or closed (its minter no
+longer an instance admin) refuses every other username with that one
+refusal, checked before the username is, so it says nothing about
+whether a name is free; but it still answers a waiting username with
+`created: false` and the cord's name, which only someone who knows a
+waiting username can learn.
 A member who can't manage links gets `cord_invite_forbidden`.
 
 The member verbs (`cord_member_actions.rs` over `cord_member_queries.rs`):
@@ -352,7 +369,12 @@ The TS check also refuses lone surrogates, which a Rust `String` can't
 hold.
 
 The TS twin of the wire is `src/lib/cord_action_specs.ts` (with the roles
-in `cord_roles.ts`); keep them in step with the Rust handlers.
+in `cord_roles.ts`); keep them in step with the Rust handlers. `cord_roles.ts`
+also twins the member rules (`cord_role_can_set_member_roles`,
+`cord_role_can_remove`, `cord_leaves_no_owner`), which the cord page uses
+to decide which controls to offer; `src/test/cord_roles.test.ts` tables
+them and replays every call of the rules in `cord_authz.rs`'s own tests
+(expanding their loops over roles), failing on any call it can't read.
 
 ## Frontend
 
@@ -378,6 +400,74 @@ and checks the session on mount:
   mid-submit: unmounting a form then loses its input on a failed attempt.
   `is_instance_admin` is true only for a global `admin` grant, the rule the
   server applies; `roles` ignores scope, so don't gate admin UI on it.
+  `on_logout` registers a listener that `logout` calls after clearing the
+  session; the root layout uses it to forget the join page's stored link.
+  Only `logout()` calls it: a session that ends another way (fuz_app's
+  `AccountSessions` revoking every session, which signs this one out
+  without `logout()`, or an expiry) leaves the stored link in place.
+
+The state classes (`ui/*_state.svelte.ts`) hold fuz_app `AsyncSlot`s (and
+`KeyedAsyncSlot`s for per-row writes) over the throwing `api`; pages build
+them with the `api` from `cord_rpc_context`. Their slots map errors through
+`ui/cord_errors.ts`, which reads a refusal's `data.reason` and gives the
+words to show for it. The per-cord classes drop a response for a cord
+they've since moved off, and their `fetch` reads nothing trackably, so a
+page calls it from an `$effect` without the effect rerunning on what it
+writes.
+
+- `ui/cords_state.svelte.ts` — `CordsState` (your cords, creating one),
+  `CordState` (one cord, renaming it), `AdminCordsState` (the ops list)
+- `ui/cord_members_state.svelte.ts` — `CordMembersState`: a cord's
+  members, setting a role, removing a member, leaving; `loaded_cord_id`
+  names the cord its list loaded for, which the cord page checks before
+  taking the viewer's role or minter flags from it
+- `ui/cord_invites_state.svelte.ts` — `CordInvitesState`: a cord's links,
+  minting (keeping the one returned token in `minted` until dismissed),
+  revoking; plus the pure helpers the invite UI uses: the expiry choices
+  (7 days to start; never, for ordinary links only), the mint form's
+  checks (`to_cord_invite_create_request`), the join link's shape
+  (`to_cord_join_url`), and who minted a link against the member list
+  (`to_cord_invite_minter`)
+- `ui/cord_join_state.svelte.ts` — `CordJoinState`: the join page's token,
+  preview, accept, and the newcomer flow (`join_as_newcomer`: check the
+  fields, redeem, sign up, accept, back to back), plus the pure view
+  decisions `to_cord_join_view` over the session and the preview and
+  `to_cord_join_recheck_error` (a failed re-preview's note), which
+  `src/test/ui/cord_join_state.test.ts` table-tests
+- components: `CordNameForm`, `CordMembers` (the member list and leave),
+  `CordInvites` with `CordInviteForm` (the invite section), and
+  `CordNewcomerForm` (the join page's username-and-password form)
+
+A join link is `/join#<token>`. The token rides in the URL fragment, which
+browsers never send to a server, so it stays out of access logs and
+`Referer` headers, and `/join` prerenders like any other page. The join
+page reads the fragment, keeps the token in the tab's `sessionStorage`
+(with a newcomer's redemption, the cord and reserved username, once there
+is one), and replaces the URL with a bare `/join`, dropping the token from
+the address bar and that history entry. So a reload mid-join still finds
+the link, and a newcomer whose signup failed after redeeming can retry,
+even on a link their own redemption used up. The form shows a reserved
+username read-only, so a retry never spends another use on a new name; if
+redeem refuses the reserved name as taken or invalid, the reservation is
+gone, and the page drops it and opens the field again. While the page
+previews the link again after a failed attempt, the view keeps the last
+preview, so the form stays mounted with its input and error; if that
+re-preview fails for a reason that says nothing about the link (the
+network), the view still decides from the last preview and adds a quiet
+note, while a dead-link refusal ends it. A redemption answers only for
+whoever it reserved a username for: anyone signed out, or the account
+with that username (lowercased, as the spine compares them). Another
+account signed in on the tab gets its own view, and the stored redemption
+stays for the newcomer to come back to. The stored link is forgotten once
+it has done its job or can't do one (unless it holds a redemption for
+someone other than the signed-in account), and when `logout()` runs (any
+logout button), which also drops the redemption; a session ended another
+way, as by `AccountSessions`' revoke-all, doesn't forget it. A restored
+redemption dies with a revoked link at once; on an expired one it lasts
+until redeem or accept refuses, since the preview can't show accept's
+grace. The browser's own history and
+autocomplete may still record `/join#<token>` before the page drops it,
+which is why links carry an expiry and can be revoked.
 
 The typed surface is generated. `action_specs.ts` lists the specs the
 server mounts (protocol, account, admin, role-grant offers, and cord's own
@@ -399,10 +489,33 @@ Routes, prerendered anonymous and filled in client-side from the session:
   "new cord" form once they have some); anyone else is told to ask for an
   invite
 - `/c/[cord_id]` — a cord's page: its name, your role, a placeholder for
-  spaces, and a rename form for its owner and admins. The one route not
+  spaces, and the members. Everyone sees the member list. Owners get role
+  controls: a select plus an apply button (never a change on select
+  alone), with a confirm step to make someone an owner or to step
+  themselves down. Owners and admins remove members where the rules
+  allow. Anyone but the last owner may leave, with a confirm step, and
+  then goes home. Owners and admins also get a rename form and the invite
+  links: a mint form, the new link shown in full once with a copy button,
+  and the list of links with each one's status, uses, expiry, newcomer
+  redemptions, and minter, and a revoke button. Once the member list has
+  loaded, the list flags a link whose minter is no longer an owner or
+  admin; such a link still works. Instance admins also get the "also
+  lets someone new join the instance" toggle, which requires an expiry of
+  at most 30 days and a use limit. The one route not
   prerendered (`prerender = false`, `ssr = false`); the static build's
   `spa.html` fallback serves it, so the web server must fall back to
   `spa.html` for paths with no prerendered file
+- `/join` — where an invite link lands (`/join#<token>`), driven by
+  `cord_invite_preview`: no token, an unknown one, or a link that isn't
+  active gets "ask whoever sent it for a new one"; signed in, the cord's
+  name and a join button (or a link to it, if already in); signed out on
+  a link that welcomes someone new, a choice between picking a username
+  and password (redeem, signup, and accept back to back, then on to the
+  cord) and logging in; signed out on an ordinary link, a login form,
+  after which the page names the cord and offers to join. A newcomer
+  whose redeem finds the link closed to someone new (its minter is no
+  longer an instance admin) gets that login form with a plain note that
+  the link can't make them an account but still works for an existing one
 - `/login`, `/signup` — fuz_app's `LoginForm` and `SignupForm`; signup is
   invite-gated by default, matching an invite by username or email, and
   open when an admin turns on open signup
@@ -560,20 +673,22 @@ once, an accept racing a removal and a role change on one actor), and
 `cord_invites.rs` (the stored digest and the table's CHECKs, accept and
 its statuses, the cascades, concurrent accepts never overshooting the use
 limit), and `cord_newcomers.rs` (a redemption's spine invite, row, and
-use; idempotent re-redeem, even once the link is exhausted, and none
-on a dead link; taken and
-reserved usernames; a demoted, deleted, or purged minter closing the
-link; a scoped `admin` conferring nothing; an admin deleting the spine
-invite; concurrent redemptions against the use limit; accept after
-redemption spending nothing once the link is exhausted, or within the
-grace after expiry, and refused past it; accept claiming the reservation
-when the signup claimed none (open signup, or an older email invite
-winning), naming the claimed invite; a revoke deleting the waiting
+use; idempotent re-redeem wherever accept would still take it (exhausted,
+expired within the grace, a closed minter), none past the grace, and none
+once an account holds the username (accept still completing it); taken and
+reserved usernames, which a closed, expired, or revoked link refuses with
+its own refusal, as it does a free one; a demoted, deleted, or purged
+minter closing the link; a scoped `admin` conferring nothing; an admin
+deleting the spine invite; concurrent redemptions against the use limit;
+accept after redemption spending nothing once the link is exhausted, or
+within the grace after expiry, and refused past it; accept claiming the
+reservation when the signup claimed none (open signup, or an older email
+invite winning), naming the claimed invite; a revoke deleting the waiting
 reservations and refusing the accept; a sweep pass releasing only the
 waiting reservations of a link expired past the grace and auditing it,
 leaving a link within the grace, a live one, and claimed or accepted
-redemptions alone, and skipping a link another transaction holds until
-the next pass). `tests/common/` holds their shared setup and the redemption
+redemptions alone, and skipping a link another transaction holds until the
+next pass). `tests/common/` holds their shared setup and the redemption
 read only tests need:
 
 ```bash
@@ -628,15 +743,17 @@ the role, remove, and leave tiers, no self-removal, the last-owner rule,
 and `cord_not_found` from every verb to anyone outside the cord);
 `cord_newcomers.cross.test.ts` covers newcomer links (the whole path
 over HTTP: anonymous preview, redeem, the stock signup, login, accept;
-a redeemed newcomer joining a used-up link; an existing account accepting
-a newcomer link as any other; only an instance admin minting one, and
-only with both bounds; redeem refusing an ordinary link, an unknown token,
-and a bad, taken, or reserved username; the anonymous preview naming the
-cord only for an active newcomer link; accept after an open signup, after
-an older email invite won the signup, and from someone already in the
-cord; a revoke leaving the stock signup refusing the reserved username; a
-demoted minter closing the link; the newcomer expiry cap; redeem with a
-session behaving as anonymous); `origin.cross.test.ts` and
+a redeemed newcomer joining a used-up link; a waiting username redeemed
+again within the grace after expiry, and on a closed link, while new
+usernames are refused; an existing account accepting a newcomer link as
+any other; only an instance admin minting one, and only with both
+bounds; redeem refusing an ordinary link, an unknown token, and a bad,
+taken, or reserved username; the anonymous preview naming the cord only
+for an active newcomer link; accept after an open signup, after an older
+email invite won the signup, and from someone already in the cord; a
+revoke leaving the stock signup refusing the reserved username; a
+demoted minter closing the link to new usernames; the newcomer expiry
+cap; redeem with a session behaving as anonymous); `origin.cross.test.ts` and
 `audit_stream.cross.test.ts` run fuz_app's shared origin and SSE suites.
 The backend config is `cord_backend_config.ts`.
 

@@ -1,9 +1,9 @@
 import { assert, describe, test } from 'vitest';
-import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 
-import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 import type { CordJson } from '#lib/cord_action_specs.ts';
 import { CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
+
+import { stub_api } from './stub_api.ts';
 
 const cord = (name: string, role: CordJson['role'] = 'cord_owner'): CordJson =>
 	({
@@ -12,16 +12,6 @@ const cord = (name: string, role: CordJson['role'] = 'cord_owner'): CordJson =>
 		role,
 		created_at: '2026-01-01T00:00:00Z'
 	}) as CordJson;
-
-/** A throwing API stub with only the methods a test supplies; any other call throws. */
-const stub_api = (methods: Record<string, (input: any) => Promise<unknown>>) =>
-	new Proxy(methods, {
-		get: (target, key: string) =>
-			target[key] ??
-			(() => {
-				throw new Error(`unexpected call: ${key}`);
-			})
-	}) as unknown as ThrowingApi<FrontendActionsApi>;
 
 describe('CordsState', () => {
 	test('fetch loads the caller’s cords', async () => {

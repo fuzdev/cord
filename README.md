@@ -5,9 +5,9 @@
 > feeds, in one instance you run yourself.
 
 **Status: early.** The design is settled and implementation is underway:
-the server runs and an instance admin can create cords, but nothing
-happens inside a cord yet, so the features described below don't work
-yet.
+the server runs, an instance admin can create cords, and people can be
+invited in, but nothing happens inside a cord yet, so the features
+described below don't work yet.
 
 Think of the coiled telephone cord stretched from the kitchen wall into
 your bedroom, or everyone on the party line at once. Cord is meant to feel
@@ -55,16 +55,18 @@ database.
   and managing accounts and sessions
 - cords: the instance's admins create cords and become their owners; the
   home page lists your cords (or, for an admin with none, offers to create
-  the first), each cord has a page with its name and your role, its owner
-  and admins can rename it, and the admin area lists every cord with its
-  member count
-- cord invites and members, on the server so far: a cord's owner and
-  admins make invite links that bring in people who already have an
-  account on the instance, and an instance admin can make a link that
-  also welcomes someone new, who picks a username with it, signs up, and
-  joins. Owners set members' roles, and members can be removed or leave.
-  The pages for joining and for the member list come next, then a cord's
-  spaces and everything inside them
+  the first), each cord has a page with its name, your role, and its
+  members, its owners and admins can rename it, and the admin area lists
+  every cord with its member count
+- cord invites and members: a cord's owners and admins make invite links
+  (expiring in 7 days unless they choose otherwise, with an optional use
+  limit), see who made each one and how it's been used, and revoke them.
+  A link brings in people who already have an account on the instance,
+  and an instance admin can make one that also welcomes someone new, who
+  picks a username and password on the join page and lands in the cord.
+  Owners set members' roles, owners and admins can remove members, and
+  anyone can leave, as long as the cord keeps an owner. A cord's spaces
+  and everything inside them come next
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
   sessions, invite-gated signup, first-account bootstrap, the cord,
   invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,

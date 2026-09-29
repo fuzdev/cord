@@ -594,7 +594,7 @@ export const cord_invite_redeem_action_spec = {
 	async: true,
 	rate_limit: 'ip',
 	description:
-		'Reserve a username on the instance through a newcomer link, spending one of its uses; the newcomer then signs up with that username and accepts the link. Needs no session, and ignores one. Redeeming the same username through the same link again, before its signup, changes nothing and answers `created: false`, even once the link is used up. A dead link (revoked, expired, not for newcomers, or closed because its minter is no longer an instance admin) refuses it as it would any other username.'
+		'Reserve a username on the instance through a newcomer link, spending one of its uses; the newcomer then signs up with that username and accepts the link. Needs no session, and ignores one. Redeeming the same username through the same link again, before its signup, changes nothing and answers `created: false` wherever accept would still take it: once the link is used up, expired within the accept grace, or closed because its minter is no longer an instance admin. A new username needs an active link whose minter is still an instance admin. A dead link (revoked, expired past the grace, or not for newcomers) refuses a waiting username as it would any other.'
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_accept_action_spec = {

@@ -26,6 +26,21 @@ export class CordAuthState extends AuthState {
 	/** True once a `check_session` call has settled, whatever its outcome. */
 	session_checked: boolean = $state.raw(false);
 
+	readonly #logout_listeners: Set<() => void> = new Set();
+
+	/**
+	 * Call `listener` after each `logout`, to drop what belonged to whoever
+	 * was signed in (the join page's stored link and redemption).
+	 *
+	 * @returns a function that removes the listener, fit to return from an `$effect`
+	 */
+	on_logout(listener: () => void): () => void {
+		this.#logout_listeners.add(listener);
+		return () => {
+			this.#logout_listeners.delete(listener);
+		};
+	}
+
 	/**
 	 * True when the session is verified and its account has loaded. After a
 	 * successful `login`, `signup`, or `bootstrap`, `verified` turns true
@@ -65,6 +80,16 @@ export class CordAuthState extends AuthState {
 			}
 			this.session_checked = true;
 		}
+	}
+
+	/**
+	 * Log out, then call the `on_logout` listeners.
+	 *
+	 * @mutates `this`
+	 */
+	override async logout(): Promise<void> {
+		await super.logout();
+		for (const listener of this.#logout_listeners) listener();
 	}
 }
 
