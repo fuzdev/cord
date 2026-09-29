@@ -58,6 +58,8 @@ Skill(fuz-stack).
 - `crates/xtask/` — `cargo xtask check-release`
 - `.env.development.example` — the server's local env, copied to the
   gitignored `.env.development`
+- `zap.ts`, `deno.json`, `.env.production.example`, `DEPLOY.md` — the
+  zap deploy (see Deploying)
 
 `cord_server`'s modules (each module doc holds the detail):
 
@@ -264,11 +266,14 @@ admit every origin; with a database, `SECRET_FUZ_COOKIE_KEYS` is required
 too, migrations run before serving, and `cordd` refuses to serve unless
 Postgres's `default_transaction_isolation` is `read committed`. The
 README's table lists every variable; spine-wide names stay unprefixed and
-cord-only ones take `CORD_`.
+cord-only ones take `CORD_`. Behind a reverse proxy, `CORD_TRUSTED_PROXIES`
+must name it (`127.0.0.1` for a local nginx): without it every caller
+shares the proxy's IP, so one client exhausts the per-IP budgets, invite
+redemption's included, for everyone.
 Exit codes: `0` success, `2` the caller must fix something, `1` everything
 else; `check-release` keeps fuz_audit's `0` clean, `65` a policy
 violation, and `69`/`70` a tooling failure. Logs go to stdout in color
-unless `NO_COLOR` is set; set `NO_COLOR=1` in production so journald gets
+unless `NO_COLOR` is set; production sets `NO_COLOR=1` so journald gets
 plain text.
 
 The spine crates are path deps into a sibling checkout of the fuz Rust
@@ -280,6 +285,42 @@ never builds `testing_cordd`. Crates opt into the workspace lints
 all/pedantic/nursery/cargo, and `unwrap_used`/`expect_used`/`panic` at warn,
 allowed in tests by `clippy.toml`. The clippy gate denies warnings, so
 `rust-toolchain.toml` pins the toolchain.
+
+## Deploying
+
+`zap.ts` is the whole instance on one dedicated Debian 13 host (the nginx
+recipe's rate-limit zone name is fixed, so two zap sites can't share one);
+`DEPLOY.md` is the operator runbook. The domain, host, logins, certbot
+email, and cookie keys are `$$VAR$$` references resolved from the
+operator's gitignored `.env.production` (`.env.production.example`), so no
+instance value lives in code. zap evaluates the config under Deno, and
+`deno.json`'s import map points `@fuzdev/zap/` at a sibling zap checkout's
+recipe sources, so npm and GitHub CI never see zap; `tsconfig.json`
+excludes `zap.ts`. Check it offline with `deno task check:zap` (types) and
+`zap config validate --env-file <file> zap.ts` (eval and schema, no host).
+
+What's cord-specific, beyond the stock fuz_app recipes:
+
+- **The unit** runs the bare `cordd` (no subcommand) as the `cord` user,
+  loopback port 4061, with its env from `shared/.env.production`; its one
+  writable path is `~/.cord`, where `cordd` deletes the bootstrap token
+  once claimed.
+- **The env file** is `fuz_app_env_base` plus hand-written
+  `FUZ_ALLOWED_ORIGINS`, `CORD_TRUSTED_PROXIES=127.0.0.1` (zap's
+  trusted-proxies recipe only writes `FUZ_<infix>_TRUSTED_PROXIES`), and
+  `NO_COLOR=1`.
+- **nginx** falls back with `$uri $uri.html $uri/index.html /spa.html`:
+  prerendered pages are `<route>.html`, `admin/` has no `index.html` (a
+  `$uri/` entry would 403 on `/admin/`), and `spa.html` serves
+  `/c/<cord_id>` and the SPA's 404. `/api/admin/audit/stream` gets its own
+  exact-match location, unbuffered with an hour's read timeout, since the
+  `/api` block's 60s timeout would cut the idle stream. `/api/ws` rides the
+  `/api` block and its 60s timeout, to revisit when the frontend holds a
+  WebSocket open.
+- **The deploy** builds locally (`cargo xtask check-release`, the release
+  `cordd`, `gro build`, then the binary into `dist_artifacts/`, after
+  `gro build` since it deletes `dist_*`) and gates on `/ready`. A rollback
+  doesn't undo migrations, so they stay additive.
 
 ## testing_cordd
 

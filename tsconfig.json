@@ -36,5 +36,6 @@
 		"src/**/*.js",
 		"src/**/*.ts",
 		"src/**/*.svelte"
-	]
+	],
+	"exclude": ["zap.ts"]
 }

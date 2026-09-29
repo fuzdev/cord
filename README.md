@@ -81,10 +81,11 @@ Bluesky feeds layer on after it.
 - **Calls**: WebRTC in a full mesh, which suits small groups, with a TURN
   server (coturn) the operator runs.
 - **Self-hosting**: one instance can host several cords, each invite-gated.
-  Deploying with docker compose behind your own reverse proxy is planned,
-  along with a self-hosting guide. Only the optional Bluesky connection
-  needs the instance at a public HTTPS origin; everything else runs fine
-  on a LAN. There is no hosted service.
+  A zap config for a single Debian host is here today (see
+  [Deploying](#deploying)); docker compose behind your own reverse proxy
+  is planned, along with a self-hosting guide. Only the optional Bluesky
+  connection needs the instance at a public HTTPS origin; everything else
+  runs fine on a LAN. There is no hosted service.
 
 ## Developing
 
@@ -203,6 +204,15 @@ cargo test -p cord_server -- --ignored
 
 `CORD_CROSS_BACKEND_TEST_URL` and `CORD_SCHEMA_READY_TEST_URL` override
 their database URLs.
+
+## Deploying
+
+[`zap.ts`](zap.ts) describes a whole instance on one dedicated Debian
+host: nginx serving the frontend, PostgreSQL, and `cordd` as a hardened
+systemd service, provisioned and deployed with
+[zap](https://zap.fuz.dev/). [DEPLOY.md](DEPLOY.md) is the runbook.
+Deploying needs zap checked out beside this repo (`deno.json` maps in its
+recipes), along with fuz's server crates for the `cordd` build.
 
 ## Built with
 
