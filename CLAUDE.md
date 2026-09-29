@@ -242,8 +242,7 @@ gro gen       # regenerate the action_* modules
 gro build     # the static frontend
 ```
 
-Never run `gro dev`; the developer manages the dev server. For Rust, use
-cargo directly:
+For Rust, use cargo directly:
 
 ```bash
 cargo fmt --check
