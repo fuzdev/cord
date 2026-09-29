@@ -19,7 +19,7 @@
 </script>
 
 <svelte:head>
-	<title>cord</title>
+	<title>Cord</title>
 </svelte:head>
 
 <ThemeRoot>

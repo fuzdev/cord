@@ -1,7 +1,7 @@
 {
   "name": "@ryanatkn/cord",
   "version": "0.0.1",
-  "description": "a self-hosted hangout for friend groups and small communities: rooms, chat, forums, and Bluesky feeds over the fuz spine",
+  "description": "a self-hosted hangout for friend groups and small communities: voice and video rooms, chat, forums, and Bluesky feeds",
   "license": "MIT",
   "private": true,
   "repository": "https://github.com/ryanatkn/cord",
@@ -11,8 +11,7 @@
     "build": "gro build",
     "check": "gro check",
     "test": "gro test",
-    "preview": "vite preview",
-    "deploy": "gro deploy"
+    "preview": "vite preview"
   },
   "type": "module",
   "engines": {

@@ -1,6 +1,6 @@
 [package]
 name = "cord"
-description = "a self-hosted hangout for friend groups and small communities: rooms, chat, forums, and Bluesky feeds over the fuz spine"
+description = "a self-hosted hangout for friend groups and small communities: voice and video rooms, chat, forums, and Bluesky feeds"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
