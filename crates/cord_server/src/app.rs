@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use deadpool_postgres::Pool;
-use fuz_auth::{AuditEmitter, Keyring, PasswordHasher, RateLimiter, SocketRevoker};
+use fuz_auth::{
+    AuditEmitter, Keyring, PasswordHasher, RateLimiter, SharedDaemonTokenState, SocketRevoker,
+};
 use fuz_realtime::{ConnectionRegistry, SseRegistry};
 
 use crate::env::CordEnv;
@@ -31,6 +33,11 @@ pub struct CordApp {
     pub bootstrap_available: Arc<AtomicBool>,
     pub login_ip_rate_limiter: Option<Arc<RateLimiter>>,
     pub login_account_rate_limiter: Option<Arc<RateLimiter>>,
+    /// The daemon-token credential. Always `None` in production: only the
+    /// `testing_cordd` binary mints one and injects it through
+    /// `RunAppOptions::daemon_token_state`. The keeper it resolves to is
+    /// looked up after migrations (in [`crate::router::build_router`]).
+    pub daemon_token_state: Option<SharedDaemonTokenState>,
 
     // spine: realtime
     /// The WebSocket connection registry, also the socket revoker and
@@ -54,6 +61,7 @@ impl std::fmt::Debug for CordApp {
                 "has_bootstrap_token_path",
                 &self.bootstrap_token_path.is_some(),
             )
+            .field("has_daemon_token_state", &self.daemon_token_state.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -76,7 +84,8 @@ impl CordApp {
         registry
     }
 
-    /// Build the app from a validated env and an injected password hasher.
+    /// Build the app from a validated env, an injected password hasher, and
+    /// the daemon-token credential (production passes `None`).
     ///
     /// # Errors
     ///
@@ -87,6 +96,7 @@ impl CordApp {
         env: &CordEnv,
         password_hasher: Arc<dyn PasswordHasher>,
         rate_limiters: fuz_auth::RateLimiterMode,
+        daemon_token_state: Option<SharedDaemonTokenState>,
     ) -> Result<Self, StartupError> {
         let database_url = env
             .database_url
@@ -99,6 +109,9 @@ impl CordApp {
         // ephemeral key would reset every session on restart.
         let keyring = Arc::new(build_keyring(env.cookie_keys.as_deref())?);
 
+        // TODO: build with `AuditEmitter::new_with_inflight_tracking` when the
+        // first cross-backend test asserts on `audit_log` rows, so
+        // `testing_cordd` can register `_testing_drain_effects`
         let audit_emitter = Arc::new(AuditEmitter::new(pool.clone()));
         // Recomputed against the live DB after migrations (`build_router`).
         let bootstrap_available = Arc::new(AtomicBool::new(false));
@@ -117,6 +130,7 @@ impl CordApp {
             bootstrap_available,
             login_ip_rate_limiter,
             login_account_rate_limiter,
+            daemon_token_state,
             realtime: Arc::new(ConnectionRegistry::new()),
             audit_sse: Arc::new(SseRegistry::new()),
             allowed_origins: Arc::new(env.allowed_origins.clone()),

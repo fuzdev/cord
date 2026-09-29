@@ -11,6 +11,7 @@
     "build": "gro build",
     "check": "gro check",
     "test": "gro test",
+    "test:cross": "FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust",
     "preview": "vite preview"
   },
   "type": "module",

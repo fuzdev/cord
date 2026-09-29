@@ -1,0 +1,26 @@
+[package]
+name = "testing_cord_server"
+description = "test-only cord server (testing_cordd): cordd with the fast hasher and the _testing_* actions; never shipped"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Test-only binary, never shipped. The `testing_` name prefix keeps it out of
+# release packaging, and `cargo xtask check-release` asserts the production
+# `cordd` graph never reaches `fuz_testing` (this crate is the only one that
+# links it).
+[[bin]]
+name = "testing_cordd"
+path = "src/main.rs"
+
+[dependencies]
+cord_server = { path = "../cord_server" }
+fuz_testing.workspace = true
+fuz_auth.workspace = true
+fuz_db.workspace = true
+fuz_sys = { workspace = true, features = ["logging"] }
+tokio.workspace = true
+
+[lints]
+workspace = true

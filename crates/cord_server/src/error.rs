@@ -57,25 +57,33 @@ mod tests {
 
     #[test]
     fn exit_codes_are_stable() {
-        assert_eq!(StartupError::Config(String::new()).exit_code(), 2);
+        let bind = || StartupError::Bind {
+            addr: crate::runtime::DEFAULT_ADDR,
+            source: std::io::Error::other("in use"),
+        };
+        let serve = || StartupError::Serve(std::io::Error::other("boom"));
+        let config = || StartupError::Config(String::new());
+        let database = || StartupError::Database(fuz_db::DbError::InvalidUrl(String::new()));
+        let internal = || StartupError::Internal(String::new());
+
+        assert_eq!(config().exit_code(), 2);
+        assert_eq!(bind().exit_code(), 1);
+        assert_eq!(serve().exit_code(), 1);
+        assert_eq!(database().exit_code(), 1);
+        assert_eq!(internal().exit_code(), 1);
+
         assert!(
-            StartupError::Config(String::new())
+            config()
                 .hint()
                 .is_some_and(|h| h.contains(".env.development.example"))
         );
-        assert_eq!(
-            StartupError::Serve(std::io::Error::other("boom")).exit_code(),
-            1
+        assert!(bind().hint().is_some_and(|h| h.contains("PORT")));
+        assert!(
+            database()
+                .hint()
+                .is_some_and(|h| h.contains("DATABASE_URL"))
         );
-        assert_eq!(StartupError::Internal(String::new()).exit_code(), 1);
-        assert_eq!(StartupError::Internal(String::new()).hint(), None);
-        assert_eq!(
-            StartupError::Bind {
-                addr: crate::runtime::DEFAULT_ADDR,
-                source: std::io::Error::other("in use"),
-            }
-            .exit_code(),
-            1
-        );
+        assert_eq!(serve().hint(), None);
+        assert_eq!(internal().hint(), None);
     }
 }

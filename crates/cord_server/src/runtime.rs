@@ -12,6 +12,21 @@ use crate::env::CordEnv;
 use crate::error::StartupError;
 use crate::router::build_router;
 
+/// cord's instantiation of the spine's extra-action-specs factory, over
+/// [`crate::app::CordApp`].
+///
+/// Production passes `None`; the `testing_cordd` binary passes `Some(_)` to
+/// fold in the `_testing_*` action specs without `fuz_testing` entering the
+/// production `cordd` dep graph.
+pub type ExtraActionSpecsFactory = fuz_actions::ExtraActionSpecsFactory<crate::app::CordApp>;
+
+/// cord's instantiation of the spine's pre-migration hook, over
+/// [`StartupError`].
+///
+/// Production passes `None`; the `testing_cordd` binary passes `Some(_)` to
+/// run the env-gated startup schema reset.
+pub type PreMigrationHook = fuz_actions::PreMigrationHook<StartupError>;
+
 /// Default loopback bind for `cordd` (`127.0.0.1:4061`). A reverse proxy
 /// terminates TLS and forwards to this address; the server serves no static
 /// files.
@@ -23,9 +38,9 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = fuz_http::DEFAULT_DRAIN_TIMEOUT;
 
 /// Options for [`run_app`].
 ///
-/// Named fields so swap points land additively. The spine's test-only seams
-/// (extra action specs, a pre-migration hook, the daemon-token credential)
-/// are absent until cord has a testing sibling binary that supplies them.
+/// Named fields so swap points land additively. Production passes `None`
+/// for each test-only seam (extra action specs, the pre-migration hook, the
+/// daemon-token credential); only the `testing_cordd` binary fills them.
 #[allow(
     missing_debug_implementations,
     reason = "holds an `Arc<dyn PasswordHasher>`"
@@ -41,6 +56,19 @@ pub struct RunAppOptions {
     /// Production passes [`fuz_auth::RateLimiterMode::Enforced`]; every spine
     /// limiter in the process is built through this one mode.
     pub rate_limiters: fuz_auth::RateLimiterMode,
+    /// Extra action specs folded into the registry after cord's own, the
+    /// `testing_cordd` seam for the `_testing_*` actions. Production passes
+    /// `None`.
+    pub extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    /// Fired after the pool exists and before migrations run, the
+    /// `testing_cordd` seam for its env-gated schema reset. Production passes
+    /// `None`.
+    pub pre_migration_hook: Option<PreMigrationHook>,
+    /// The daemon-token credential. Production passes `None`; only
+    /// `testing_cordd` mints one (through `fuz_testing`, which
+    /// `cargo xtask check-release` keeps out of production binaries), so
+    /// `_testing_reset` can authenticate as the keeper.
+    pub daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
 }
 
 /// Run the server to completion.
@@ -58,6 +86,9 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         default_addr,
         drain_timeout,
         rate_limiters,
+        extra_action_specs_factory,
+        pre_migration_hook,
+        daemon_token_state,
     } = options;
 
     let env = CordEnv::from_process()?;
@@ -67,7 +98,15 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // servers.
     let shutdown = fuz_http::shutdown_token();
 
-    let router = build_router(&env, password_hasher, rate_limiters).await?;
+    let router = build_router(
+        &env,
+        password_hasher,
+        rate_limiters,
+        daemon_token_state,
+        extra_action_specs_factory,
+        pre_migration_hook,
+    )
+    .await?;
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

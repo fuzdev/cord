@@ -106,7 +106,14 @@ The Rust side uses cargo directly:
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+cargo xtask check-release   # no production binary links test-only code
 ```
+
+The workspace's crates live in `crates/`: `cord_server` (the `cordd`
+server), `testing_cord_server` (`testing_cordd`, a test-only build of the
+same server with a fast password hasher, a test reset action, and no rate
+limits; never deploy it), and `xtask`, whose `check-release` fails if
+`cordd` depends on any test-only crate.
 
 To run `cordd` locally you need Postgres. Copy `.env.development.example`
 to `.env.development`, fill in `SECRET_FUZ_COOKIE_KEYS`
@@ -166,6 +173,25 @@ Built with the fuz stack: TypeScript,
 [fuz_ui](https://github.com/fuzdev/fuz_ui),
 [fuz_app](https://github.com/fuzdev/fuz_app),
 [Gro](https://github.com/fuzdev/gro), and Rust.
+
+### Tests that need Postgres
+
+`gro test` and `cargo test --workspace` need no database. These tests do,
+and each wipes the `public` schema of its database, so give them throwaway
+ones:
+
+```bash
+# end-to-end auth tests: spawn testing_cordd and drive it over HTTP
+createdb cord_test_rust
+npm run test:cross
+
+# the schema fixture and column guards
+createdb cord_schema_ready_test
+cargo test -p cord_server -- --ignored
+```
+
+`CORD_CROSS_BACKEND_TEST_URL` and `CORD_SCHEMA_READY_TEST_URL` override
+their database URLs.
 
 ## License
 

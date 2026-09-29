@@ -48,6 +48,9 @@ async fn main() -> ExitCode {
         default_addr: DEFAULT_ADDR,
         drain_timeout: DEFAULT_DRAIN_TIMEOUT,
         rate_limiters: fuz_auth::RateLimiterMode::Enforced,
+        extra_action_specs_factory: None,
+        pre_migration_hook: None,
+        daemon_token_state: None,
     })
     .await
     else {

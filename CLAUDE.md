@@ -5,7 +5,7 @@
 > feeds, in one instance you run yourself.
 
 **Status: early.** The design is settled and implementation is starting.
-The repo is a SvelteKit static frontend plus a Rust workspace whose one
+The repo is a SvelteKit static frontend plus a Rust workspace whose server
 crate, `crates/cord_server` (bin `cordd`), is the server skeleton over the
 fuz spine: accounts, sessions, bootstrap, invite-gated signup, JSON-RPC,
 WebSocket, health and readiness. The frontend is the auth shell over that
@@ -54,10 +54,14 @@ For coding conventions, see Skill(fuz-stack).
 - `src/lib/` — frontend library code: `ui/rpc.ts` (the RPC client),
   `ui/cord_auth_state.svelte.ts` (the session state), `action_specs.ts` and
   the generated `action_*` modules
-- `src/test/` — vitest tests (not co-located)
+- `src/test/` — vitest tests (not co-located); `src/test/cross_backend/`
+  holds the end-to-end suites against a spawned server (see Testing below)
 - `static/` — files copied as-is into the frontend build
 - `crates/cord_server/` — the server crate, library plus the `cordd`
   binary (see Rust below)
+- `crates/testing_cord_server/` — the test-only `testing_cordd` binary
+- `crates/xtask/` — `cargo xtask check-release`, aliased in
+  `.cargo/config.toml`
 - `.env.development.example` — the server's local env, copied to the
   gitignored `.env.development`
 
@@ -141,14 +145,32 @@ For Rust crates, use cargo directly, not Gro:
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo xtask check-release
 ```
 
-The workspace depends on the fuz Rust spine crates (`fuz_actions`,
-`fuz_auth`, `fuz_db`, `fuz_http`, `fuz_realtime`, `fuz_sys`) as path deps
-into a sibling checkout of the fuz Rust workspace, at the paths in the
-root `Cargo.toml`; they aren't published, so cargo only resolves with that
-checkout present. For the same reason GitHub CI runs only the frontend
-check, and the Rust gates run locally.
+The workspace's crates are `cord_server` (the production `cordd`),
+`testing_cord_server` (the test-only `testing_cordd`), and `xtask`. It
+depends on the fuz Rust spine crates (`fuz_actions`, `fuz_auth`, `fuz_db`,
+`fuz_http`, `fuz_realtime`, `fuz_sys`, plus the dev-only `fuz_testing`
+and `fuz_audit`) as path deps into a sibling checkout of the fuz Rust
+workspace, at the paths in the root `Cargo.toml`; they aren't published,
+so cargo only resolves with that checkout present. For the same reason
+GitHub CI runs only the frontend check, and the Rust gates run locally.
+`default-members` is `cord_server` alone, so a bare `cargo build` (or
+`cargo build --release`) builds only `cordd` and never leaves
+`testing_cordd` in `target/`; `--workspace` (as in the gates above)
+covers every crate.
+
+The root `Cargo.toml` is the workspace: shared package metadata, workspace
+dependencies, the release profile, and the fuz ecosystem's lints
+(`unsafe_code = "forbid"`, clippy all/pedantic/nursery/cargo at warn,
+`unwrap_used`/`expect_used`/`panic` at warn, allowed in tests by
+`clippy.toml`). Crates opt in with `[lints] workspace = true`. The clippy
+gate denies warnings, which is why `rust-toolchain.toml` pins the
+toolchain. Exit
+codes: `0` success, `2` the caller must fix something, `1` everything else.
+`cargo xtask check-release` keeps fuz_audit's sysexits codes: `0` clean,
+`65` a policy violation, `69`/`70` a tooling failure.
 
 ### cord_server
 
@@ -159,7 +181,9 @@ proxies `/api` and `/health` to `cordd`). Modules:
 - `main.rs` — `cordd`: tracing init, the Argon2id hasher, `run_app`;
   `cordd db-status` is the spine's read-only migration report
 - `runtime.rs` — `run_app` / `RunAppOptions` (hasher, default address
-  `127.0.0.1:4061`, drain timeout, rate-limiter mode), signal handling and
+  `127.0.0.1:4061`, drain timeout, rate-limiter mode, and the test-only
+  seams `cordd` passes as `None`: `extra_action_specs_factory`,
+  `pre_migration_hook`, `daemon_token_state`), signal handling and
   graceful drain via `fuz_http`
 - `env.rs` — `CordEnv`, read once through an injectable `from_vars`
   (tests pass a map; no process-env mutation)
@@ -198,14 +222,47 @@ cargo test -p cord_server -- --ignored
 UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready -- --ignored
 ```
 
-`CORD_SCHEMA_READY_TEST_URL` overrides their database URL. There is no
-testing sibling binary yet, so the spine's test-only seams (the fast
-hasher, `_testing_*` actions, the daemon token) aren't wired.
+`CORD_SCHEMA_READY_TEST_URL` overrides their database URL.
 
-The root `Cargo.toml` is the workspace: shared package metadata, workspace
-dependencies, the release profile, and the fuz ecosystem's lints
-(`unsafe_code = "forbid"`, clippy all/pedantic/nursery/cargo at warn,
-`unwrap_used`/`expect_used`/`panic` at warn, allowed in tests by
-`clippy.toml`). Crates opt in with `[lints] workspace = true`. CI denies
-warnings, which is why `rust-toolchain.toml` pins the toolchain. Exit
-codes: `0` success, `2` the caller must fix something, `1` everything else.
+### testing_cordd
+
+`crates/testing_cord_server` builds `testing_cordd`, the same `run_app`
+with the test-only pieces swapped in: `fuz_testing`'s fast
+`TestingArgon2idHasher`, rate limiters in `DisabledForTesting`, a daemon
+token written under `CORD_DAEMON_TOKEN_DIR` (required), the
+`_testing_reset` action (wipes the auth tables and seeds a fresh keeper,
+authenticated by that daemon token), and a pre-migration hook that drops
+and recreates the `public` schema when `FUZ_TESTING_RESET_DB_ON_STARTUP`
+is true. It binds `127.0.0.1:4161` by default. Never ship it: only this
+crate links `fuz_testing`, the `testing_` prefix marks it unshippable, and
+`cargo xtask check-release` (fuz_audit's dep-graph audit) fails if any
+production binary reaches `fuz_testing` or `fuz_audit`. When a new test
+seam is needed, add it to `RunAppOptions` with `cordd` passing `None`.
+
+## Testing
+
+`gro test` runs the in-process vitest `unit` project. The
+`cross_backend_rust` project in `vite.config.ts` runs
+`src/test/cross_backend/*.cross.test.ts` over real HTTP against a spawned
+`testing_cordd`, through fuz_app's cross-backend harness: its global setup
+spawns the binary with
+`cargo run -p testing_cord_server --bin testing_cordd` (the `-p` is needed
+since `default-members` is `cord_server` alone), bootstraps the keeper with the
+bootstrap token, and each test fires `_testing_reset` for a fresh keeper.
+`auth.cross.test.ts` covers cord's auth flows (bootstrap, login and
+logout, invite-gated signup, the admin RPC gate, the origin allowlist, the
+audit stream's gate); `origin.cross.test.ts` and
+`audit_stream.cross.test.ts` run fuz_app's shared origin and SSE suites.
+The backend config is `cord_backend_config.ts`.
+
+It needs Postgres and is gated behind `FUZ_TEST_CROSS_BACKEND`, so a bare
+`gro test` skips it:
+
+```bash
+createdb cord_test_rust
+npm run test:cross   # FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust
+```
+
+`CORD_CROSS_BACKEND_TEST_URL` overrides the database URL
+(`postgres://localhost/cord_test_rust`). The binary wipes that database's
+`public` schema on every boot, so point it only at a throwaway database.

@@ -45,6 +45,7 @@ use serde::Serialize;
 use crate::app::CordApp;
 use crate::env::CordEnv;
 use crate::error::StartupError;
+use crate::runtime::{ExtraActionSpecsFactory, PreMigrationHook};
 
 /// Session cookie name for cord.
 ///
@@ -67,6 +68,10 @@ pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 1] {
 /// `env.database_url` is absent, so the binary can be smoke-tested without a
 /// live Postgres.
 ///
+/// `daemon_token_state`, `extra_action_specs_factory`, and
+/// `pre_migration_hook` are the `testing_cordd` seams; production passes
+/// `None` for each.
+///
 /// # Errors
 ///
 /// [`StartupError`] when the composition root can't be built (pool, cookie
@@ -75,16 +80,32 @@ pub async fn build_router(
     env: &CordEnv,
     password_hasher: Arc<dyn fuz_auth::PasswordHasher>,
     rate_limiters: RateLimiterMode,
+    daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
+    extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    pre_migration_hook: Option<PreMigrationHook>,
 ) -> Result<Router, StartupError> {
     if env.database_url.is_none() {
         tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
         return Ok(boot_only_router());
     }
 
-    let app = CordApp::build(env, password_hasher, rate_limiters)?;
+    let app = CordApp::build(env, password_hasher, rate_limiters, daemon_token_state)?;
+
+    // `testing_cordd`'s env-gated schema reset runs once the pool exists and
+    // before migrations.
+    if let Some(hook) = pre_migration_hook {
+        hook(&app.pool).await?;
+    }
 
     // Migrations land before any handler runs.
     fuz_db::run_migrations(&app.pool, &cord_migration_namespaces()).await?;
+
+    // Only `testing_cordd` supplies a daemon token; point it at the keeper
+    // now that the schema exists. The token is static for the process
+    // lifetime.
+    if let Some(state) = app.daemon_token_state.clone() {
+        fuz_auth::resolve_keeper_into(&state, &app.pool).await;
+    }
 
     // Bootstrap opens only while a token file exists and no account does;
     // recompute now that the schema exists.
@@ -116,7 +137,13 @@ pub async fn build_router(
         expected: Arc::new(expected_ready_schema()?),
     });
 
-    compose_full_router(&app, env.trusted_proxies.clone(), ready, rate_limiters)
+    compose_full_router(
+        &app,
+        env.trusted_proxies.clone(),
+        ready,
+        extra_action_specs_factory,
+        rate_limiters,
+    )
 }
 
 /// The committed `expected_schema.json` (the column map of cord's full
@@ -159,6 +186,7 @@ fn compose_full_router(
     app: &CordApp,
     trusted_proxies: Vec<ParsedProxy>,
     ready: Router,
+    extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
     rate_limiters: RateLimiterMode,
 ) -> Result<Router, StartupError> {
     // One set of per-action limiters shared by the RPC and WebSocket
@@ -166,7 +194,12 @@ fn compose_full_router(
     // across them, not one per surface.
     let action_account_rl = rate_limiters.limiter(fuz_auth::DEFAULT_ACTION_ACCOUNT_RATE_LIMIT);
     let action_ip_rl = rate_limiters.limiter(fuz_auth::DEFAULT_ACTION_IP_RATE_LIMIT);
-    let registry = build_action_registry(app, action_account_rl.clone(), action_ip_rl.clone())?;
+    let registry = build_action_registry(
+        app,
+        extra_action_specs_factory,
+        action_account_rl.clone(),
+        action_ip_rl.clone(),
+    )?;
 
     // Account REST, bootstrap, and signup nest under `/api/account`.
     let api_account = fuz_auth::account_router(build_account_state(app))
@@ -239,9 +272,7 @@ fn build_account_state(app: &CordApp) -> AccountRouteState {
         bootstrap_available: Arc::clone(&app.bootstrap_available),
         login_ip_rate_limiter: app.login_ip_rate_limiter.clone(),
         login_account_rate_limiter: app.login_account_rate_limiter.clone(),
-        // TODO: the daemon-token credential arrives with a testing sibling
-        // binary; production never carries one
-        daemon_token_state: None,
+        daemon_token_state: app.daemon_token_state.clone(),
         session_cookie_name: CORD_SESSION_COOKIE_NAME,
     }
 }
@@ -257,7 +288,13 @@ fn build_bootstrap_state(app: &CordApp) -> fuz_auth::BootstrapRouteState {
                 Arc::new(fuz_auth::FileBootstrapTokenStore::new(p.clone()));
             store
         }),
-        on_keeper_resolved: None,
+        // Only set under `testing_cordd`: bootstrap teaches the daemon-token
+        // state the keeper's account id so the credential resolves to it.
+        on_keeper_resolved: app.daemon_token_state.clone().map(|state| {
+            let resolved: Arc<dyn fuz_auth::BootstrapKeeperResolved> =
+                Arc::new(fuz_auth::DaemonTokenKeeperResolved::new(state));
+            resolved
+        }),
     });
     fuz_auth::BootstrapRouteState {
         options,
@@ -292,9 +329,10 @@ fn build_signup_state(app: &CordApp, rate_limiters: RateLimiterMode) -> fuz_auth
 
 /// Compile the action registry: the spine's protocol actions plus its
 /// account, admin, and role-grant-offer actions over the builtin roles
-/// (`keeper`, `admin`).
+/// (`keeper`, `admin`), then any extra specs from `testing_cordd`.
 fn build_action_registry(
     app: &CordApp,
+    extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
     action_account_rate_limiter: Option<Arc<RateLimiter>>,
     action_ip_rate_limiter: Option<Arc<RateLimiter>>,
 ) -> Result<Arc<ActionRegistry>, StartupError> {
@@ -307,6 +345,17 @@ fn build_action_registry(
         Arc::new(fuz_auth::AdminOfferAuthorize),
         Arc::new(fuz_auth::RoleRegistry::default()),
     ));
+    // The `testing_cordd` seam for the `_testing_*` actions; production
+    // passes no factory, so `fuz_testing` stays out of the `cordd` graph.
+    if let Some(factory) = extra_action_specs_factory {
+        let runtime = fuz_actions::ExtraActionSpecsRuntime {
+            password_hasher: Arc::clone(&app.password_hasher),
+            keyring: Arc::clone(&app.keyring),
+            daemon_token_state: app.daemon_token_state.clone(),
+            session_cookie_name: CORD_SESSION_COOKIE_NAME,
+        };
+        specs.extend(factory(Arc::new(app.clone()), runtime));
+    }
     // Fail loud: booting with an empty registry would answer
     // `method_not_found` to everything.
     let registry = ActionRegistry::compile(specs)
@@ -321,7 +370,7 @@ fn build_audit_stream_state(app: &CordApp) -> fuz_realtime::AuditStreamRouteStat
     fuz_realtime::AuditStreamRouteState {
         pool: app.pool.clone(),
         keyring: Arc::clone(&app.keyring),
-        daemon_token_state: None,
+        daemon_token_state: app.daemon_token_state.clone(),
         audit_sse: Arc::clone(&app.audit_sse),
         session_cookie_name: CORD_SESSION_COOKIE_NAME,
         required_role: fuz_auth::ROLE_ADMIN,
@@ -338,7 +387,7 @@ fn build_rpc_state(
     RpcRouteState {
         pool: app.pool.clone(),
         keyring: Arc::clone(&app.keyring),
-        daemon_token_state: None,
+        daemon_token_state: app.daemon_token_state.clone(),
         allowed_origins: Arc::clone(&app.allowed_origins),
         registry,
         audit: Arc::clone(&app.audit_emitter),
@@ -359,7 +408,7 @@ fn build_ws_state(
     WsRouteState {
         pool: app.pool.clone(),
         keyring: Arc::clone(&app.keyring),
-        daemon_token_state: None,
+        daemon_token_state: app.daemon_token_state.clone(),
         allowed_origins: Arc::clone(&app.allowed_origins),
         registry,
         audit: Arc::clone(&app.audit_emitter),
@@ -429,6 +478,7 @@ mod tests {
             &env,
             Arc::new(fuz_auth::Argon2idHasher::new()),
             RateLimiterMode::Enforced,
+            None,
         )
         .expect("app builds without touching the DB")
     }
@@ -439,7 +489,7 @@ mod tests {
             pool: app.pool.clone(),
             expected: Arc::new(expected_ready_schema().expect("fixture parses")),
         });
-        compose_full_router(&app, Vec::new(), ready, RateLimiterMode::Enforced)
+        compose_full_router(&app, Vec::new(), ready, None, RateLimiterMode::Enforced)
             .expect("router composes")
     }
 
@@ -516,10 +566,31 @@ mod tests {
 
     #[test]
     fn action_registry_compiles_with_the_spine_surface() {
-        let registry = build_action_registry(&lazy_app(), None, None).expect("registry compiles");
+        let registry =
+            build_action_registry(&lazy_app(), None, None, None).expect("registry compiles");
         for method in ["heartbeat", "account_verify", "admin_account_list"] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
+    }
+
+    #[test]
+    fn extra_action_specs_factory_folds_into_the_registry() {
+        let factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
+            assert_eq!(runtime.session_cookie_name, CORD_SESSION_COOKIE_NAME);
+            vec![fuz_actions::public_readonly_spec(
+                "_testing_seam_probe",
+                |_params, _ctx| Box::pin(async { Ok(serde_json::json!({})) }),
+            )]
+        });
+        let app = lazy_app();
+        let registry =
+            build_action_registry(&app, Some(factory), None, None).expect("registry compiles");
+        assert!(registry.get("_testing_seam_probe").is_some());
+        // the spine surface is still there alongside the extra spec
+        assert!(registry.get("account_verify").is_some());
+
+        let without = build_action_registry(&app, None, None, None).expect("registry compiles");
+        assert!(without.get("_testing_seam_probe").is_none());
     }
 }
 
