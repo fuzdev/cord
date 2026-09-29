@@ -15,6 +15,7 @@ import {
 	ERROR_ROLE_NOT_WEB_GRANTABLE
 } from '@fuzdev/fuz_app/http/error_schemas.ts';
 import {
+	ERROR_ROLE_GRANT_BUILTIN_SCOPED,
 	ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE,
 	RoleGrantOfferAcceptOutput,
 	RoleGrantOfferCreateOutput
@@ -42,10 +43,6 @@ import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
  * (`_testing_reset`); `create_account` signs members up through a
  * production invite.
  */
-
-/** The spine's refusal of a builtin role (`admin`, `keeper`) bound to a scope, on every grant path. */
-// TODO: import this from fuz_app once its TS surface exports the reason
-const ERROR_ROLE_GRANT_BUILTIN_SCOPED = 'role_grant_builtin_scoped';
 
 const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
 const setup_test = default_cross_process_setup(handle);
