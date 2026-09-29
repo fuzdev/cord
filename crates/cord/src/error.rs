@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors surfaced by the `app_cli` CLI.
+/// Errors surfaced by the `cord` CLI.
 ///
 /// Exit-code dialect: `0` success; `2` = the caller must change something
 /// local (arguments, config) before retrying; `1` = everything else.
