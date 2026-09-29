@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicBool;
 
 use deadpool_postgres::Pool;
 use fuz_auth::{AuditEmitter, Keyring, PasswordHasher, RateLimiter, SocketRevoker};
-use fuz_realtime::ConnectionRegistry;
+use fuz_realtime::{ConnectionRegistry, SseRegistry};
 
 use crate::env::CordEnv;
 use crate::error::StartupError;
@@ -36,6 +36,10 @@ pub struct CordApp {
     /// The WebSocket connection registry, also the socket revoker and
     /// notification sender.
     pub realtime: Arc<ConnectionRegistry>,
+    /// The open admin audit-log SSE streams behind
+    /// `GET /api/admin/audit/stream`; audit rows fan out to them and
+    /// revocations close them.
+    pub audit_sse: Arc<SseRegistry>,
 
     // shared config
     pub allowed_origins: Arc<Vec<String>>,
@@ -114,6 +118,7 @@ impl CordApp {
             login_ip_rate_limiter,
             login_account_rate_limiter,
             realtime: Arc::new(ConnectionRegistry::new()),
+            audit_sse: Arc::new(SseRegistry::new()),
             allowed_origins: Arc::new(env.allowed_origins.clone()),
             bootstrap_token_path: env.bootstrap_token_path.clone(),
         })

@@ -5,12 +5,13 @@
 > feeds, in one instance you run yourself.
 
 **Status: early.** The design is settled and implementation is starting.
-The repo is a SvelteKit static frontend shell plus a Rust workspace whose
-one crate, `crates/cord_server` (bin `cordd`), is the server skeleton over
-the fuz spine: accounts, sessions, bootstrap, invite-gated signup, JSON-RPC,
-WebSocket, health and readiness. No Cord feature exists yet; treat the
-current code as scaffolding, not product, and don't describe planned
-features as working.
+The repo is a SvelteKit static frontend plus a Rust workspace whose one
+crate, `crates/cord_server` (bin `cordd`), is the server skeleton over the
+fuz spine: accounts, sessions, bootstrap, invite-gated signup, JSON-RPC,
+WebSocket, health and readiness. The frontend is the auth shell over that
+server (login, signup, bootstrap, account, admin). No Cord feature exists
+yet; treat the current code as scaffolding, not product, and don't describe
+planned features as working.
 
 The intended shape, briefly:
 
@@ -49,13 +50,69 @@ For coding conventions, see Skill(fuz-stack).
 ## Layout
 
 - `src/routes/` — SvelteKit routes; `+layout.ts` prerenders everything for
-  the static adapter
+  the static adapter (see Frontend below)
+- `src/lib/` — frontend library code: `ui/rpc.ts` (the RPC client),
+  `ui/cord_auth_state.svelte.ts` (the session state), `action_specs.ts` and
+  the generated `action_*` modules
 - `src/test/` — vitest tests (not co-located)
 - `static/` — files copied as-is into the frontend build
 - `crates/cord_server/` — the server crate, library plus the `cordd`
   binary (see Rust below)
 - `.env.development.example` — the server's local env, copied to the
   gitignored `.env.development`
+
+## Frontend
+
+A static SvelteKit build over `cordd`'s API, using `@fuzdev/fuz_app` for the
+auth UI and the RPC client. The root `+layout.svelte` provides the contexts
+and checks the session on mount:
+
+- `cord_rpc_context` — `CordRpc` from `ui/rpc.ts`: fuz_app's
+  `create_frontend_rpc_client` over `POST /api/rpc`, with the throwing `api`
+  and the Result-shaped `api_result` Proxies. HTTP only; the WebSocket
+  transport joins when something needs server push.
+- `cord_auth_state_context` — `CordAuthState` from
+  `ui/cord_auth_state.svelte.ts`: fuz_app's `AuthState` (cookie session
+  status, login, logout, bootstrap, signup against `/api/account/*`) plus
+  `session_checked`, true once the first check settles. The same instance
+  is set on fuz_app's `auth_state_context`, which its components read.
+  Session-dependent views show "checking session..." until
+  `session_checked`, so the prerendered HTML stays neutral and a signed-in
+  visitor never sees the signed-out view flash. Signed-in views gate on
+  `signed_in` (verified and the account loaded), which skips the gap after
+  a successful login before the account arrives. Gates in front of
+  fuz_app's forms don't wait on `verifying`, which is also true
+  mid-submit: unmounting a form then loses its input on a failed attempt.
+
+The typed surface is generated. `action_specs.ts` lists the specs the
+server mounts (protocol, account, admin, role-grant offers; the protocol
+actions run only over `/api/ws`), and
+`action_collections.gen.ts` / `action_metatypes.gen.ts` generate
+`action_collections.ts` and `action_metatypes.ts` (`FrontendActionsApi`)
+from the same sources; `gro gen` regenerates them, and `gro check` fails on
+drift. When the server mounts a new spec group, add it to `action_specs.ts`
+and as a source row in `action_collections.gen.ts`, then run `gro gen`.
+`src/test/action_specs.test.ts` pins the list and the generated modules to
+each other; `src/test/ui/` tests `ui/`.
+
+Routes, all prerendered anonymous and filled in client-side from the
+session:
+
+- `/` — the intro; signed in, who you are and links to your account and
+  (for admins) the admin area
+- `/login`, `/signup` — fuz_app's `LoginForm` and `SignupForm`; signup is
+  invite-gated by default, matching an invite by username or email, and
+  open when an admin turns on open signup
+- `/account` — your account, `LogoutButton`, and `AccountSessions`
+- `/admin` — the gate: a `/health` probe, then fuz_app's `BootstrapForm`
+  while bootstrap is open, `LoginForm` when signed out, a notice for
+  non-admins; admins get the shell with `invites`, `accounts`, `sessions`,
+  and `audit log` (fuz_app's `Admin*` components over
+  `provide_admin_rpc_contexts`); the audit log's live toggle streams from
+  `GET /api/admin/audit/stream`
+
+Library code imports relatively; routes and tests import it through the
+`#lib/*` subpath import in `package.json`.
 
 ## Committing
 
@@ -107,11 +164,15 @@ proxies `/api` and `/health` to `cordd`). Modules:
 - `env.rs` — `CordEnv`, read once through an injectable `from_vars`
   (tests pass a map; no process-env mutation)
 - `app.rs` — `CordApp`, the composition root (pool, keyring, audit
-  emitter, rate limiters, the realtime connection registry)
+  emitter, rate limiters, the realtime connection registry, the audit SSE
+  registry)
 - `router.rs` — the route composition: `/health`, `/ready`
   (`fuz_http::ready_router` over the committed `expected_schema.json`),
   `/api/account/*` (status, login, logout, password, bootstrap, signup),
-  `/api/rpc` (GET + POST, protocol + account + admin actions), `/api/ws`;
+  `/api/rpc` (GET + POST, protocol + account + admin actions), `/api/ws`,
+  `/api/admin/audit/stream` (`fuz_realtime`'s audit SSE: admin role,
+  cookie session only, closed on logout, password change, session revocation,
+  or loss of the admin role);
   the migration chain (`cord_migration_namespaces`, today only the spine's
   auth migrations); the session cookie `cord_session`
 - `error.rs` — `StartupError` with `.exit_code()` (`2` config, `1`

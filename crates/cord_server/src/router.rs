@@ -7,6 +7,7 @@
 //! - `fuz_auth::signup_routes::signup_router` → `/api/account/signup`
 //! - `fuz_actions::create_rpc_router` → `/api/rpc` (GET + POST)
 //! - `fuz_actions::register_action_ws` → `/api/ws`
+//! - `fuz_realtime::audit_stream_router` → `/api/admin/audit/stream`
 //! - `fuz_http::ready_router` → `/ready`
 //!
 //! plus cord's own `/health` and `/`. Middleware applied once at the outer
@@ -103,6 +104,10 @@ pub async fn build_router(
     let revoker = app.socket_revoker();
     fuz_auth::register_socket_revocation_listeners(&app.audit_emitter, &revoker);
 
+    // Audit rows fan out to the open admin audit streams, which close on
+    // logout, password change, session revocation, or loss of the admin role.
+    fuz_realtime::register_audit_sse_listener(&app.audit_emitter, &app.audit_sse);
+
     // `/ready`: the schema-drift readiness probe over the committed
     // `expected_schema.json`, embedded at compile time so the binary is
     // self-contained. Parsed here so a malformed fixture fails the boot.
@@ -190,12 +195,16 @@ fn compose_full_router(
         )))
         .layer(body_limit_layer(DEFAULT_BODY_LIMIT_BYTES));
 
+    // The admin audit-log SSE stream, mounted at its absolute path.
+    let audit_stream = fuz_realtime::audit_stream_router(build_audit_stream_state(app));
+
     let router = Router::new()
         .route("/health", get(health))
         .route("/", get(root))
         .merge(ready)
         .nest("/api/account", api_account)
-        .nest("/api", api);
+        .nest("/api", api)
+        .merge(audit_stream);
 
     if trusted_proxies.is_empty() {
         tracing::info!("no trusted proxies configured; XFF ignored, client IP is the TCP peer");
@@ -303,6 +312,21 @@ fn build_action_registry(
     let registry = ActionRegistry::compile(specs)
         .map_err(|e| StartupError::Internal(format!("action registry compile failed: {e}")))?;
     Ok(Arc::new(registry))
+}
+
+/// State for `GET /api/admin/audit/stream`: admins only, over a cookie
+/// session only, since the stream is a browser feed and close-on-revoke keys
+/// on the session.
+fn build_audit_stream_state(app: &CordApp) -> fuz_realtime::AuditStreamRouteState {
+    fuz_realtime::AuditStreamRouteState {
+        pool: app.pool.clone(),
+        keyring: Arc::clone(&app.keyring),
+        daemon_token_state: None,
+        audit_sse: Arc::clone(&app.audit_sse),
+        session_cookie_name: CORD_SESSION_COOKIE_NAME,
+        required_role: fuz_auth::ROLE_ADMIN,
+        credential_gate: fuz_auth::CredentialGate::SESSION_ONLY,
+    }
 }
 
 fn build_rpc_state(
@@ -453,6 +477,7 @@ mod tests {
             ("POST", "/api/account/bootstrap"),
             ("POST", "/api/account/signup"),
             ("GET", "/api/ws"),
+            ("GET", "/api/admin/audit/stream"),
         ] {
             let (status, _) = send(
                 full_router(),
@@ -462,6 +487,18 @@ mod tests {
             )
             .await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_stream_requires_authentication() {
+        // no credential resolves without a DB round trip, so the gate refuses
+        // before any query
+        for origin in [None, Some("http://localhost:5173")] {
+            let (status, body) =
+                send(full_router(), "GET", "/api/admin/audit/stream", origin).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "origin {origin:?}");
+            assert!(body.contains("authentication_required"), "{body}");
         }
     }
 

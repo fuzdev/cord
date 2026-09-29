@@ -48,7 +48,10 @@ database.
 
 ## What's here today
 
-- a SvelteKit static frontend shell (`src/routes/`)
+- a SvelteKit static frontend (`src/routes/`) with the account pages:
+  logging in and out, invite-gated signup, claiming a fresh instance, your
+  account and its sessions, and an admin area for minting signup invites
+  and managing accounts and sessions
 - the server skeleton, `crates/cord_server` (the `cordd` binary): accounts
   and sessions, invite-gated signup, first-account bootstrap, a JSON-RPC
   endpoint, a WebSocket endpoint, and health and readiness checks, with no
@@ -131,9 +134,13 @@ It runs its migrations on start. With the server up, the frontend dev
 server proxies `/api` (WebSocket included) and `/health` to port 4061, so
 the two work together on one origin; if you move `cordd` with `PORT`,
 change the proxy target in `vite.config.ts` too. On a fresh database,
-write a token to the file at `FUZ_BOOTSTRAP_TOKEN_PATH` and submit it to
-`POST /api/account/bootstrap` to create the first account; after that, new
-accounts sign up with an invite.
+write a token to the file at `FUZ_BOOTSTRAP_TOKEN_PATH` before starting
+`cordd`; it must be owner-only (mode `0600`), which
+`(umask 077; openssl rand -hex 32 > <path>)` gives you. Then open `/admin`
+in the frontend and submit the token to create the first account, which is
+the admin. After that, the admin mints invites at `/admin/invites`, and new
+accounts sign up at `/signup` with a username or email that matches an
+invite (or freely, if the admin turns on open signup there).
 
 The server's routes:
 
@@ -146,6 +153,8 @@ The server's routes:
 - `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account and admin
   actions
 - `/api/ws`: the WebSocket for realtime actions
+- `GET /api/admin/audit/stream`: the audit log as a live server-sent event
+  stream, for admins signed in with a session
 
 `cordd db-status` prints a read-only report of the database's tables and
 migrations.
@@ -155,6 +164,7 @@ Built with the fuz stack: TypeScript,
 [SvelteKit](https://github.com/sveltejs/kit),
 [fuz_css](https://github.com/fuzdev/fuz_css),
 [fuz_ui](https://github.com/fuzdev/fuz_ui),
+[fuz_app](https://github.com/fuzdev/fuz_app),
 [Gro](https://github.com/fuzdev/gro), and Rust.
 
 ## License
