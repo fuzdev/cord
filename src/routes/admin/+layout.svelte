@@ -45,64 +45,67 @@
 	provide_admin_rpc_contexts(create_admin_rpc_adapters(api));
 </script>
 
-<div class="admin-layout">
-	{#if auth_state.signed_in && is_admin}
+{#if auth_state.signed_in && is_admin}
+	<div class="admin-layout">
 		<ColumnLayout class="flex:1 overflow:hidden">
 			{#snippet aside()}
 				<MenuLink path="/admin" class="menuitem font_size_lg">admin</MenuLink>
-				<hr />
+				<hr class="nav-separator unstyled" />
 				<MenuLink path="/admin/invites" class="menuitem">invites</MenuLink>
 				<MenuLink path="/admin/accounts" class="menuitem">accounts</MenuLink>
 				<MenuLink path="/admin/sessions" class="menuitem">sessions</MenuLink>
 				<MenuLink path="/admin/audit" class="menuitem">audit log</MenuLink>
 				<MenuLink path="/admin/cords" class="menuitem">cords</MenuLink>
-				<hr />
-				<MenuLink path="/account" class="menuitem">your account</MenuLink>
-				<MenuLink path="/" class="menuitem">home</MenuLink>
 			{/snippet}
 			{@render children()}
 		</ColumnLayout>
-	{:else}
-		<main class="width_atmost_sm mx_auto p_lg">
-			{#if !auth_state.session_checked || probing}
-				<p class="text_50">checking session...</p>
-			{:else if server_unreachable}
-				<Alert status="error">
-					<p>The Cord server (<code>cordd</code>) isn't responding. Start it, then reload.</p>
-				</Alert>
-			{:else if auth_state.needs_bootstrap}
-				<h1>claim this instance</h1>
-				<p>
-					No accounts exist yet. Create the first one, which becomes the admin. The bootstrap token
-					is in the file the server's <code>FUZ_BOOTSTRAP_TOKEN_PATH</code> names.
-				</p>
-				<BootstrapForm redirect_on_bootstrap={resolve('/admin')} />
-			{:else if auth_state.signed_in && !auth_state.verifying}
-				<h1>admin</h1>
-				<p>
-					You're signed in as <strong>{auth_state.account?.username}</strong>, which isn't an admin
-					account.
-				</p>
-				<p>Back to the <a href={resolve('/')}>home page</a>.</p>
-			{:else if auth_state.verified}
-				<!-- a login or bootstrap succeeded and the account is still loading -->
-				<p class="text_50">checking session...</p>
-			{:else}
-				<h1>log in</h1>
-				<LoginForm username_label="username" redirect_on_login={resolve('/admin')} />
-				<p>Back to the <a href={resolve('/')}>home page</a>.</p>
-			{/if}
-		</main>
-	{/if}
-</div>
+	</div>
+{:else}
+	<main class="width_atmost_sm mx_auto p_lg">
+		{#if !auth_state.session_checked || probing}
+			<p class="text_50">checking session...</p>
+		{:else if server_unreachable}
+			<Alert status="error">
+				<p>The Cord server (<code>cordd</code>) isn't responding. Start it, then reload.</p>
+			</Alert>
+		{:else if auth_state.needs_bootstrap}
+			<h1>claim this instance</h1>
+			<p>
+				No accounts exist yet. Create the first one, which becomes the admin. The bootstrap token is
+				in the file the server's <code>FUZ_BOOTSTRAP_TOKEN_PATH</code> names.
+			</p>
+			<BootstrapForm redirect_on_bootstrap={resolve('/admin')} />
+		{:else if auth_state.signed_in && !auth_state.verifying}
+			<h1>admin</h1>
+			<p>
+				You're signed in as <strong>{auth_state.account?.username}</strong>, which isn't an admin
+				account.
+			</p>
+		{:else if auth_state.verified}
+			<!-- a login or bootstrap succeeded and the account is still loading -->
+			<p class="text_50">checking session...</p>
+		{:else}
+			<h1>log in</h1>
+			<LoginForm username_label="username" redirect_on_login={resolve('/admin')} />
+		{/if}
+	</main>
+{/if}
 
 <style>
+	/* a viewport tall, not `100%` of the shell's content column, which has
+	   only a min-height and so wouldn't bound it; with `min-height: 0` and
+	   `overflow: hidden`, the nested `ColumnLayout` columns scroll
+	   independently inside it */
 	.admin-layout {
 		display: flex;
 		flex-direction: column;
-		height: 100%;
-		/* lets the nested `ColumnLayout` columns scroll independently */
+		height: 100dvh;
 		min-height: 0;
 		overflow: hidden;
+	}
+
+	.nav-separator {
+		margin: var(--space_md) 0;
+		border-top: 1px solid var(--fg_10);
 	}
 </style>

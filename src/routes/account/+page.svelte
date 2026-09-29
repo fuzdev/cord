@@ -33,5 +33,4 @@
 	{:else}
 		<p>You're not signed in. <a href={resolve('/login')}>Log in</a></p>
 	{/if}
-	<p><a href={resolve('/')}>home</a></p>
 </main>

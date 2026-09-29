@@ -2,12 +2,13 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { untrack } from 'svelte';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
 	import { Uuid } from '@fuzdev/fuz_util/id.ts';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cord_rpc_context } from '#lib/ui/rpc.ts';
-	import { CordState } from '#lib/ui/cords_state.svelte.ts';
+	import { CordState, cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import { CordMembersState } from '#lib/ui/cord_members_state.svelte.ts';
 	import { CordInvitesState } from '#lib/ui/cord_invites_state.svelte.ts';
 	import { rpc_error_reason } from '#lib/ui/cord_errors.ts';
@@ -20,6 +21,8 @@
 	const auth_state = cord_auth_state_context.get();
 	const { api } = cord_rpc_context.get();
 
+	// the account's cord list, shared with the rail, follows what this page learns
+	const cords_state = cords_state_context.get();
 	const cord_state = new CordState({ api });
 	const members_state = new CordMembersState({ api });
 	const invites_state = new CordInvitesState({ api });
@@ -32,12 +35,20 @@
 	});
 
 	const cord = $derived(cord_state.cord);
-	// the server answers a cord you aren't in exactly as one that doesn't exist
+	// the server answers a cord you aren't in exactly as one that doesn't exist;
+	// a failed load of a cord the page has moved off says nothing about this one
 	const not_found = $derived(
 		!cord_id ||
-			(cord_state.load.failed &&
+			(cord_state.cord_id === cord_id &&
+				cord_state.load.failed &&
 				rpc_error_reason(cord_state.load.error_data) === ERROR_CORD_NOT_FOUND)
 	);
+
+	// a cord the server doesn't find for you leaves the rail, so a stale entry
+	// heals on click (`remove_cord` is a no-op once it's gone)
+	$effect(() => {
+		if (not_found && cord_id) cords_state.remove_cord(cord_id);
+	});
 
 	// whether the member list is this cord's, loaded; a list still loading,
 	// failed, or left from another cord says nothing about this one
@@ -60,7 +71,17 @@
 		if (loaded_cord_id && can_manage) void invites_state.fetch(loaded_cord_id);
 	});
 
-	const left = async (): Promise<void> => {
+	// the rail's entry follows the page's view of the cord: its name, loaded
+	// or renamed here, and the viewer's role, from the member list once it's
+	// loaded; untracked, since `put_cord` reads and writes the list
+	$effect(() => {
+		if (!cord || !role) return;
+		const current = role === cord.role ? cord : { ...cord, role };
+		untrack(() => cords_state.put_cord(current));
+	});
+
+	const left = async (left_cord_id: Uuid): Promise<void> => {
+		cords_state.remove_cord(left_cord_id);
 		await goto(resolve('/'));
 	};
 </script>
@@ -90,7 +111,7 @@
 				Spaces will live here: live rooms, chats, forums, and feeds. None exist yet.
 			</p>
 		</section>
-		<CordMembers {members_state} {role} {self_actor_id} onleft={left} />
+		<CordMembers {members_state} {role} {self_actor_id} onleft={() => left(cord.id)} />
 		{#if can_manage}
 			<CordInvites
 				{invites_state}
@@ -112,5 +133,4 @@
 			</section>
 		{/if}
 	{/if}
-	<p><a href={resolve('/')}>home</a></p>
 </main>

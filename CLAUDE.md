@@ -49,8 +49,8 @@ Skill(fuz-stack).
   `cord_roles.ts` (the roles and member rules' twin), `action_specs.ts` and
   the generated `action_*` modules; `ui/` holds `rpc.ts`, `cord_errors.ts`
   (refusal reasons to words), the `*_state.svelte.ts` classes, and the
-  components (`CordNameForm`, `CordMembers`, `CordInvites`,
-  `CordInviteForm`, `CordNewcomerForm`)
+  components (`CordNav`, the rail; `CordNameForm`, `CordMembers`,
+  `CordInvites`, `CordInviteForm`, `CordNewcomerForm`)
 - `src/test/` — vitest tests; `cross_backend/` holds the end-to-end suites
 - `crates/cord_server/` — the server library and `cordd`, plus the
   `expected_schema.json` fixture; `tests/` holds the Postgres suites
@@ -200,8 +200,30 @@ that has shipped); give it a `*_COLUMNS` const and register it in
 A static SvelteKit build over `cordd`'s API, using `@fuzdev/fuz_app` for the
 auth UI and the RPC client. The root `+layout.svelte` provides
 `cord_rpc_context` (`ui/rpc.ts`: the throwing `api` over `POST /api/rpc`,
-HTTP only) and `cord_auth_state_context` (`CordAuthState`, also set on
-fuz_app's `auth_state_context`), and checks the session on mount.
+HTTP only), `cord_auth_state_context` (`CordAuthState`, also set on
+fuz_app's `auth_state_context`), and `cords_state_context` (the signed-in
+account's `CordsState`, fetched when an account signs in and reset when it
+signs out), and checks the session on mount.
+
+Every page sits in fuz_app's `AppShell`, with `CordNav` as its left rail:
+home, your cords (each selected on its page and any page under it), then
+account, admin for instance admins, about, and log out; signed out, log in,
+sign up, about, and the claim link while the instance has no accounts.
+Until the first session check settles, and while a login's account loads,
+the rail shows only the links both shapes share. Its log out goes through
+`auth_state.logout` and then home. The rail and the home page read the one
+`CordsState`, loaded on sign-in and refetched each time the home page
+mounts after that. A cord created, left, or joined here shows in the rail at
+once; the cord page puts its own view of the cord (its name, renamed there,
+and the viewer's role, from the member list once loaded) into the rail's
+entry, and drops the entry when the server doesn't find the cord for you.
+Other changes (another tab's, or another member's) show when you come home,
+sign in, or reload, and a cord already in the rail also catches up when you
+open it. A refresh keeps the loaded list up; a failed load keeps its error
+through a retry, so the rail's retry, shown while there's no list, stays
+mounted until the retry settles. Pages keep their in-text links (log in, claim it)
+but no link lists of their own.
+`/admin` nests its own section list in a `ColumnLayout` beside the rail.
 
 The state classes hold fuz_app `AsyncSlot`s (`KeyedAsyncSlot` for per-row
 writes) over the `api`. The member, invite, and join states map errors

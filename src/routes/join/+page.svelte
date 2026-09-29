@@ -10,6 +10,7 @@
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cord_rpc_context } from '#lib/ui/rpc.ts';
+	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import {
 		CordJoinState,
 		cord_join_session_storage,
@@ -21,6 +22,7 @@
 
 	const auth_state = cord_auth_state_context.get();
 	const { api } = cord_rpc_context.get();
+	const cords_state = cords_state_context.get();
 
 	// the token rides in the fragment (`/join#<token>`), which never reaches a
 	// server; this tab's `sessionStorage` keeps it, and a newcomer's
@@ -91,6 +93,9 @@
 
 	const go_to_cord = async (cord_id: string): Promise<void> => {
 		join_state.forget(auth_state.signed_in, account_username);
+		// reload rather than add the cord: a newcomer's first load of the list
+		// can be in flight from before the accept, and this one supersedes it
+		void cords_state.fetch();
 		await goto(resolve('/c/[cord_id]', { cord_id }));
 	};
 
@@ -207,5 +212,4 @@
 	{#if recheck_error !== null && view.kind !== 'dead' && view.kind !== 'checking'}
 		<p class="text_50 font_size_sm" title={recheck_error}>Couldn't re-check this link just now.</p>
 	{/if}
-	<p><a href={resolve('/')}>home</a></p>
 </main>

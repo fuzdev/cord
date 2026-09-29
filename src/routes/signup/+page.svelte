@@ -18,7 +18,6 @@
 	{:else if auth_state.signed_in}
 		<p>You're signed in as <strong>{auth_state.account?.username}</strong>.</p>
 		<LogoutButton />
-		<p>Back to the <a href={resolve('/')}>home page</a>.</p>
 	{:else if auth_state.needs_bootstrap}
 		<h1>sign up</h1>
 		<p>

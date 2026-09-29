@@ -16,7 +16,6 @@
 			<li><a href={resolve('/admin/sessions')}>sessions</a>: active sessions</li>
 			<li><a href={resolve('/admin/audit')}>audit log</a>: security events</li>
 			<li><a href={resolve('/admin/cords')}>cords</a>: every cord and its member count</li>
-			<li><a href={resolve('/account')}>your account</a>: your own sessions</li>
 		</ul>
 	</nav>
 </div>

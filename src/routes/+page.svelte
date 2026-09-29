@@ -2,26 +2,21 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
+	import { onMount } from 'svelte';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
-	import { cord_rpc_context } from '#lib/ui/rpc.ts';
-	import { CordsState } from '#lib/ui/cords_state.svelte.ts';
+	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import CordNameForm from '#lib/ui/CordNameForm.svelte';
 	import { CORD_ROLE_LABELS } from '#lib/cord_roles.ts';
 
 	const auth_state = cord_auth_state_context.get();
-	const { api } = cord_rpc_context.get();
+	// the root layout loads it for whoever is signed in
+	const cords_state = cords_state_context.get();
 
-	const cords_state = new CordsState({ api });
-
-	// load the cords for whoever is signed in, and forget them on sign-out
-	const account_id = $derived(auth_state.signed_in ? auth_state.account?.id : undefined);
-	$effect(() => {
-		if (account_id) {
-			void cords_state.fetch();
-		} else {
-			cords_state.reset();
-		}
+	onMount(() => {
+		// the rail keeps the list for the visit; coming home refreshes it, once
+		// the root layout's own load has settled
+		if (cords_state.list.succeeded || cords_state.list.failed) void cords_state.fetch();
 	});
 
 	const create_cord = async (name: string): Promise<boolean> => {
@@ -45,10 +40,15 @@
 		<p>Signed in as <strong>{auth_state.account?.username}</strong>.</p>
 		<section>
 			<h2>your cords</h2>
-			{#if cords_state.list.failed}
+			<!-- a refresh keeps the loaded list up, and a failure keeps its error
+				through a retry -->
+			{#if cords_state.list.error !== null}
 				<Alert status="error"><p>Couldn't load your cords: {cords_state.list.error}</p></Alert>
-			{:else if !cords_state.list.succeeded}
-				<p class="text_50">loading cords...</p>
+			{/if}
+			{#if !cords_state.loaded}
+				{#if cords_state.list.error === null}
+					<p class="text_50">loading cords...</p>
+				{/if}
 			{:else if cords_state.cords.length > 0}
 				<ul>
 					{#each cords_state.cords as cord (cord.id)}
@@ -64,7 +64,7 @@
 				<p>You're not in any cords yet. Ask someone in one for an invite.</p>
 			{/if}
 		</section>
-		{#if auth_state.is_instance_admin && cords_state.list.succeeded}
+		{#if auth_state.is_instance_admin && cords_state.loaded}
 			<section>
 				<h2>{cords_state.cords.length > 0 ? 'new cord' : 'create your first cord'}</h2>
 				<CordNameForm
@@ -76,27 +76,9 @@
 				/>
 			</section>
 		{/if}
-		<nav>
-			<ul>
-				<li><a href={resolve('/account')}>account</a></li>
-				{#if auth_state.is_instance_admin}
-					<li><a href={resolve('/admin')}>admin</a></li>
-				{/if}
-			</ul>
-		</nav>
-	{:else}
-		{#if auth_state.needs_bootstrap}
-			<p>
-				This instance has no accounts yet. Its operator can
-				<a href={resolve('/admin')}>claim it</a>.
-			</p>
-		{/if}
-		<nav>
-			<ul>
-				<li><a href={resolve('/login')}>log in</a></li>
-				<li><a href={resolve('/signup')}>sign up</a></li>
-			</ul>
-		</nav>
+	{:else if auth_state.needs_bootstrap}
+		<p>
+			This instance has no accounts yet. Its operator can <a href={resolve('/admin')}>claim it</a>.
+		</p>
 	{/if}
-	<p><a href={resolve('/about')}>about</a></p>
 </main>
