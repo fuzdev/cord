@@ -17,7 +17,12 @@ describe('create_cord_rpc', () => {
 			'admin_account_list',
 			'admin_session_list',
 			'audit_log_list',
-			'app_settings_get'
+			'app_settings_get',
+			'cord_create',
+			'cord_list',
+			'cord_get',
+			'cord_update',
+			'cord_admin_list'
 		] as const) {
 			assert.typeOf(api_result[method], 'function', method);
 		}

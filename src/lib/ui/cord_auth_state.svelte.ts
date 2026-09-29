@@ -14,6 +14,7 @@
  */
 
 import { AuthState } from '@fuzdev/fuz_app/ui/auth_state.svelte.ts';
+import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import { create_context } from '@fuzdev/fuz_ui/context_helpers.ts';
 
 /**
@@ -33,6 +34,15 @@ export class CordAuthState extends AuthState {
 	 */
 	get signed_in(): boolean {
 		return this.verified && this.account !== null;
+	}
+
+	/**
+	 * True when the account holds a global (unscoped) `admin` grant, the rule
+	 * the server applies to instance-admin actions like `cord_create`. `roles`
+	 * ignores scope, so it isn't enough on its own.
+	 */
+	get is_instance_admin(): boolean {
+		return this.active_role_grants.some((g) => g.role === ROLE_ADMIN && !g.scope_id);
 	}
 
 	/**

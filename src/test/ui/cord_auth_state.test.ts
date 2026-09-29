@@ -118,6 +118,37 @@ describe('CordAuthState', () => {
 		assert.deepEqual(auth_state.roles, []);
 	});
 
+	test('is_instance_admin needs a global admin grant', async () => {
+		const status = (role_grants: Array<unknown>): Response =>
+			json_response(200, {
+				account: { id: 'a', username: 'keeper' },
+				actor: { id: 'b', name: 'keeper' },
+				role_grants
+			});
+		const grant = (role: string, scope_id: string | null) => ({
+			id: 'g',
+			role,
+			scope_kind: scope_id ? 'cord' : null,
+			scope_id,
+			created_at: '2026-01-01T00:00:00Z',
+			expires_at: null,
+			granted_by: null
+		});
+		const responses = [
+			status([grant('admin', null)]),
+			status([grant('admin', 'c'), grant('cord_owner', 'c')]),
+			status([])
+		];
+		vi.stubGlobal('fetch', () => Promise.resolve(responses.shift()));
+		const auth_state = new CordAuthState();
+		await auth_state.check_session();
+		assert.isTrue(auth_state.is_instance_admin);
+		await auth_state.check_session();
+		assert.isFalse(auth_state.is_instance_admin, 'a scoped admin grant is not global');
+		await auth_state.check_session();
+		assert.isFalse(auth_state.is_instance_admin);
+	});
+
 	test('logout signs out', async () => {
 		const responses = [
 			json_response(200, {

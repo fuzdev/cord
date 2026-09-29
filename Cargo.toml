@@ -16,6 +16,7 @@ publish = false
 # workspace (the crates aren't published yet).
 fuz_actions = { path = "../private_fuz/crates/fuz_actions" }
 fuz_auth = { path = "../private_fuz/crates/fuz_auth" }
+fuz_cell = { path = "../private_fuz/crates/fuz_cell" }
 fuz_db = { path = "../private_fuz/crates/fuz_db" }
 fuz_http = { path = "../private_fuz/crates/fuz_http" }
 fuz_realtime = { path = "../private_fuz/crates/fuz_realtime" }
@@ -47,6 +48,9 @@ thiserror = "2"
 
 # DB.
 deadpool-postgres = "0.14"
+
+# Ids.
+uuid = { version = "1", features = ["serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

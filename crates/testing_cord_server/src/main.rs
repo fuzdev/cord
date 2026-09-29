@@ -56,9 +56,9 @@ async fn main() -> ExitCode {
     // Always-visible sentinel, whatever the log filter.
     eprintln!("testing_cordd starting (test-mode argon2 active)");
 
-    // `_testing_reset` wipes the auth tables and seeds a fresh keeper. cord
-    // owns no tables beyond the spine's auth namespace, so there's no
-    // domain state to reset alongside.
+    // `_testing_reset` wipes the auth tables and seeds a fresh keeper; its
+    // `reset_state` hook then empties the cell tables (cords live there) in
+    // the same transaction, so no cord outlives the accounts that were in it.
     let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
         #[allow(
             clippy::expect_used,
@@ -75,7 +75,19 @@ async fn main() -> ExitCode {
             keyring: runtime.keyring,
             daemon_token_state,
             session_cookie_name: runtime.session_cookie_name,
-            reset_state: None,
+            reset_state: Some(Arc::new(|db: fuz_actions::ActionDb<'_>| {
+                Box::pin(async move {
+                    db.execute(
+                        "TRUNCATE cell_field, cell_item, cell_grant, cell RESTART IDENTITY CASCADE",
+                        &[],
+                    )
+                    .await
+                    .map_err(|e| {
+                        fuz_http::internal_error_with_source("_testing_reset cell truncate", &e)
+                    })?;
+                    Ok(())
+                })
+            })),
         })]
     });
 

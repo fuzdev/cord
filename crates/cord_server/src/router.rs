@@ -20,8 +20,9 @@
 //! ## Migrations
 //!
 //! cord owns no tables of its own yet; it runs the spine's
-//! `fuz_auth::AUTH_MIGRATIONS` via `fuz_db::run_migrations`. A `cord`
-//! namespace lands here when the first cord table does.
+//! `fuz_auth::AUTH_MIGRATIONS` then `fuz_cell::CELL_MIGRATIONS` (cords are
+//! cells) via `fuz_db::run_migrations`. A `cord` namespace lands here when
+//! the first cord table does.
 
 use std::sync::Arc;
 
@@ -58,8 +59,9 @@ pub const CORD_SESSION_COOKIE_NAME: &str = "cord_session";
 /// Shared by [`build_router`]'s migration run, the `cordd db-status`
 /// subcommand, and the schema fixture tests, so they can't drift.
 #[must_use]
-pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 1] {
-    [fuz_auth::AUTH_MIGRATIONS]
+pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 2] {
+    // auth first: the cell tables reference `actor`
+    [fuz_auth::AUTH_MIGRATIONS, fuz_cell::CELL_MIGRATIONS]
 }
 
 /// Build the top-level router.
@@ -327,9 +329,11 @@ fn build_signup_state(app: &CordApp, rate_limiters: RateLimiterMode) -> fuz_auth
     }
 }
 
-/// Compile the action registry: the spine's protocol actions plus its
-/// account, admin, and role-grant-offer actions over the builtin roles
-/// (`keeper`, `admin`), then any extra specs from `testing_cordd`.
+/// Compile the action registry: the spine's protocol actions, its account,
+/// admin, and role-grant-offer actions over cord's role registry (the
+/// builtins plus the cord roles, which no spine grant path confers) and
+/// cord's offer gate, cord's own actions, then any extra specs from
+/// `testing_cordd`.
 fn build_action_registry(
     app: &CordApp,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
@@ -342,9 +346,12 @@ fn build_action_registry(
         app.socket_revoker(),
         action_account_rate_limiter,
         action_ip_rate_limiter,
-        Arc::new(fuz_auth::AdminOfferAuthorize),
-        Arc::new(fuz_auth::RoleRegistry::default()),
+        // a global admin offers, and never a scoped builtin role: the spine
+        // treats a scoped `admin` as a global one in places
+        Arc::new(crate::offer_authorize::CordOfferAuthorize),
+        Arc::new(crate::roles::cord_role_registry()),
     ));
+    specs.extend(crate::cord_actions::cord_action_specs());
     // The `testing_cordd` seam for the `_testing_*` actions; production
     // passes no factory, so `fuz_testing` stays out of the `cordd` graph.
     if let Some(factory) = extra_action_specs_factory {
@@ -556,7 +563,14 @@ mod tests {
     fn expected_schema_parses_and_covers_the_migration_chain() {
         let schema = expected_ready_schema().expect("committed fixture parses");
         // the tracker must be expected, so a never-migrated DB fails readiness
-        for table in ["schema_version", "account", "actor", "auth_session"] {
+        for table in [
+            "schema_version",
+            "account",
+            "actor",
+            "auth_session",
+            "cell",
+            "cell_grant",
+        ] {
             assert!(
                 schema.contains_key(table),
                 "expected_schema.json lacks {table}"
@@ -568,7 +582,16 @@ mod tests {
     fn action_registry_compiles_with_the_spine_surface() {
         let registry =
             build_action_registry(&lazy_app(), None, None, None).expect("registry compiles");
-        for method in ["heartbeat", "account_verify", "admin_account_list"] {
+        for method in [
+            "heartbeat",
+            "account_verify",
+            "admin_account_list",
+            "cord_create",
+            "cord_list",
+            "cord_get",
+            "cord_update",
+            "cord_admin_list",
+        ] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
     }

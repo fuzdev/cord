@@ -1,0 +1,458 @@
+//! Cord's RPC actions: creating, listing, reading, and renaming cords.
+//!
+//! - `cord_create`: instance admins only. Creates the cord cell, grants the
+//!   caller `cord_owner`, and stamps the cord's role-shaped `cell_grant`
+//!   rows, in the action's one transaction, then audits `cord_create`.
+//! - `cord_list`: the caller's cords with their role in each, derived from
+//!   the caller's cord-scoped role grants.
+//! - `cord_get`: one cord, for its members only.
+//! - `cord_update`: rename a cord; its owner or admins only.
+//! - `cord_admin_list`: every cord with its member count, for instance
+//!   admins' operations. It's the only place an instance admin sees a cord
+//!   they aren't in.
+//!
+//! Every cord-role check goes through [`crate::cord_authz`], which matches
+//! grant scope exactly. A caller who isn't in a cord gets the same
+//! `cord_not_found` as for a cord that doesn't exist, so cord ids can't be
+//! probed. The instance-admin checks require a global (unscoped) `admin`
+//! grant, on top of the dispatcher's scope-blind role gate.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use deadpool_postgres::GenericClient;
+use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
+use fuz_auth::{
+    AuditLogInput, AuditRouting, AuthSpec, CredentialGate, ROLE_ADMIN, RequestActorContext,
+    ResolvedAuthContext,
+};
+use fuz_http::{
+    JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_params, not_found,
+    parse_strict_params,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::cord_authz::{CordRole, cord_memberships, cord_role_in};
+use crate::cord_queries::{
+    CordAdminRow, CordCreated, CordRow, query_cord_admin_list, query_cord_create, query_cord_get,
+    query_cord_rename, query_cords_by_ids, validate_cord_name,
+};
+
+/// Error reason: no such cord, or the caller isn't in it.
+pub const ERROR_CORD_NOT_FOUND: &str = "cord_not_found";
+/// Error reason: only instance admins create cords.
+pub const ERROR_CORD_CREATE_FORBIDDEN: &str = "cord_create_forbidden";
+/// Error reason: only the cord's owner or admins may change it.
+pub const ERROR_CORD_UPDATE_FORBIDDEN: &str = "cord_update_forbidden";
+/// Error reason: the cord name is empty, too long, or has a forbidden or
+/// misplaced character.
+pub const ERROR_CORD_NAME_INVALID: &str = "cord_name_invalid";
+
+/// The instance-admin role gate the admin-only specs declare. The dispatcher
+/// checks it scope-blind; the handlers then require the grant be global.
+const INSTANCE_ADMIN_ROLES: &[&str] = &[ROLE_ADMIN];
+
+// -- Wire inputs --------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CordCreateInput {
+    name: String,
+    // read by the dispatcher's authorization phase, not the handler
+    #[serde(
+        default,
+        rename = "acting",
+        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+    )]
+    _acting: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CordListInput {
+    #[serde(
+        default,
+        rename = "acting",
+        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+    )]
+    _acting: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CordGetInput {
+    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    cord_id: Uuid,
+    #[serde(
+        default,
+        rename = "acting",
+        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+    )]
+    _acting: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CordUpdateInput {
+    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    cord_id: Uuid,
+    name: String,
+    #[serde(
+        default,
+        rename = "acting",
+        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+    )]
+    _acting: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CordAdminListInput {
+    #[serde(
+        default,
+        rename = "acting",
+        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+    )]
+    _acting: Option<Uuid>,
+}
+
+// -- Wire outputs -------------------------------------------------------------
+
+/// A cord as its member sees it: `CordJson` in `cord_action_specs.ts`.
+fn to_cord_json(cord: &CordRow, role: CordRole) -> Value {
+    json!({
+        "id": cord.id,
+        "name": cord.name,
+        "role": role,
+        "created_at": cord.created_at,
+    })
+}
+
+/// A row of the admin ops list: `CordAdminJson` in `cord_action_specs.ts`.
+fn to_cord_admin_json(row: &CordAdminRow) -> Value {
+    json!({
+        "id": row.cord.id,
+        "name": row.cord.name,
+        "member_count": row.member_count,
+        "created_at": row.cord.created_at,
+    })
+}
+
+// -- Dispatch -----------------------------------------------------------------
+
+/// Run a handler `(client, …)` over whichever `ActionDb` variant is live: the
+/// pooled client for reads, the transaction for side-effecting actions.
+macro_rules! dispatch_db {
+    ($ctx:expr, $handler:ident ( $($arg:expr),* $(,)? )) => {
+        match &$ctx.db {
+            fuz_actions::ActionDb::Pool(c) => $handler(*c, $($arg),*).await,
+            fuz_actions::ActionDb::Tx(t) => $handler(*t, $($arg),*).await,
+            _ => Err(internal_error("unsupported ActionDb variant")),
+        }
+    };
+}
+
+/// Like `dispatch_db!`, also passing `&ctx` so a mutation can audit on the
+/// same transaction.
+macro_rules! dispatch_db_ctx {
+    ($ctx:expr, $handler:ident ( $($arg:expr),* $(,)? )) => {
+        match &$ctx.db {
+            fuz_actions::ActionDb::Pool(c) => $handler(*c, &$ctx, $($arg),*).await,
+            fuz_actions::ActionDb::Tx(t) => $handler(*t, &$ctx, $($arg),*).await,
+            _ => Err(internal_error("unsupported ActionDb variant")),
+        }
+    };
+}
+
+type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, JsonrpcError>> + Send + 'a>>;
+
+/// Erase a handler closure into an [`ActionHandler`], giving the closure its
+/// higher-ranked signature so `Box::pin(async move { … })` coerces.
+fn handler<F>(f: F) -> ActionHandler
+where
+    F: for<'a> Fn(Value, ActionContext<'a>) -> HandlerFuture<'a> + Send + Sync + 'static,
+{
+    Arc::new(f)
+}
+
+/// The acting actor. Every cord spec requires one, so the dispatcher has
+/// already resolved it; `None` here is a wiring bug.
+fn require_actor(auth: ResolvedAuthContext<'_>) -> Result<&RequestActorContext, JsonrpcError> {
+    auth.actor()
+        .ok_or_else(|| internal_error("unreachable: a cord action ran without an acting actor"))
+}
+
+/// Whether the caller is an instance admin: a **global** `admin` grant. A
+/// scoped `admin` grant doesn't count.
+fn is_instance_admin(auth: &RequestActorContext) -> bool {
+    auth.has_scoped_role(ROLE_ADMIN, None)
+}
+
+fn cord_not_found() -> JsonrpcError {
+    not_found("cord", Some(ERROR_CORD_NOT_FOUND))
+}
+
+fn name_invalid(e: impl std::fmt::Display) -> JsonrpcError {
+    invalid_params(&e.to_string(), Some(ERROR_CORD_NAME_INVALID))
+}
+
+// -- Handlers -----------------------------------------------------------------
+
+async fn handle_cord_create<C: GenericClient + ?Sized>(
+    client: &C,
+    ctx: &ActionContext<'_>,
+    auth: &RequestActorContext,
+    input: &CordCreateInput,
+) -> Result<Value, JsonrpcError> {
+    if !is_instance_admin(auth) {
+        return Err(forbidden(
+            "only instance admins create cords",
+            Some(ERROR_CORD_CREATE_FORBIDDEN),
+        ));
+    }
+    let name = validate_cord_name(&input.name).map_err(name_invalid)?;
+    let CordCreated {
+        cord,
+        owner_role_grant_id,
+    } = query_cord_create(client, &name, auth.actor.id)
+        .await
+        .map_err(|e| internal_error_with_source("cord_create", &e))?;
+    // the cell has no `created_by`, so the audit row is the creator's record
+    ctx.audit_emit(
+        client,
+        AuditLogInput::for_custom_event("cord_create", AuditRouting::InTx, AuditRouting::Pool)
+            .actor(auth.actor.id)
+            .account(auth.account.id)
+            .ip(ctx.client_ip.clone())
+            .metadata(json!({
+                "cord_id": cord.id,
+                "name": cord.name,
+                "owner_role_grant_id": owner_role_grant_id,
+            })),
+    )
+    .await?;
+    Ok(json!({ "cord": to_cord_json(&cord, CordRole::Owner) }))
+}
+
+async fn handle_cord_list<C: GenericClient + ?Sized>(
+    client: &C,
+    auth: &RequestActorContext,
+) -> Result<Value, JsonrpcError> {
+    let memberships = cord_memberships(&auth.role_grants);
+    let ids: Vec<Uuid> = memberships.iter().map(|(id, _)| *id).collect();
+    let rows = query_cords_by_ids(client, &ids)
+        .await
+        .map_err(|e| internal_error_with_source("cord_list", &e))?;
+    // keep the membership order; a grant whose cord is gone drops out
+    let cords: Vec<Value> = memberships
+        .iter()
+        .filter_map(|(id, role)| {
+            rows.iter()
+                .find(|row| row.id == *id)
+                .map(|row| to_cord_json(row, *role))
+        })
+        .collect();
+    Ok(json!({ "cords": cords }))
+}
+
+async fn handle_cord_get<C: GenericClient + ?Sized>(
+    client: &C,
+    auth: &RequestActorContext,
+    input: &CordGetInput,
+) -> Result<Value, JsonrpcError> {
+    let Some(role) = cord_role_in(&auth.role_grants, input.cord_id) else {
+        return Err(cord_not_found());
+    };
+    let cord = query_cord_get(client, input.cord_id)
+        .await
+        .map_err(|e| internal_error_with_source("cord_get", &e))?
+        .ok_or_else(cord_not_found)?;
+    Ok(json!({ "cord": to_cord_json(&cord, role) }))
+}
+
+async fn handle_cord_update<C: GenericClient + ?Sized>(
+    client: &C,
+    ctx: &ActionContext<'_>,
+    auth: &RequestActorContext,
+    input: &CordUpdateInput,
+) -> Result<Value, JsonrpcError> {
+    let Some(role) = cord_role_in(&auth.role_grants, input.cord_id) else {
+        return Err(cord_not_found());
+    };
+    // a member already knows the cord exists, so refusing them isn't a leak
+    if !role.can_manage() {
+        return Err(forbidden(
+            "only the cord's owner or admins may change it",
+            Some(ERROR_CORD_UPDATE_FORBIDDEN),
+        ));
+    }
+    let name = validate_cord_name(&input.name).map_err(name_invalid)?;
+    let cord = query_cord_rename(client, input.cord_id, &name, auth.actor.id)
+        .await
+        .map_err(|e| internal_error_with_source("cord_update", &e))?
+        .ok_or_else(cord_not_found)?;
+    ctx.audit_emit(
+        client,
+        AuditLogInput::for_custom_event("cord_update", AuditRouting::InTx, AuditRouting::Pool)
+            .actor(auth.actor.id)
+            .account(auth.account.id)
+            .ip(ctx.client_ip.clone())
+            .metadata(json!({ "cord_id": cord.id, "name": cord.name })),
+    )
+    .await?;
+    Ok(json!({ "cord": to_cord_json(&cord, role) }))
+}
+
+async fn handle_cord_admin_list<C: GenericClient + ?Sized>(
+    client: &C,
+    auth: &RequestActorContext,
+) -> Result<Value, JsonrpcError> {
+    if !is_instance_admin(auth) {
+        return Err(forbidden(
+            "only instance admins list every cord",
+            Some(fuz_http::INSUFFICIENT_PERMISSIONS_REASON),
+        ));
+    }
+    let rows = query_cord_admin_list(client)
+        .await
+        .map_err(|e| internal_error_with_source("cord_admin_list", &e))?;
+    let cords: Vec<Value> = rows.iter().map(to_cord_admin_json).collect();
+    Ok(json!({ "cords": cords }))
+}
+
+// -- Specs --------------------------------------------------------------------
+
+/// Cord's action specs, folded into the registry beside the spine's.
+#[must_use]
+pub fn cord_action_specs() -> Vec<ActionSpec> {
+    vec![
+        ActionSpec::with_side_effects(
+            "cord_create",
+            AuthSpec::authenticated_gated(CredentialGate::Any, INSTANCE_ADMIN_ROLES),
+            handler(|params, ctx| {
+                Box::pin(async move {
+                    let auth = require_actor(ctx.auth)?;
+                    let input: CordCreateInput = parse_strict_params(params)?;
+                    dispatch_db_ctx!(ctx, handle_cord_create(auth, &input))
+                })
+            }),
+        ),
+        ActionSpec::read_only(
+            "cord_list",
+            AuthSpec::authenticated(CredentialGate::Any),
+            handler(|params, ctx| {
+                Box::pin(async move {
+                    let auth = require_actor(ctx.auth)?;
+                    let _input: CordListInput = parse_strict_params(params)?;
+                    dispatch_db!(ctx, handle_cord_list(auth))
+                })
+            }),
+        ),
+        ActionSpec::read_only(
+            "cord_get",
+            AuthSpec::authenticated(CredentialGate::Any),
+            handler(|params, ctx| {
+                Box::pin(async move {
+                    let auth = require_actor(ctx.auth)?;
+                    let input: CordGetInput = parse_strict_params(params)?;
+                    dispatch_db!(ctx, handle_cord_get(auth, &input))
+                })
+            }),
+        ),
+        ActionSpec::with_side_effects(
+            "cord_update",
+            AuthSpec::authenticated(CredentialGate::Any),
+            handler(|params, ctx| {
+                Box::pin(async move {
+                    let auth = require_actor(ctx.auth)?;
+                    let input: CordUpdateInput = parse_strict_params(params)?;
+                    dispatch_db_ctx!(ctx, handle_cord_update(auth, &input))
+                })
+            }),
+        ),
+        ActionSpec::read_only(
+            "cord_admin_list",
+            AuthSpec::authenticated_gated(CredentialGate::Any, INSTANCE_ADMIN_ROLES),
+            handler(|params, ctx| {
+                Box::pin(async move {
+                    let auth = require_actor(ctx.auth)?;
+                    let _input: CordAdminListInput = parse_strict_params(params)?;
+                    dispatch_db!(ctx, handle_cord_admin_list(auth))
+                })
+            }),
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn specs_declare_their_auth_and_effects() {
+        let specs = cord_action_specs();
+        let find = |method: &str| {
+            specs
+                .iter()
+                .find(|s| s.method == method)
+                .unwrap_or_else(|| panic!("missing {method}"))
+        };
+        for method in ["cord_create", "cord_admin_list"] {
+            assert_eq!(
+                find(method).auth.roles,
+                Some(INSTANCE_ADMIN_ROLES),
+                "{method}"
+            );
+        }
+        for method in ["cord_list", "cord_get", "cord_update"] {
+            assert_eq!(find(method).auth.roles, None, "{method}");
+            assert!(find(method).auth.needs_actor(), "{method}");
+        }
+        for method in ["cord_create", "cord_update"] {
+            assert!(find(method).side_effects, "{method}");
+        }
+        for method in ["cord_list", "cord_get", "cord_admin_list"] {
+            assert!(!find(method).side_effects, "{method}");
+        }
+    }
+
+    #[test]
+    fn inputs_are_strict() {
+        let parsed: Result<CordCreateInput, _> =
+            parse_strict_params(json!({ "name": "x", "extra": 1 }));
+        assert!(parsed.is_err(), "unknown keys are refused");
+        let parsed: Result<CordGetInput, _> = parse_strict_params(json!({ "cord_id": null }));
+        assert!(parsed.is_err(), "null is refused");
+        let parsed: CordGetInput = parse_strict_params(json!({
+            "cord_id": "11111111-1111-4111-8111-111111111111",
+            "acting": "22222222-2222-4222-9222-222222222222",
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.cord_id,
+            Uuid::from_u128(0x1111_1111_1111_4111_8111_1111_1111_1111)
+        );
+        let _: CordListInput = parse_strict_params(Value::Null).unwrap();
+    }
+
+    #[test]
+    fn cord_json_carries_the_role_string() {
+        let cord = CordRow {
+            id: Uuid::nil(),
+            name: "the porch".to_owned(),
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        };
+        assert_eq!(
+            to_cord_json(&cord, CordRole::Admin),
+            json!({
+                "id": Uuid::nil(),
+                "name": "the porch",
+                "role": "cord_admin",
+                "created_at": "2026-01-01T00:00:00Z",
+            })
+        );
+    }
+}

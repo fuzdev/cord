@@ -14,6 +14,7 @@ path = "src/main.rs"
 # Spine crates.
 fuz_actions.workspace = true
 fuz_auth.workspace = true
+fuz_cell.workspace = true
 fuz_db.workspace = true
 fuz_http.workspace = true
 fuz_realtime.workspace = true
@@ -35,6 +36,9 @@ thiserror.workspace = true
 
 # DB.
 deadpool-postgres.workspace = true
+
+# Ids.
+uuid.workspace = true
 
 [dev-dependencies]
 # `ServiceExt::oneshot` for the in-process router tests.

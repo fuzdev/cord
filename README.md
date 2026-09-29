@@ -4,8 +4,9 @@
 > voice, video, and screenshare rooms, live chat, forums, and your Bluesky
 > feeds, in one instance you run yourself.
 
-**Status: early.** The design is settled and implementation is starting:
-the server skeleton runs, but none of the features described below work
+**Status: early.** The design is settled and implementation is underway:
+the server runs and an instance admin can create cords, but nothing
+happens inside a cord yet, so the features described below don't work
 yet.
 
 Think of the coiled telephone cord stretched from the kitchen wall into
@@ -52,10 +53,15 @@ database.
   logging in and out, invite-gated signup, claiming a fresh instance, your
   account and its sessions, and an admin area for minting signup invites
   and managing accounts and sessions
-- the server skeleton, `crates/cord_server` (the `cordd` binary): accounts
-  and sessions, invite-gated signup, first-account bootstrap, a JSON-RPC
-  endpoint, a WebSocket endpoint, and health and readiness checks, with no
-  Cord features on top yet
+- cords: the instance's admins create cords and become their owners; the
+  home page lists your cords (or, for an admin with none, offers to create
+  the first), each cord has a page with its name and your role, its owner
+  and admins can rename it, and the admin area lists every cord with its
+  member count. Joining a cord, its spaces, and everything inside come next
+- the server, `crates/cord_server` (the `cordd` binary): accounts and
+  sessions, invite-gated signup, first-account bootstrap, the cord
+  actions, a JSON-RPC endpoint, a WebSocket endpoint, and health and
+  readiness checks
 
 The live room comes first, since hanging out is the point; chat, forums, and
 Bluesky feeds layer on after it.
@@ -92,6 +98,10 @@ gro dev    # or `npm run dev`, the frontend dev server
 gro check  # typecheck, test, lint, format check
 gro build  # production build of the static frontend
 ```
+
+The build in `build/` is static files plus `spa.html`, which whatever
+serves them must fall back to for paths with no prerendered page (a cord's
+page, `/c/<id>`).
 
 ### The server
 
@@ -157,8 +167,8 @@ The server's routes:
 - `/api/account/{status,login,logout,password}`: sessions and the account
 - `POST /api/account/bootstrap`: first-account creation, token-gated
 - `POST /api/account/signup`: invite-gated signup
-- `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account and admin
-  actions
+- `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account, admin, and
+  cord actions
 - `/api/ws`: the WebSocket for realtime actions
 - `GET /api/admin/audit/stream`: the audit log as a live server-sent event
   stream, for admins signed in with a session
@@ -185,7 +195,7 @@ ones:
 createdb cord_test_rust
 npm run test:cross
 
-# the schema fixture and column guards
+# the schema fixture, column guards, and cord storage
 createdb cord_schema_ready_test
 cargo test -p cord_server -- --ignored
 ```

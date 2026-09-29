@@ -17,8 +17,10 @@ path = "src/main.rs"
 [dependencies]
 cord_server = { path = "../cord_server" }
 fuz_testing.workspace = true
+fuz_actions.workspace = true
 fuz_auth.workspace = true
 fuz_db.workspace = true
+fuz_http.workspace = true
 fuz_sys = { workspace = true, features = ["logging"] }
 tokio.workspace = true
 

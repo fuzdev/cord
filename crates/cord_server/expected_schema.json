@@ -62,6 +62,44 @@
     "bootstrapped",
     "id"
   ],
+  "cell": [
+    "created_at",
+    "created_by",
+    "data",
+    "deleted_at",
+    "id",
+    "kind",
+    "moderation",
+    "parent_id",
+    "path",
+    "refs",
+    "root_id",
+    "updated_at",
+    "updated_by",
+    "visibility"
+  ],
+  "cell_field": [
+    "created_at",
+    "name",
+    "source_id",
+    "target_id"
+  ],
+  "cell_grant": [
+    "actor_id",
+    "cell_id",
+    "created_at",
+    "granted_by",
+    "id",
+    "level",
+    "role",
+    "scope_id"
+  ],
+  "cell_item": [
+    "child_id",
+    "created_at",
+    "parent_id",
+    "position"
+  ],
   "invite": [
     "claimed_at",
     "claimed_by",

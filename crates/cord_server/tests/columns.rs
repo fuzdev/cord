@@ -3,8 +3,8 @@
 //! naming exactly its live columns or a reasoned exemption.
 //!
 //! cord owns no tables yet, so this composes only the spine chains' exported
-//! registries (the `fuz_db` tracker and `fuz_auth`). The day cord grows its
-//! own table, this fails until the table is registered.
+//! registries (the `fuz_db` tracker, `fuz_auth`, and `fuz_cell`). The day
+//! cord grows its own table, this fails until the table is registered.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and `CORD_SCHEMA_READY_TEST_URL` override):
@@ -17,6 +17,7 @@
 
 use cord_server::router::cord_migration_namespaces;
 use fuz_auth::AUTH_COLUMN_PROJECTIONS;
+use fuz_cell::CELL_COLUMN_PROJECTIONS;
 use fuz_db::{
     DB_COLUMN_PROJECTIONS, column_projection_mismatches_merged, create_pool, query_ready_columns,
     run_migrations,
@@ -47,7 +48,11 @@ async fn columns_match_live_schema() {
         .expect("query_ready_columns");
     let mismatches = column_projection_mismatches_merged(
         &live,
-        &[DB_COLUMN_PROJECTIONS, AUTH_COLUMN_PROJECTIONS],
+        &[
+            DB_COLUMN_PROJECTIONS,
+            AUTH_COLUMN_PROJECTIONS,
+            CELL_COLUMN_PROJECTIONS,
+        ],
     );
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

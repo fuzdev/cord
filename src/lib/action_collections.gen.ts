@@ -14,6 +14,8 @@ import { all_account_action_specs } from '@fuzdev/fuz_app/auth/account_action_sp
 import { all_admin_action_specs } from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import { all_role_grant_offer_action_specs } from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 
+import { all_cord_domain_action_specs } from './cord_action_specs.ts';
+
 /**
  * Generates `action_collections.ts`: the spec record, input/output types, and
  * event data types for every action in `all_cord_action_specs`.
@@ -59,6 +61,11 @@ export const gen: Gen = ({ origin_path }) => {
 				ns: 'role_grant_offer_specs',
 				module: '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts',
 				specs: all_role_grant_offer_action_specs
+			},
+			{
+				ns: 'cord_specs',
+				module: './cord_action_specs.ts',
+				specs: all_cord_domain_action_specs
 			}
 		],
 		imports

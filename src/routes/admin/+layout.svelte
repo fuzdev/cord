@@ -3,7 +3,6 @@
 	import { BROWSER } from 'esm-env';
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
-	import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 	import LoginForm from '@fuzdev/fuz_app/ui/LoginForm.svelte';
 	import BootstrapForm from '@fuzdev/fuz_app/ui/BootstrapForm.svelte';
 	import ColumnLayout from '@fuzdev/fuz_app/ui/ColumnLayout.svelte';
@@ -22,7 +21,8 @@
 	const auth_state = cord_auth_state_context.get();
 	const { api } = cord_rpc_context.get();
 
-	const is_admin = $derived(auth_state.roles.includes(ROLE_ADMIN));
+	// a global admin grant, the same rule the server's admin actions apply
+	const is_admin = $derived(auth_state.is_instance_admin);
 
 	// `check_session` can't tell a down server from a logged-out 401, so probe
 	// `/health` to show a hint instead of a login form that can't work
@@ -55,6 +55,7 @@
 				<MenuLink path="/admin/accounts" class="menuitem">accounts</MenuLink>
 				<MenuLink path="/admin/sessions" class="menuitem">sessions</MenuLink>
 				<MenuLink path="/admin/audit" class="menuitem">audit log</MenuLink>
+				<MenuLink path="/admin/cords" class="menuitem">cords</MenuLink>
 				<hr />
 				<MenuLink path="/account" class="menuitem">your account</MenuLink>
 				<MenuLink path="/" class="menuitem">home</MenuLink>

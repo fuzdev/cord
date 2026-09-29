@@ -6,6 +6,7 @@ import * as peer_ping_specs from '@fuzdev/fuz_app/actions/peer_ping.ts';
 import * as account_specs from '@fuzdev/fuz_app/auth/account_action_specs.ts';
 import * as admin_specs from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import * as role_grant_offer_specs from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
+import * as cord_specs from './cord_action_specs.ts';
 import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
 import { z } from 'zod';
 import type {
@@ -49,7 +50,12 @@ export const ActionSpecs = {
 	role_grant_offer_list: role_grant_offer_specs.role_grant_offer_list_action_spec,
 	role_grant_offer_history: role_grant_offer_specs.role_grant_offer_history_action_spec,
 	role_grant_revoke: role_grant_offer_specs.role_grant_revoke_action_spec,
-	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec
+	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec,
+	cord_create: cord_specs.cord_create_action_spec,
+	cord_list: cord_specs.cord_list_action_spec,
+	cord_get: cord_specs.cord_get_action_spec,
+	cord_update: cord_specs.cord_update_action_spec,
+	cord_admin_list: cord_specs.cord_admin_list_action_spec
 } as const;
 export interface ActionSpecs {
 	heartbeat: typeof heartbeat_specs.heartbeat_action_spec;
@@ -84,6 +90,11 @@ export interface ActionSpecs {
 	role_grant_offer_history: typeof role_grant_offer_specs.role_grant_offer_history_action_spec;
 	role_grant_revoke: typeof role_grant_offer_specs.role_grant_revoke_action_spec;
 	role_grant_assign: typeof role_grant_offer_specs.role_grant_assign_action_spec;
+	cord_create: typeof cord_specs.cord_create_action_spec;
+	cord_list: typeof cord_specs.cord_list_action_spec;
+	cord_get: typeof cord_specs.cord_get_action_spec;
+	cord_update: typeof cord_specs.cord_update_action_spec;
+	cord_admin_list: typeof cord_specs.cord_admin_list_action_spec;
 }
 
 export const action_specs: Array<ActionSpecUnion> = Object.values(ActionSpecs);
@@ -125,7 +136,12 @@ export const ActionInputs = {
 	role_grant_offer_list: role_grant_offer_specs.role_grant_offer_list_action_spec.input,
 	role_grant_offer_history: role_grant_offer_specs.role_grant_offer_history_action_spec.input,
 	role_grant_revoke: role_grant_offer_specs.role_grant_revoke_action_spec.input,
-	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec.input
+	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec.input,
+	cord_create: cord_specs.cord_create_action_spec.input,
+	cord_list: cord_specs.cord_list_action_spec.input,
+	cord_get: cord_specs.cord_get_action_spec.input,
+	cord_update: cord_specs.cord_update_action_spec.input,
+	cord_admin_list: cord_specs.cord_admin_list_action_spec.input
 } as const;
 export interface ActionInputs {
 	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.input>;
@@ -176,6 +192,11 @@ export interface ActionInputs {
 	>;
 	role_grant_revoke: z.infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.input>;
 	role_grant_assign: z.infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.input>;
+	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.input>;
+	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.input>;
+	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.input>;
+	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.input>;
+	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.input>;
 }
 
 /**
@@ -215,7 +236,12 @@ export const ActionOutputs = {
 	role_grant_offer_list: role_grant_offer_specs.role_grant_offer_list_action_spec.output,
 	role_grant_offer_history: role_grant_offer_specs.role_grant_offer_history_action_spec.output,
 	role_grant_revoke: role_grant_offer_specs.role_grant_revoke_action_spec.output,
-	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec.output
+	role_grant_assign: role_grant_offer_specs.role_grant_assign_action_spec.output,
+	cord_create: cord_specs.cord_create_action_spec.output,
+	cord_list: cord_specs.cord_list_action_spec.output,
+	cord_get: cord_specs.cord_get_action_spec.output,
+	cord_update: cord_specs.cord_update_action_spec.output,
+	cord_admin_list: cord_specs.cord_admin_list_action_spec.output
 } as const;
 export interface ActionOutputs {
 	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.output>;
@@ -266,6 +292,11 @@ export interface ActionOutputs {
 	>;
 	role_grant_revoke: z.infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.output>;
 	role_grant_assign: z.infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.output>;
+	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.output>;
+	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.output>;
+	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.output>;
+	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.output>;
+	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.output>;
 }
 
 /**
@@ -429,6 +460,31 @@ export interface ActionEventDatas {
 		'role_grant_assign',
 		ActionInputs['role_grant_assign'],
 		ActionOutputs['role_grant_assign']
+	>;
+	cord_create: ActionEventRequestResponseData<
+		'cord_create',
+		ActionInputs['cord_create'],
+		ActionOutputs['cord_create']
+	>;
+	cord_list: ActionEventRequestResponseData<
+		'cord_list',
+		ActionInputs['cord_list'],
+		ActionOutputs['cord_list']
+	>;
+	cord_get: ActionEventRequestResponseData<
+		'cord_get',
+		ActionInputs['cord_get'],
+		ActionOutputs['cord_get']
+	>;
+	cord_update: ActionEventRequestResponseData<
+		'cord_update',
+		ActionInputs['cord_update'],
+		ActionOutputs['cord_update']
+	>;
+	cord_admin_list: ActionEventRequestResponseData<
+		'cord_admin_list',
+		ActionInputs['cord_admin_list'],
+		ActionOutputs['cord_admin_list']
 	>;
 }
 
