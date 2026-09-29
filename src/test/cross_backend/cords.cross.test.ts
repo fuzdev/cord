@@ -15,7 +15,6 @@ import {
 	ERROR_ROLE_NOT_WEB_GRANTABLE
 } from '@fuzdev/fuz_app/http/error_schemas.ts';
 import {
-	ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED,
 	ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE,
 	RoleGrantOfferAcceptOutput,
 	RoleGrantOfferCreateOutput
@@ -43,6 +42,10 @@ import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
  * (`_testing_reset`); `create_account` signs members up through a
  * production invite.
  */
+
+/** The spine's refusal of a builtin role (`admin`, `keeper`) bound to a scope, on every grant path. */
+// TODO: import this from fuz_app once its TS surface exports the reason
+const ERROR_ROLE_GRANT_BUILTIN_SCOPED = 'role_grant_builtin_scoped';
 
 const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
 const setup_test = default_cross_process_setup(handle);
@@ -266,7 +269,12 @@ describe('reading cords', () => {
 			fixture.transport,
 			rpc_path,
 			'role_grant_assign',
-			{ to_account_id: member.account.id, role: CORD_MEMBER, scope_id: cord.id },
+			{
+				to_account_id: member.account.id,
+				role: CORD_MEMBER,
+				scope_kind: 'cord',
+				scope_id: cord.id
+			},
 			fixture.create_session_headers()
 		);
 		assert.ok(!assign.ok);
@@ -391,9 +399,10 @@ describe('scoped builtin roles', () => {
 			{ to_account_id: member.account.id, role: ROLE_ADMIN, scope_kind: 'cord', scope_id: cord.id },
 			fixture.create_session_headers()
 		);
+		// the spine refuses a scoped builtin before cord's own offer gate runs
 		assert.ok(!offer.ok);
-		assert.strictEqual(offer.error?.code, JSONRPC_ERROR_CODES.forbidden);
-		assert.strictEqual(error_reason(offer), ERROR_ROLE_GRANT_OFFER_NOT_AUTHORIZED);
+		assert.strictEqual(offer.error?.code, JSONRPC_ERROR_CODES.invalid_params);
+		assert.strictEqual(error_reason(offer), ERROR_ROLE_GRANT_BUILTIN_SCOPED);
 	});
 
 	test('an instance admin still offers admin globally', async () => {
@@ -417,8 +426,8 @@ describe('scoped builtin roles', () => {
 	});
 
 	test('no other path mints a scoped admin', async () => {
-		// `role_grant_assign` with a scope is the other candidate path; it must
-		// not leave a scoped admin grant behind, whatever it answers
+		// `role_grant_assign` with a scope is the other candidate path: the
+		// spine refuses a scoped builtin role there too, and writes nothing
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
@@ -426,10 +435,17 @@ describe('scoped builtin roles', () => {
 			fixture.transport,
 			rpc_path,
 			'role_grant_assign',
-			{ to_account_id: member.account.id, role: ROLE_ADMIN, scope_id: cord.id },
+			{
+				to_account_id: member.account.id,
+				role: ROLE_ADMIN,
+				scope_kind: 'cord',
+				scope_id: cord.id
+			},
 			fixture.create_session_headers()
 		);
 		assert.ok(!assign.ok, 'a scoped admin assign is refused');
+		assert.strictEqual(assign.error?.code, JSONRPC_ERROR_CODES.invalid_params);
+		assert.strictEqual(error_reason(assign), ERROR_ROLE_GRANT_BUILTIN_SCOPED);
 		const grants = await read_role_grants(fixture, member.create_session_headers());
 		assert.deepEqual(grants, [], 'no grant was written');
 

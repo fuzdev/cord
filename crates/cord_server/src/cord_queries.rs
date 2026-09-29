@@ -10,8 +10,8 @@
 //!
 //! The stamped grants make the spine agree with Cord on **viewing** only:
 //! `can_view_cell`, `cell_list`, and fact serving admit exactly the cord's
-//! members (plus any `admin` grant, which the spine checks without regard
-//! to scope; nothing cord mounts serves cells through those paths today).
+//! members, plus a global `admin` through the spine's admin bypass (nothing
+//! cord mounts serves cells through those paths today).
 //! They do **not** enable any spine edit path: `can_edit_cell` treats a
 //! `created_by = NULL` cell as admin-only and ignores its editor grants. So
 //! cord cells change only through Cord's own verbs, and later slices must not

@@ -346,8 +346,8 @@ fn build_action_registry(
         app.socket_revoker(),
         action_account_rate_limiter,
         action_ip_rate_limiter,
-        // a global admin offers, and never a scoped builtin role: the spine
-        // treats a scoped `admin` as a global one in places
+        // a global admin offers, and never a scoped builtin role; the spine
+        // refuses those too, so this is defense in depth
         Arc::new(crate::offer_authorize::CordOfferAuthorize),
         Arc::new(crate::roles::cord_role_registry()),
     ));

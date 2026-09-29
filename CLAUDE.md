@@ -92,32 +92,34 @@ recorded in the `cord_create` audit event instead.
   `cord_admin` and `cord_owner` editor, each scoped to the cord), one per
   role and never one per member. They make the spine agree with Cord on
   **viewing** only: `can_view_cell`, `cell_list`, and fact serving admit
-  the cord's members (and also any `admin` grant, scope ignored, though
-  nothing cord mounts serves cells through them). They enable **no** spine
-  edit path: `can_edit_cell` treats a `created_by = NULL` cell as
-  admin-only and ignores editor grants. Cord cells change only through
-  Cord's verbs; later slices must not rely on the spine's cell edit paths
-  for them.
+  the cord's members (and also a global `admin`, through the spine's admin
+  bypass, though nothing cord mounts serves cells through them). They
+  enable **no** spine edit path: `can_edit_cell` treats a
+  `created_by = NULL` cell as admin-only and ignores editor grants. Cord
+  cells change only through Cord's verbs; later slices must not rely on
+  the spine's cell edit paths for them.
 - **Authz rule: exact-scope role checks; never `has_role` for cord
   roles.** `RequestActorContext::has_role` ignores scope, so an owner of
   one cord would pass for every cord. `cord_authz.rs` holds the pure
   exact-scope predicates (`cord_role_in`, `is_cord_member`,
   `can_manage_cord`, `cord_memberships`) over the request's role-grant
   snapshot. Instance-admin checks use `has_scoped_role(ROLE_ADMIN, None)`
-  (a global grant), on top of the dispatcher's scope-blind role gate.
+  (a global grant); the dispatcher's spec-level role gate also admits only
+  a global grant.
 - **Instance admins and cords**: admins create cords and see the ops list,
   but get no implicit access; a cord they aren't in stays out of their
   normal UI.
-- **No scoped builtin roles.** The spine checks `admin` without regard to
-  scope in its dispatcher role gate and several handlers, so a scoped
-  `admin` would pass every spine admin action and could
-  `role_grant_assign` itself a global `admin`. `offer_authorize.rs`'s
-  `CordOfferAuthorize` (threaded into `build_auth_spec_set` in place of the
-  spine's `AdminOfferAuthorize`) keeps the global-admin requirement and
-  refuses any offer of `admin` or `keeper` that carries a scope. The spine
-  exposes no per-app hook on `role_grant_assign` or its admin actions;
-  a scoped `role_grant_assign` fails today (it writes a scope id without a
-  scope kind), and a cross-backend test pins that it leaves no grant.
+- **No scoped builtin roles.** A builtin role (`admin`, `keeper`) is
+  only ever granted globally. The spine enforces this on every grant path
+  (`role_grant_offer_create`, `role_grant_assign`,
+  `role_grant_offer_accept` refuse a scoped `admin` with
+  `role_grant_builtin_scoped`, and `keeper` is never grantable over the
+  web), and its admin gates and admin bypasses read only the global
+  grant. Cord keeps its own gate as defense in depth:
+  `offer_authorize.rs`'s `CordOfferAuthorize`, threaded into
+  `build_auth_spec_set` in place of the spine's `AdminOfferAuthorize`,
+  requires a global-admin caller and refuses any offer of a builtin role
+  that carries a scope. Cross-backend tests pin the spine's refusals.
 
 The verbs (`cord_actions.rs`, domain actions over `cord_queries.rs`; the
 generic `fuz_cell_actions` verb set is not mounted):

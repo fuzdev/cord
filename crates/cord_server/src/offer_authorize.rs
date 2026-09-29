@@ -1,13 +1,21 @@
 //! [`CordOfferAuthorize`], cord's gate on `role_grant_offer_create`.
 //!
-//! The spine's default gate ([`fuz_auth::AdminOfferAuthorize`]) admits any
-//! offer from a global admin, whatever its scope. An offer of the builtin
-//! `admin` role with a scope would mint a *scoped* admin, and the spine
-//! treats that as more than it is: its dispatcher role gate and several
-//! handlers check `admin` without regard to scope, so a scoped admin passes
-//! every spine admin action, and can `role_grant_assign` itself a global
-//! `admin`. Cord has no use for a scoped builtin role, so it refuses them at
-//! the only path that can create one.
+//! Cord's rule: only an instance admin (a global `admin` grant) offers a
+//! role, and a builtin role (`admin`, `keeper`) is only ever offered
+//! globally. A scoped builtin grant would be a misleading row at best, and
+//! at worst a path to authority the scope was meant to limit.
+//!
+//! The spine enforces the same rule itself, on every grant path
+//! (`role_grant_offer_create`, `role_grant_assign`,
+//! `role_grant_offer_accept`) and before this gate runs: a scoped `admin`
+//! is refused with `role_grant_builtin_scoped`, and `keeper` is never
+//! grantable over the web at all. Its default gate
+//! ([`fuz_auth::AdminOfferAuthorize`]) already requires a global admin,
+//! and its admin gates read only global grants. So this gate is defense in
+//! depth: it's cheap, it states cord's rule in cord's own code, and it
+//! keeps holding if a later spine loosens its checks or a cord role gains
+//! an admin grant path (which would bring its offers through
+//! `role_grant_offer_create` and this gate).
 
 use std::future::Future;
 use std::pin::Pin;

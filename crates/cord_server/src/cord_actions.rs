@@ -14,8 +14,9 @@
 //! Every cord-role check goes through [`crate::cord_authz`], which matches
 //! grant scope exactly. A caller who isn't in a cord gets the same
 //! `cord_not_found` as for a cord that doesn't exist, so cord ids can't be
-//! probed. The instance-admin checks require a global (unscoped) `admin`
-//! grant, on top of the dispatcher's scope-blind role gate.
+//! probed. The instance-admin actions require a global (unscoped) `admin`
+//! grant: the dispatcher's role gate admits only a global grant, and the
+//! handlers check it again with `has_scoped_role(ROLE_ADMIN, None)`.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -52,7 +53,7 @@ pub const ERROR_CORD_UPDATE_FORBIDDEN: &str = "cord_update_forbidden";
 pub const ERROR_CORD_NAME_INVALID: &str = "cord_name_invalid";
 
 /// The instance-admin role gate the admin-only specs declare. The dispatcher
-/// checks it scope-blind; the handlers then require the grant be global.
+/// admits only a global grant of it, and the handlers check that again.
 const INSTANCE_ADMIN_ROLES: &[&str] = &[ROLE_ADMIN];
 
 // -- Wire inputs --------------------------------------------------------------

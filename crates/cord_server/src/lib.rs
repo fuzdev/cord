@@ -17,8 +17,8 @@
 //! Cords are cells: [`cord_queries`] reads and writes them over the spine's
 //! `fuz_cell` tables, [`roles`] declares the cord-scoped membership roles,
 //! [`cord_authz`] checks them with exact scope, and [`cord_actions`] exposes
-//! the `cord_*` verbs. [`offer_authorize`] keeps the spine's role-grant
-//! offers from minting a scoped builtin role.
+//! the `cord_*` verbs. [`offer_authorize`] restates, as defense in depth,
+//! the spine's refusal to offer a scoped builtin role.
 
 pub mod app;
 pub mod cord_actions;
