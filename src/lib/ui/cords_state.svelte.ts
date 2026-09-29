@@ -56,14 +56,15 @@ export class CordsState {
 	}
 
 	/**
-	 * Create a cord, then reload the list.
+	 * Create a cord and add it to the end of the list, where the newest
+	 * membership goes.
 	 *
 	 * @returns the new cord, or `undefined` when creation failed (the error is on `create`)
 	 */
 	async create_cord(name: string): Promise<CordJson | undefined> {
 		const result = await this.create.run(() => this.#api.cord_create({ name }));
 		if (result === undefined) return undefined;
-		await this.fetch();
+		this.cords = [...this.cords, result.cord];
 		return result.cord;
 	}
 }

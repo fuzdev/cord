@@ -6,7 +6,7 @@
 //! username ([`query_cord_invite_redeem`]), which reserves it as a spine
 //! username invite created in the minter's name, then sign up through the
 //! spine's stock invite-gated signup, which claims that invite, then accept
-//! the link signed in ([`crate::cord_invite_queries::query_cord_invite_accept`]).
+//! the link signed in ([`crate::invite::queries::query_cord_invite_accept`]).
 //! The redemption row ties the three together: the link, the signup invite,
 //! and, once they accept, the actor who joined.
 //!
@@ -14,7 +14,7 @@
 //! with the reserved username claims it. Revoking the link deletes the
 //! reservations still waiting on their signup
 //! ([`query_cord_invite_redemption_release`]), and so does the expiry sweep
-//! ([`crate::cord_invite_sweep`]) once the link has been expired for longer
+//! ([`crate::invite::sweep`]) once the link has been expired for longer
 //! than the accept grace
 //! ([`query_cord_invite_expired_with_waiting_redemptions`]).
 //!
@@ -47,11 +47,13 @@ use fuz_db::tokio_postgres::Row;
 use fuz_db::{col, is_pg_unique_violation, iso8601_timestamp_expr, qualify_columns};
 use uuid::Uuid;
 
-use crate::cord_invite_queries::{
-    CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, CordInviteRow, CordInviteStatus,
-    query_cord_invite_expired_beyond, query_cord_invite_lock_by_token_hash,
-};
+use crate::cord_member_queries::live_role_grant_sql;
 use crate::cord_queries::{CordRow, query_cord_get};
+use crate::invite::queries::{
+    CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, CordInviteError, CordInviteRow, CordInviteStatus,
+    query_cord_invite_expired_beyond, query_cord_invite_lock_by_token_hash,
+    query_cord_invite_spend_use,
+};
 
 /// The `cord_invite_redemption` table's columns, in projection order. The
 /// PG-gated `columns` test checks they name every live column.
@@ -111,19 +113,14 @@ fn decode_redemption(row: &Row) -> CordInviteRedemptionRow {
     }
 }
 
-/// Selects a row when the actor `$1` holds an active global `$2` (`admin`)
-/// grant on a live actor of a live account; the lock clause goes after it.
-const SQL_GLOBAL_ADMIN_GRANT: &str = "SELECT 1 FROM role_grant rg
-     JOIN actor ac ON ac.id = rg.actor_id
-     JOIN account a ON a.id = ac.account_id
-     WHERE rg.actor_id = $1
-       AND rg.role = $2
-       AND rg.scope_id IS NULL
-       AND rg.revoked_at IS NULL
-       AND (rg.expires_at IS NULL OR rg.expires_at > NOW())
-       AND ac.deleted_at IS NULL
-       AND a.deleted_at IS NULL
-     LIMIT 1";
+/// Selects a row when the actor `$1` holds a live global `$2` (`admin`)
+/// grant ([`live_role_grant_sql`]); `lock` is the locking clause, if any.
+fn global_admin_grant_sql(lock: &str) -> String {
+    live_role_grant_sql(
+        "1",
+        &format!("rg.actor_id = $1 AND rg.role = $2 AND rg.scope_id IS NULL LIMIT 1 {lock}"),
+    )
+}
 
 /// Whether the actor `actor_id` holds an active **global** `admin` grant, on
 /// a live actor of a live account: the authority a newcomer link needs,
@@ -144,7 +141,7 @@ pub async fn query_actor_holds_global_admin<C: GenericClient + ?Sized>(
 ) -> Result<bool, CellError> {
     Ok(client
         .query_opt(
-            &format!("{SQL_GLOBAL_ADMIN_GRANT} FOR SHARE OF rg"),
+            &global_admin_grant_sql("FOR SHARE OF rg"),
             &[&actor_id, &ROLE_ADMIN],
         )
         .await?
@@ -162,39 +159,9 @@ pub async fn query_actor_holds_global_admin_unlocked<C: GenericClient + ?Sized>(
     actor_id: Uuid,
 ) -> Result<bool, CellError> {
     Ok(client
-        .query_opt(SQL_GLOBAL_ADMIN_GRANT, &[&actor_id, &ROLE_ADMIN])
+        .query_opt(&global_admin_grant_sql(""), &[&actor_id, &ROLE_ADMIN])
         .await?
         .is_some())
-}
-
-/// Why redeeming a link failed.
-#[derive(Debug, thiserror::Error)]
-pub enum CordInviteRedeemError {
-    /// No link has that token, or its cord is gone.
-    #[error("no such invite link")]
-    NotFound,
-    /// The link was revoked.
-    #[error("the invite link was revoked")]
-    Revoked,
-    /// The link has expired.
-    #[error("the invite link has expired")]
-    Expired,
-    /// The link has been used as many times as it allows.
-    #[error("the invite link has no uses left")]
-    Exhausted,
-    /// The link is for people who already have an account.
-    #[error("the invite link doesn't admit newcomers")]
-    NotForNewcomers,
-    /// The link's minter is gone or no longer an instance admin, so it
-    /// brings no one new onto the instance.
-    #[error("the invite link no longer admits newcomers")]
-    NewcomersClosed,
-    /// An account has the username, or an unclaimed invite reserves it.
-    #[error("the username is taken or reserved")]
-    UsernameUnavailable,
-    /// A driver or decode failure.
-    #[error(transparent)]
-    Db(#[from] CellError),
 }
 
 /// A successful redemption.
@@ -236,26 +203,26 @@ pub struct CordInviteRedeemed {
 ///
 /// # Errors
 ///
-/// [`CordInviteRedeemError`] naming why the link can't be redeemed for the
+/// [`CordInviteError`] naming why the link can't be redeemed for the
 /// username, or a driver failure.
 pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     client: &C,
     token_hash: &str,
     username: &str,
-) -> Result<CordInviteRedeemed, CordInviteRedeemError> {
+) -> Result<CordInviteRedeemed, CordInviteError> {
     let Some(invite) = query_cord_invite_lock_by_token_hash(client, token_hash).await? else {
-        return Err(CordInviteRedeemError::NotFound);
+        return Err(CordInviteError::NotFound);
     };
     // no cord lock: a redemption changes no membership
     let Some(cord) = query_cord_get(client, invite.cord_id).await? else {
-        return Err(CordInviteRedeemError::NotFound);
+        return Err(CordInviteError::NotFound);
     };
     let status = invite.status();
     if status == CordInviteStatus::Revoked {
-        return Err(CordInviteRedeemError::Revoked);
+        return Err(CordInviteError::Revoked);
     }
     if !invite.admits_newcomers {
-        return Err(CordInviteRedeemError::NotForNewcomers);
+        return Err(CordInviteError::NotForNewcomers);
     }
     if status == CordInviteStatus::Expired
         && query_cord_invite_expired_beyond(
@@ -265,7 +232,7 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
         )
         .await?
     {
-        return Err(CordInviteRedeemError::Expired);
+        return Err(CordInviteError::Expired);
     }
     // a waiting reservation is answered wherever accept would still honor it
     if let Some(redemption) = query_waiting_redemption(client, invite.id, username).await? {
@@ -278,11 +245,11 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     }
     // a new reservation needs a live link and a minter who is still an admin
     if status == CordInviteStatus::Expired {
-        return Err(CordInviteRedeemError::Expired);
+        return Err(CordInviteError::Expired);
     }
     let minted_by = require_admin_minter(client, &invite).await?;
     if status == CordInviteStatus::Exhausted {
-        return Err(CordInviteRedeemError::Exhausted);
+        return Err(CordInviteError::Exhausted);
     }
     if query_account_by_username(client, username)
         .await
@@ -290,14 +257,14 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
         .is_some()
         || query_username_reserved(client, username).await?
     {
-        return Err(CordInviteRedeemError::UsernameUnavailable);
+        return Err(CordInviteError::UsernameUnavailable);
     }
     let signup_invite =
         match query_create_invite(client, None, Some(username), Some(&minted_by)).await {
             Ok(signup_invite) => signup_invite,
             // a concurrent reservation of the same username committed first
             Err(e) if is_pg_unique_violation(&e) => {
-                return Err(CordInviteRedeemError::UsernameUnavailable);
+                return Err(CordInviteError::UsernameUnavailable);
             }
             Err(e) => return Err(CellError::Db(e).into()),
         };
@@ -313,13 +280,7 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
             .await
             .map_err(CellError::Db)?,
     );
-    client
-        .execute(
-            "UPDATE cord_invite SET use_count = use_count + 1 WHERE id = $1",
-            &[&invite.id],
-        )
-        .await
-        .map_err(CellError::Db)?;
+    query_cord_invite_spend_use(client, invite.id).await?;
     Ok(CordInviteRedeemed {
         cord,
         invite_id: invite.id,
@@ -333,12 +294,12 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
 async fn require_admin_minter<C: GenericClient + ?Sized>(
     client: &C,
     invite: &CordInviteRow,
-) -> Result<Uuid, CordInviteRedeemError> {
+) -> Result<Uuid, CordInviteError> {
     let Some(minted_by) = invite.created_by else {
-        return Err(CordInviteRedeemError::NewcomersClosed);
+        return Err(CordInviteError::NewcomersClosed);
     };
     if !query_actor_holds_global_admin(client, minted_by).await? {
-        return Err(CordInviteRedeemError::NewcomersClosed);
+        return Err(CordInviteError::NewcomersClosed);
     }
     Ok(minted_by)
 }

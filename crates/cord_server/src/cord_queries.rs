@@ -25,7 +25,6 @@
 use std::collections::HashMap;
 
 use deadpool_postgres::GenericClient;
-use fuz_auth::query_create_role_grant;
 use fuz_cell::cell_grant_queries::query_cell_grant_create;
 use fuz_cell::cell_grant_schema::{CellGrantLevel, CellGrantPrincipalInput};
 use fuz_cell::cell_queries::{
@@ -37,6 +36,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::cord_authz::CordRole;
+use crate::cord_member_queries::{live_cord_grant_sql, query_cord_role_grant_create};
 use crate::roles::{CORD_ADMIN, CORD_MEMBER, CORD_OWNER, CORD_ROLES, CORD_SCOPE_KIND};
 
 /// The `cell.kind` of a cord.
@@ -86,7 +87,7 @@ pub enum CordNameError {
 ///
 /// - the join characters U+200C (ZWNJ) and U+200D (ZWJ), which Persian
 ///   spelling, Indic conjuncts, and joined emoji need, allowed under the
-///   placement rule ([`has_stray_cord_name_joiner`])
+///   placement rule (`has_stray_cord_name_joiner`)
 /// - the variation selectors U+FE00–FE0F, which emoji need
 ///
 /// The tag characters stay refused, at the cost of the three subdivision
@@ -128,13 +129,13 @@ pub const CORD_NAME_FORBIDDEN_CHAR_RANGES: [(char, char); 27] = [
 
 /// The two join characters: U+200C (zero-width non-joiner) and U+200D
 /// (zero-width joiner).
-pub const CORD_NAME_JOIN_CHARS: [char; 2] = ['\u{200C}', '\u{200D}'];
+pub(crate) const CORD_NAME_JOIN_CHARS: [char; 2] = ['\u{200C}', '\u{200D}'];
 
 /// Whether `c` may never appear in a cord name: a control character (Cc,
 /// which covers `\n`, `\t`, and U+0085) or one of
 /// [`CORD_NAME_FORBIDDEN_CHAR_RANGES`].
 #[must_use]
-pub fn is_forbidden_cord_name_char(c: char) -> bool {
+pub(crate) fn is_forbidden_cord_name_char(c: char) -> bool {
     c.is_control()
         || CORD_NAME_FORBIDDEN_CHAR_RANGES
             .iter()
@@ -148,7 +149,7 @@ pub fn is_forbidden_cord_name_char(c: char) -> bool {
 /// `\s` differs from it only on U+FEFF and U+0085, both refused before this
 /// runs.
 #[must_use]
-pub fn has_stray_cord_name_joiner(chars: &[char]) -> bool {
+pub(crate) fn has_stray_cord_name_joiner(chars: &[char]) -> bool {
     let is_join = |c: char| CORD_NAME_JOIN_CHARS.contains(&c);
     let pads = |c: Option<&char>| c.is_none_or(|&c| c.is_whitespace() || is_join(c));
     chars.iter().enumerate().any(|(i, &c)| {
@@ -158,10 +159,10 @@ pub fn has_stray_cord_name_joiner(chars: &[char]) -> bool {
 
 /// Validate and normalize a cord name, in this order:
 ///
-/// 1. no forbidden character anywhere ([`is_forbidden_cord_name_char`])
+/// 1. no forbidden character anywhere (`is_forbidden_cord_name_char`)
 /// 2. trimmed, then non-empty
 /// 3. no join character at either end or beside whitespace or another join
-///    character ([`has_stray_cord_name_joiner`])
+///    character (`has_stray_cord_name_joiner`)
 /// 4. at most [`CORD_NAME_LENGTH_MAX`] characters (code points)
 ///
 /// The forbidden-character check runs on the untrimmed input so the TS twin
@@ -266,14 +267,12 @@ pub async fn query_cord_create<C: GenericClient + ?Sized>(
         None,
     )
     .await?;
-    let owner_grant = query_create_role_grant(
+    let owner_role_grant_id = query_cord_role_grant_create(
         client,
-        &owner_actor_id,
-        CORD_OWNER,
-        Some(CORD_SCOPE_KIND),
-        Some(&cell.id),
-        Some(&owner_actor_id),
-        None,
+        cell.id,
+        owner_actor_id,
+        CordRole::Owner,
+        Some(owner_actor_id),
     )
     .await?;
     for (role, level) in CORD_STAMPED_GRANTS {
@@ -293,7 +292,7 @@ pub async fn query_cord_create<C: GenericClient + ?Sized>(
         .ok_or_else(|| CellError::Decode("a created cord cell didn't read back".to_owned()))?;
     Ok(CordCreated {
         cord,
-        owner_role_grant_id: owner_grant.id,
+        owner_role_grant_id,
     })
 }
 
@@ -385,35 +384,28 @@ pub async fn query_cord_admin_list<C: GenericClient + ?Sized>(
         .collect())
 }
 
-/// How many distinct actors hold an active cord role in each of `cord_ids`.
+/// How many distinct actors hold a live cord role in each of `cord_ids`.
 ///
-/// Counts only live actors on live accounts: soft-deleted ones keep their
-/// grants but aren't members anyone sees. Cords with no members are absent
-/// from the map.
+/// Counts only the grants that make members ([`live_cord_grant_sql`]):
+/// soft-deleted actors and accounts keep their grants but aren't members
+/// anyone sees. Cords with no members are absent from the map.
 ///
 /// # Errors
 ///
 /// [`CellError::Db`] on a driver failure.
-pub async fn query_cord_member_counts<C: GenericClient + ?Sized>(
+pub(crate) async fn query_cord_member_counts<C: GenericClient + ?Sized>(
     client: &C,
     cord_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, i64>, CellError> {
     if cord_ids.is_empty() {
         return Ok(HashMap::new());
     }
+    let sql = live_cord_grant_sql(
+        "rg.scope_id, COUNT(DISTINCT rg.actor_id)",
+        "rg.scope_id = ANY($3::uuid[]) GROUP BY rg.scope_id",
+    );
     let rows = client
-        .query(
-            "SELECT rg.scope_id, COUNT(DISTINCT rg.actor_id) FROM role_grant rg
-             JOIN actor ac ON ac.id = rg.actor_id AND ac.deleted_at IS NULL
-             JOIN account a ON a.id = ac.account_id AND a.deleted_at IS NULL
-             WHERE rg.scope_kind = $1
-               AND rg.scope_id = ANY($2::uuid[])
-               AND rg.role = ANY($3::text[])
-               AND rg.revoked_at IS NULL
-               AND (rg.expires_at IS NULL OR rg.expires_at > NOW())
-             GROUP BY rg.scope_id",
-            &[&CORD_SCOPE_KIND, &cord_ids, &CORD_ROLES.as_slice()],
-        )
+        .query(&sql, &[&CORD_SCOPE_KIND, &CORD_ROLES.as_slice(), &cord_ids])
         .await?;
     Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
 }

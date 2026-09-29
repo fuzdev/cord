@@ -1,12 +1,6 @@
-import { assert, describe, inject, test } from 'vitest';
-import {
-	default_cross_process_setup,
-	reconstruct_bootstrapped_handle,
-	type TestAccountFixture
-} from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
+import { assert, describe, test } from 'vitest';
 import {
 	cross_rpc_call,
-	error_reason,
 	expect_output
 } from '@fuzdev/fuz_app/testing/cross_backend/cell_cross_helpers.ts';
 import { DEFAULT_TEST_PASSWORD } from '@fuzdev/fuz_app/testing/test_credentials.ts';
@@ -15,17 +9,25 @@ import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import {
 	AdminAccountListOutput,
 	AppSettingsUpdateOutput,
-	AuditLogListOutput,
 	InviteListOutput
 } from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import { RoleGrantRevokeOutput } from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 import { ERROR_NO_MATCHING_INVITE } from '@fuzdev/fuz_app/http/error_schemas.ts';
 
-import './cross_test_types.ts';
+import {
+	assert_refused,
+	audit_events,
+	call,
+	create_cord,
+	json_post,
+	mint,
+	rpc_path,
+	setup_test,
+	type Fixture
+} from './cord_cross_helpers.ts';
 import {
 	CordCreateOutput,
 	CordInviteAcceptOutput,
-	CordInviteCreateOutput,
 	CordInviteListOutput,
 	CordInvitePreviewOutput,
 	CordInviteRedeemOutput,
@@ -57,28 +59,6 @@ import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
  * keeper (an instance admin) and no cords (`_testing_reset`).
  */
 
-const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
-const setup_test = default_cross_process_setup(handle);
-const { rpc_path } = handle.config;
-
-type Fixture = Awaited<ReturnType<typeof setup_test>>;
-type Caller = Fixture | TestAccountFixture;
-
-/** Call `method` as `caller` on a clean cookie jar. */
-const call = (
-	fixture: Fixture,
-	caller: Caller,
-	method: string,
-	params: unknown
-): ReturnType<typeof cross_rpc_call> =>
-	cross_rpc_call(
-		fixture.fresh_transport(),
-		rpc_path,
-		method,
-		params,
-		caller.create_session_headers()
-	);
-
 /** Call `method` with no credential at all. */
 const call_anonymous = (
 	fixture: Fixture,
@@ -86,39 +66,6 @@ const call_anonymous = (
 	params: unknown
 ): ReturnType<typeof cross_rpc_call> =>
 	cross_rpc_call(fixture.fresh_transport(), rpc_path, method, params, {});
-
-/** Assert a call failed with `reason` (and `code`, when given). */
-const assert_refused = (
-	res: Awaited<ReturnType<typeof cross_rpc_call>>,
-	reason: string,
-	code?: number
-): void => {
-	assert.ok(!res.ok, `expected ${reason}, got ${JSON.stringify(res.result)}`);
-	assert.strictEqual(error_reason(res), reason);
-	if (code !== undefined) assert.strictEqual(res.error?.code, code);
-};
-
-const json_post = (body: unknown): RequestInit => ({
-	method: 'POST',
-	headers: { 'content-type': 'application/json' },
-	body: JSON.stringify(body)
-});
-
-/** Create a cord as the keeper, who owns it. */
-const create_cord = async (fixture: Fixture, name = 'the porch') =>
-	expect_output(await call(fixture, fixture, 'cord_create', { name }), CordCreateOutput).cord;
-
-/** Mint a link on `cord_id` as `caller`. */
-const mint = async (
-	fixture: Fixture,
-	caller: Caller,
-	cord_id: string,
-	options: { expires_in_seconds?: number; max_uses?: number; admits_newcomers?: boolean } = {}
-) =>
-	expect_output(
-		await call(fixture, caller, 'cord_invite_create', { cord_id, ...options }),
-		CordInviteCreateOutput
-	);
 
 /** Mint a newcomer link as the keeper. */
 const mint_newcomer = (fixture: Fixture, cord_id: string, max_uses = 3) =>
@@ -165,13 +112,6 @@ const preview_anonymous = async (fixture: Fixture, token: string) =>
 		await call_anonymous(fixture, 'cord_invite_preview', { token }),
 		CordInvitePreviewOutput
 	);
-
-/** Audit events of `event_type`, oldest first, read by the keeper. */
-const audit_events = async (fixture: Fixture, event_type: string) =>
-	expect_output(
-		await call(fixture, fixture, 'audit_log_list', { event_type }),
-		AuditLogListOutput
-	).events.reverse();
 
 describe('the newcomer path', () => {
 	test('preview, redeem, sign up, log in, accept', async () => {

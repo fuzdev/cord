@@ -2,9 +2,11 @@
 //! members, and changing them (role set, remove, leave) in one transaction
 //! each.
 //!
-//! A member is an actor holding an active cord-scoped role grant on the cord
-//! ([`crate::roles`]), on a live actor and a live account; soft-deleted ones
-//! keep their grants but aren't members anyone sees or can target.
+//! A member is an actor holding a live cord-scoped role grant on the cord
+//! ([`crate::roles`]): not revoked, not expired, on a live actor and a live
+//! account. Soft-deleted ones keep their grants but aren't members anyone
+//! sees or can target. `live_role_grant_sql` is that rule in SQL, and every
+//! read of who holds a role goes through it.
 //!
 //! Every change starts by locking the cord's cell row ([`query_cord_lock`]),
 //! then reads the membership afresh and applies the rules in
@@ -12,7 +14,7 @@
 //! snapshot. Membership changes on one cord therefore run one at a time, so
 //! two owners stepping down together can't both pass the last-owner check,
 //! and a caller whose demotion committed first can't act on the power they
-//! lost. Invite accepts take the same lock ([`crate::cord_invite_queries`]).
+//! lost. Invite accepts take the same lock ([`crate::invite::queries`]).
 //!
 //! The other managing verbs (renaming the cord, minting and revoking its
 //! links) take no lock: they read the caller's role afresh with a plain
@@ -21,11 +23,11 @@
 //! after it, as if the verb had finished first.
 //!
 //! Changes go through the spine's role-grant queries
-//! (`query_create_role_grant`, `query_revoke_role_grant`), keeping one role
-//! per (actor, cord): a role change revokes every cord-role grant the member
-//! holds on the cord, then creates the new one. The spine's own grant paths
-//! can't touch cord roles ([`crate::roles`]), so this lock covers every
-//! writer.
+//! (`query_create_role_grant`, through `query_cord_role_grant_create`, and
+//! `query_revoke_role_grant`), keeping one role per (actor, cord): a role
+//! change revokes every cord-role grant the member holds on the cord, then
+//! creates the new one. The spine's own grant paths can't touch cord roles
+//! ([`crate::roles`]), so this lock covers every writer.
 //!
 //! Call the change functions inside a transaction; the lock is held until it
 //! ends.
@@ -34,10 +36,11 @@ use deadpool_postgres::GenericClient;
 use fuz_auth::query_create_role_grant;
 use fuz_auth::role_grant_offer_queries::query_revoke_role_grant;
 use fuz_cell::CellError;
+use fuz_db::iso8601_timestamp_column;
 use uuid::Uuid;
 
 use crate::cord_authz::{CordRole, leaves_no_owner};
-use crate::cord_queries::CORD_CELL_KIND;
+use crate::cord_queries::{CORD_CELL_KIND, CordData, CordRow};
 use crate::roles::{CORD_ROLES, CORD_SCOPE_KIND};
 
 /// The revoke reason `query_cord_member_role_set` records on the old grant.
@@ -47,9 +50,75 @@ pub const CORD_REVOKE_REASON_REMOVE: &str = "cord_member_remove";
 /// The revoke reason `query_cord_leave` records.
 pub const CORD_REVOKE_REASON_LEAVE: &str = "cord_leave";
 
-/// One active cord-role grant on a live actor, as read from the database.
+/// A `SELECT {select}` over the **live** role grants matching `conditions`:
+/// not revoked, not expired, and held by a live (not soft-deleted) actor of a
+/// live account.
+///
+/// This is the one definition of a grant that counts: the membership reads
+/// here, the admin list's member counts ([`crate::cord_queries`]), and the
+/// newcomer links' global-`admin` check
+/// ([`crate::invite::redemption_queries`]) all read through it, so a
+/// soft-deleted account's grants never make a member, an owner, or a minter.
+/// The grant is aliased `rg`, its actor `ac`, and its account `a`.
+/// `conditions` continues the `WHERE` (it's joined with `AND`) and may end
+/// with `GROUP BY`, `ORDER BY`, `LIMIT`, or a locking clause.
+pub(crate) fn live_role_grant_sql(select: &str, conditions: &str) -> String {
+    format!(
+        "SELECT {select}
+         FROM role_grant rg
+         JOIN actor ac ON ac.id = rg.actor_id AND ac.deleted_at IS NULL
+         JOIN account a ON a.id = ac.account_id AND a.deleted_at IS NULL
+         WHERE rg.revoked_at IS NULL
+           AND (rg.expires_at IS NULL OR rg.expires_at > NOW())
+           AND {conditions}"
+    )
+}
+
+/// [`live_role_grant_sql`] narrowed to the cord roles: `rg.scope_kind` is
+/// `$1` and `rg.role` is one of `$2`, which the caller binds to
+/// [`CORD_SCOPE_KIND`] and [`CORD_ROLES`], numbering its own parameters from
+/// `$3`.
+pub(crate) fn live_cord_grant_sql(select: &str, conditions: &str) -> String {
+    live_role_grant_sql(
+        select,
+        &format!("rg.scope_kind = $1 AND rg.role = ANY($2::text[]) AND {conditions}"),
+    )
+}
+
+/// Grant `role` on the cord `cord_id` to the actor `actor_id`, recorded as
+/// granted by `granted_by`, returning the grant's id.
+///
+/// The one way Cord's verbs confer a cord role: a cord-scoped grant through
+/// the spine's `query_create_role_grant`, with no expiry. The caller keeps
+/// the one-role-per-(actor, cord) rule.
+///
+/// # Errors
+///
+/// [`CellError::Db`] on a driver failure, including the spine's unique index
+/// refusing a second grant of the same role.
+pub(crate) async fn query_cord_role_grant_create<C: GenericClient + ?Sized>(
+    client: &C,
+    cord_id: Uuid,
+    actor_id: Uuid,
+    role: CordRole,
+    granted_by: Option<Uuid>,
+) -> Result<Uuid, CellError> {
+    Ok(query_create_role_grant(
+        client,
+        &actor_id,
+        role.as_str(),
+        Some(CORD_SCOPE_KIND),
+        Some(&cord_id),
+        granted_by.as_ref(),
+        None,
+    )
+    .await?
+    .id)
+}
+
+/// One live cord-role grant, as read from the database.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CordMemberGrant {
+pub(crate) struct CordMemberGrant {
     pub role_grant_id: Uuid,
     pub actor_id: Uuid,
     pub role: CordRole,
@@ -78,7 +147,7 @@ pub struct CordMember {
 /// Fold grant rows into members, one per actor with their highest role,
 /// ordered by role (owners first), then username, then actor id.
 #[must_use]
-pub fn fold_cord_members(grants: Vec<CordMemberGrant>) -> Vec<CordMember> {
+pub(crate) fn fold_cord_members(grants: Vec<CordMemberGrant>) -> Vec<CordMember> {
     let mut members: Vec<CordMember> = Vec::new();
     for grant in grants {
         if let Some(member) = members.iter_mut().find(|m| m.actor_id == grant.actor_id) {
@@ -107,12 +176,14 @@ pub fn fold_cord_members(grants: Vec<CordMemberGrant>) -> Vec<CordMember> {
 
 /// How many members of `members` are owners.
 #[must_use]
-pub fn cord_owner_count(members: &[CordMember]) -> usize {
+pub(crate) fn cord_owner_count(members: &[CordMember]) -> usize {
     members.iter().filter(|m| m.role == CordRole::Owner).count()
 }
 
-/// Lock the cord's cell row until the transaction ends. Returns `false`
-/// when no active cord has that id.
+/// Lock the cord's cell row until the transaction ends, returning the cord.
+///
+/// `None` when no active cord has that id, or when its cell doesn't read as
+/// a cord, as [`CordRow::from_cell`] decides everywhere else.
 ///
 /// `FOR NO KEY UPDATE` serializes the cord's membership changes against
 /// each other while still letting rows that reference the cell (a new
@@ -131,42 +202,42 @@ pub fn cord_owner_count(members: &[CordMember]) -> usize {
 pub async fn query_cord_lock<C: GenericClient + ?Sized>(
     client: &C,
     cord_id: Uuid,
-) -> Result<bool, CellError> {
-    Ok(client
-        .query_opt(
-            "SELECT id FROM cell
-             WHERE id = $1 AND kind = $2 AND deleted_at IS NULL
-             FOR NO KEY UPDATE",
-            &[&cord_id, &CORD_CELL_KIND],
-        )
-        .await?
-        .is_some())
+) -> Result<Option<CordRow>, CellError> {
+    let sql = format!(
+        "SELECT id, data::text, {} FROM cell
+         WHERE id = $1 AND kind = $2 AND deleted_at IS NULL
+         FOR NO KEY UPDATE",
+        iso8601_timestamp_column("cell", "created_at"),
+    );
+    let Some(row) = client.query_opt(&sql, &[&cord_id, &CORD_CELL_KIND]).await? else {
+        return Ok(None);
+    };
+    let data: String = row.get(1);
+    Ok(serde_json::from_str::<CordData>(&data)
+        .ok()
+        .map(|data| CordRow {
+            id: row.get(0),
+            name: data.name,
+            created_at: row.get(2),
+        }))
 }
 
-/// Every active cord-role grant on the cord `cord_id` held by a live actor on
-/// a live account, oldest first.
+/// Every live cord-role grant on the cord `cord_id` ([`live_cord_grant_sql`]),
+/// oldest first.
 ///
 /// # Errors
 ///
 /// [`CellError::Db`] on a driver failure.
-pub async fn query_cord_member_grants<C: GenericClient + ?Sized>(
+pub(crate) async fn query_cord_member_grants<C: GenericClient + ?Sized>(
     client: &C,
     cord_id: Uuid,
 ) -> Result<Vec<CordMemberGrant>, CellError> {
+    let sql = live_cord_grant_sql(
+        "rg.id, rg.actor_id, rg.role, ac.account_id, a.username, ac.name",
+        "rg.scope_id = $3 ORDER BY rg.created_at, rg.id",
+    );
     let rows = client
-        .query(
-            "SELECT rg.id, rg.actor_id, rg.role, ac.account_id, a.username, ac.name
-             FROM role_grant rg
-             JOIN actor ac ON ac.id = rg.actor_id AND ac.deleted_at IS NULL
-             JOIN account a ON a.id = ac.account_id AND a.deleted_at IS NULL
-             WHERE rg.scope_kind = $1
-               AND rg.scope_id = $2
-               AND rg.role = ANY($3::text[])
-               AND rg.revoked_at IS NULL
-               AND (rg.expires_at IS NULL OR rg.expires_at > NOW())
-             ORDER BY rg.created_at, rg.id",
-            &[&CORD_SCOPE_KIND, &cord_id, &CORD_ROLES.as_slice()],
-        )
+        .query(&sql, &[&CORD_SCOPE_KIND, &CORD_ROLES.as_slice(), &cord_id])
         .await?;
     rows.iter()
         .map(|row| {
@@ -186,8 +257,8 @@ pub async fn query_cord_member_grants<C: GenericClient + ?Sized>(
 }
 
 /// The actor's role in the cord `cord_id` as the database has it now (the
-/// highest of their active cord grants, on a live actor and account), or
-/// `None` when they aren't in it. A plain read with no lock.
+/// highest of their live cord grants, `live_cord_grant_sql`), or `None`
+/// when they aren't in it. A plain read with no lock.
 ///
 /// # Errors
 ///
@@ -197,23 +268,15 @@ pub async fn query_cord_member_role<C: GenericClient + ?Sized>(
     cord_id: Uuid,
     actor_id: Uuid,
 ) -> Result<Option<CordRole>, CellError> {
+    let sql = live_cord_grant_sql("rg.role", "rg.scope_id = $3 AND rg.actor_id = $4");
     let rows = client
         .query(
-            "SELECT rg.role
-             FROM role_grant rg
-             JOIN actor ac ON ac.id = rg.actor_id AND ac.deleted_at IS NULL
-             JOIN account a ON a.id = ac.account_id AND a.deleted_at IS NULL
-             WHERE rg.actor_id = $1
-               AND rg.scope_kind = $2
-               AND rg.scope_id = $3
-               AND rg.role = ANY($4::text[])
-               AND rg.revoked_at IS NULL
-               AND (rg.expires_at IS NULL OR rg.expires_at > NOW())",
+            &sql,
             &[
-                &actor_id,
                 &CORD_SCOPE_KIND,
-                &cord_id,
                 &CORD_ROLES.as_slice(),
+                &cord_id,
+                &actor_id,
             ],
         )
         .await?;
@@ -253,7 +316,7 @@ pub async fn query_cord_manager_role<C: GenericClient + ?Sized>(
     Ok(role)
 }
 
-/// The members of the cord `cord_id`, owners first ([`fold_cord_members`]).
+/// The members of the cord `cord_id`, owners first (`fold_cord_members`).
 ///
 /// # Errors
 ///
@@ -323,7 +386,7 @@ async fn lock_and_read<C: GenericClient + ?Sized>(
     cord_id: Uuid,
     caller_actor_id: Uuid,
 ) -> Result<(Vec<CordMember>, CordMember), CordMemberError> {
-    if !query_cord_lock(client, cord_id).await? {
+    if query_cord_lock(client, cord_id).await?.is_none() {
         return Err(CordMemberError::CordNotFound);
     }
     let members = query_cord_members(client, cord_id).await?;
@@ -409,21 +472,18 @@ pub async fn query_cord_member_role_set<C: GenericClient + ?Sized>(
         CORD_REVOKE_REASON_ROLE_SET,
     )
     .await?;
-    let grant = query_create_role_grant(
+    let role_grant_id = query_cord_role_grant_create(
         client,
-        &target.actor_id,
-        role.as_str(),
-        Some(CORD_SCOPE_KIND),
-        Some(&cord_id),
-        Some(&caller_actor_id),
-        None,
+        cord_id,
+        target.actor_id,
+        role,
+        Some(caller_actor_id),
     )
-    .await
-    .map_err(CellError::Db)?;
+    .await?;
     Ok(CordMemberChange {
         member: target,
         revoked,
-        granted: Some((grant.id, role)),
+        granted: Some((role_grant_id, role)),
     })
 }
 

@@ -17,6 +17,7 @@ import {
 
 import './cross_test_types.ts';
 import { CORD_SESSION_COOKIE_NAME } from './cord_backend_config.ts';
+import { json_post } from './cord_cross_helpers.ts';
 
 /**
  * cord's auth flows end to end against a spawned `testing_cordd` over real
@@ -31,12 +32,6 @@ const setup_test = default_cross_process_setup(handle);
 const { rpc_path, bootstrap } = handle.config;
 
 const AUDIT_STREAM_PATH = '/api/admin/audit/stream';
-
-const json_post = (body: unknown, headers: Record<string, string> = {}): RequestInit => ({
-	method: 'POST',
-	headers: { 'content-type': 'application/json', ...headers },
-	body: JSON.stringify(body)
-});
 
 /** The response's flat REST error string, or `undefined`. */
 const read_error = async (res: Response): Promise<unknown> => {

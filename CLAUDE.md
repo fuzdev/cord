@@ -107,7 +107,7 @@ recorded in the `cord_create` audit event instead.
   roles.** `RequestActorContext::has_role` ignores scope, so an owner of
   one cord would pass for every cord. `cord_authz.rs` holds the pure
   exact-scope predicates (`cord_role_in`, `is_cord_member`,
-  `can_manage_cord`, `cord_memberships`) over the request's role-grant
+  `cord_memberships`) over the request's role-grant
   snapshot, and the member rules (`CordRole::can_set_member_roles`,
   `CordRole::can_remove`, `leaves_no_owner`). Instance-admin checks use
   `has_scoped_role(ROLE_ADMIN, None)` (a global grant); the dispatcher's
@@ -168,7 +168,7 @@ generic `fuz_cell_actions` verb set is not mounted):
 - `cord_admin_list` — instance admins only: every cord with its member
   count (live actors on live accounts), for operations
 
-Invite links (`cord_invite_actions.rs` over `cord_invite_queries.rs`) are
+Invite links (`invite/actions.rs` over `invite/queries.rs`) are
 rows in cord's own `cord_invite` table, in its `cord` migration namespace
 (`migrations.rs`, chained after the spine's auth and cell namespaces). A
 link stores only the blake3 digest of its token, made with the spine's
@@ -193,7 +193,7 @@ holds a global `admin` on a live actor and account (a purged minter's
 null `created_by` fails closed), reserves the username as a spine username
 invite created in the minter's name (`query_create_invite`), records a
 row in the `cord_invite_redemption` table
-(`cord_invite_redemption_queries.rs`), and spends one use. They then sign
+(`invite/redemption_queries.rs`), and spends one use. They then sign
 up through the stock invite-gated signup with that username, which claims
 the spine invite, and **accept** the link signed in. That accept finds
 their redemption and spends nothing more, so a link used up by reserved
@@ -217,7 +217,7 @@ release that needn't wait for the sweep.
 
 Expiry releases them as well. Once a link has been expired for longer
 than the accept grace, accept refuses its newcomers, so the server's
-expiry sweep (`cord_invite_sweep.rs`) deletes what the link still
+expiry sweep (`invite/sweep.rs`) deletes what the link still
 reserves. `run_app` runs it beside the server in `cordd` and
 `testing_cordd` alike: a pass once migrations have run, then one every
 `CORD_INVITE_SWEEP_INTERVAL`, stopping when shutdown begins. A pass
@@ -383,8 +383,8 @@ auth UI and the RPC client. The root `+layout.svelte` provides the contexts
 and checks the session on mount:
 
 - `cord_rpc_context` — `CordRpc` from `ui/rpc.ts`: fuz_app's
-  `create_frontend_rpc_client` over `POST /api/rpc`, with the throwing `api`
-  and the Result-shaped `api_result` Proxies. HTTP only; the WebSocket
+  `create_frontend_rpc_client` over `POST /api/rpc`, as the throwing `api`
+  Proxy. HTTP only; the WebSocket
   transport joins when something needs server push.
 - `cord_auth_state_context` — `CordAuthState` from
   `ui/cord_auth_state.svelte.ts`: fuz_app's `AuthState` (cookie session
@@ -625,24 +625,28 @@ proxies `/api` and `/health` to `cordd`). Modules:
 - `cord_queries.rs` — cords over the `cell` / `cell_grant` / `role_grant`
   tables: create (cell + owner grant + stamped grants), get, by ids,
   rename, the admin list with member counts; `validate_cord_name`
-- `cord_member_queries.rs` — membership over `role_grant`: the cord lock,
-  the member read, and the role set, remove, and leave transactions
-- `cord_invite_queries.rs` — the `cord_invite` table: tokens and their
-  digests, create, list, revoke, lookup, the link lock (and the sweep's
-  `SKIP LOCKED` try of it), and the accept transaction
-- `cord_invite_redemption_queries.rs` — the `cord_invite_redemption`
-  table: the redeem transaction, the global-admin re-check
-  (`query_actor_holds_global_admin`, and an unlocked twin for the
-  preview), the pending-redemption lookup and completion accept uses
-  (with the fallback by username), the release of waiting reservations
-  a revoke or the sweep runs, and the sweep's selection of links
-- `cord_invite_sweep.rs` — the expiry sweep: `run_cord_invite_sweep` (the
-  interval loop `run_app` spawns) and `cord_invite_sweep_pass` (one pass,
-  each link in its own transaction)
+- `cord_member_queries.rs` — membership over `role_grant`: the live-grant
+  rule every role read goes through (`live_role_grant_sql`), the one cord
+  grant writer (`query_cord_role_grant_create`), the cord lock, the member
+  read, and the role set, remove, and leave transactions
+- `invite/` — the invite links:
+  - `queries.rs` — the `cord_invite` table: tokens and their digests,
+    create, list, revoke, lookup, the link lock (and the sweep's
+    `SKIP LOCKED` try of it), spending a use, and the accept transaction
+  - `redemption_queries.rs` — the `cord_invite_redemption` table: the
+    redeem transaction, the global-admin re-check
+    (`query_actor_holds_global_admin`, and an unlocked twin for the
+    preview), the pending-redemption lookup and completion accept uses
+    (with the fallback by username), the release of waiting reservations
+    a revoke or the sweep runs, and the sweep's selection of links
+  - `sweep.rs` — the expiry sweep: `run_cord_invite_sweep` (the interval
+    loop `run_app` spawns) and `cord_invite_sweep_pass` (one pass, each
+    link in its own transaction)
+  - `actions.rs` — the invite verbs
 - `cord_actions.rs` — the cord verbs' specs and handlers, the helpers the
-  other action modules share, and `cord_action_specs` (every cord spec)
-- `cord_invite_actions.rs`, `cord_member_actions.rs` — the invite and
-  member verbs
+  other action modules share (the audit helpers, the fresh manager-role
+  gate), and `cord_action_specs` (every cord spec)
+- `cord_member_actions.rs` — the member verbs
 - `offer_authorize.rs` — `CordOfferAuthorize`, the role-grant offer gate
   (global admins only; no scoped builtin roles)
 - `error.rs` — `StartupError` with `.exit_code()` (`2` config, `1`
@@ -688,8 +692,9 @@ reservations and refusing the accept; a sweep pass releasing only the
 waiting reservations of a link expired past the grace and auditing it,
 leaving a link within the grace, a live one, and claimed or accepted
 redemptions alone, and skipping a link another transaction holds until the
-next pass). `tests/common/` holds their shared setup and the redemption
-read only tests need:
+next pass). `tests/common/` holds their shared setup, the cord and link
+steps they share, and the redemption read only tests need; each suite
+runs its scenarios in order from one test function:
 
 ```bash
 createdb cord_schema_ready_test
@@ -755,7 +760,8 @@ revoke leaving the stock signup refusing the reserved username; a
 demoted minter closing the link to new usernames; the newcomer expiry
 cap; redeem with a session behaving as anonymous); `origin.cross.test.ts` and
 `audit_stream.cross.test.ts` run fuz_app's shared origin and SSE suites.
-The backend config is `cord_backend_config.ts`.
+The backend config is `cord_backend_config.ts`; `cord_cross_helpers.ts`
+holds the setup and steps the cord suites share.
 
 It needs Postgres and is gated behind `FUZ_TEST_CROSS_BACKEND`, so a bare
 `gro test` skips it:

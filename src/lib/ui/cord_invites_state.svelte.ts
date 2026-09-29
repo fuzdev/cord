@@ -206,7 +206,9 @@ export class CordInvitesState {
 	}
 
 	/**
-	 * Mint a link, keep it with its token in `minted`, and reload the list.
+	 * Mint a link, keep it with its token in `minted`, and put it at the
+	 * head of the loaded list, newest first as the server lists them. A list
+	 * that isn't loaded (still loading, or failed) is fetched instead.
 	 *
 	 * @returns whether minting succeeded (the error is on `create`)
 	 */
@@ -216,7 +218,11 @@ export class CordInvitesState {
 		// the page moved to another cord meanwhile; that cord's section shows none of this
 		if (this.cord_id !== request.cord_id) return true;
 		this.minted = { invite: result.invite, token: result.token };
-		await this.fetch(request.cord_id);
+		if (this.list.succeeded) {
+			this.invites = [result.invite, ...this.invites];
+		} else {
+			await this.fetch(request.cord_id);
+		}
 		return true;
 	}
 

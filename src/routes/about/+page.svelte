@@ -1,5 +1,4 @@
 <script lang="ts">
-	// import LibraryDetail from '@fuzdev/fuz_ui/LibraryDetail.svelte';
 	import DocsFooter from '@fuzdev/fuz_ui/DocsFooter.svelte';
 	import { site_context } from '@fuzdev/fuz_ui/site.svelte.ts';
 	import { FUZ_DEV_URL } from '@fuzdev/fuz_ui/constants.ts';
@@ -9,8 +8,6 @@
 	import { logo_fuz } from '@fuzdev/fuz_ui/logos.ts';
 
 	const site = site_context.get();
-
-	// TODO standardize
 </script>
 
 <main class="width_atmost_md pb_xl9">
@@ -23,11 +20,6 @@
 			<Breadcrumb />
 		</div>
 	</section>
-	<!-- <section class="box width:100% mb_lg">
-		<div class="panel p_lg width_atmost_md">
-			<LibraryDetail {library} />
-		</div>
-	</section> -->
 	<EcosystemLinksPanel />
 	<section class="box">
 		<DocsFooter repo_url={site.repo_url} root_url={FUZ_DEV_URL} />

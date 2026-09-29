@@ -38,6 +38,9 @@ export const rpc_error_reason = (e: unknown): string | undefined => {
 	return typeof reason === 'string' ? reason : undefined;
 };
 
+/** The instance's username rules, in words, for both the form's own check and the server's refusal. */
+export const CORD_USERNAME_RULE = `A username is ${USERNAME_LENGTH_MIN} to ${USERNAME_LENGTH_MAX} characters: letters, numbers, dashes, and underscores, starting with a letter and ending with a letter or number.`;
+
 /** The words for the cord refusals a person can run into, by reason. */
 export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_NOT_FOUND]: "There's no cord here, or you're not in it.",
@@ -58,7 +61,7 @@ export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_INVITE_EXHAUSTED]: "This link doesn't work anymore.",
 	[ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS]: "This link doesn't work anymore.",
 	[ERROR_CORD_INVITE_NEWCOMERS_CLOSED]: "This link doesn't work anymore.",
-	[ERROR_CORD_INVITE_USERNAME_INVALID]: `Usernames are ${USERNAME_LENGTH_MIN} to ${USERNAME_LENGTH_MAX} characters: letters, numbers, dashes, and underscores, starting with a letter and ending with a letter or number.`,
+	[ERROR_CORD_INVITE_USERNAME_INVALID]: CORD_USERNAME_RULE,
 	[ERROR_CORD_INVITE_USERNAME_UNAVAILABLE]: "That username's taken. Try another."
 };
 

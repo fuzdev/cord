@@ -8,8 +8,8 @@
 
 use fuz_db::{ColumnProjections, Migration, MigrationNamespace};
 
-use crate::cord_invite_queries::CORD_INVITE_COLUMNS;
-use crate::cord_invite_redemption_queries::CORD_INVITE_REDEMPTION_COLUMNS;
+use crate::invite::queries::CORD_INVITE_COLUMNS;
+use crate::invite::redemption_queries::CORD_INVITE_REDEMPTION_COLUMNS;
 
 /// The namespace key in `schema_version`.
 pub const CORD_MIGRATIONS_NAMESPACE: &str = "cord";

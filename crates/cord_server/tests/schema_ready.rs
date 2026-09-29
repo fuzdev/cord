@@ -23,17 +23,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 
-use cord_server::router::cord_migration_namespaces;
-use fuz_db::{check_schema_drift, create_pool, query_ready_columns, run_migrations};
-
-fn test_database_url() -> String {
-    env::var("CORD_SCHEMA_READY_TEST_URL")
-        .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned())
-}
+use common::fresh_db_pool;
+use fuz_db::{check_schema_drift, query_ready_columns};
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expected_schema.json")
@@ -42,19 +39,8 @@ fn fixture_path() -> PathBuf {
 #[tokio::test]
 #[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn committed_expected_schema_matches_fresh_bootstrap() {
-    let pool = create_pool(&test_database_url()).expect("test pool build");
-
-    {
-        let client = pool.get().await.expect("pool get");
-        client
-            .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-            .await
-            .expect("reset public schema");
-    }
-    run_migrations(&pool, &cord_migration_namespaces())
-        .await
-        .expect("run migrations");
-
+    // the exact chain `build_router` runs, on a freshly reset schema
+    let pool = fresh_db_pool().await;
     let client = pool.get().await.expect("pool get");
     let live: BTreeMap<String, Vec<String>> = query_ready_columns(&client, "public")
         .await

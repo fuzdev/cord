@@ -1,7 +1,6 @@
 <script lang="ts">
 	import 'virtual:fuz.css';
 	import '@fuzdev/fuz_code/theme.css';
-	import './style.css';
 
 	import ThemeRoot from '@fuzdev/fuz_ui/ThemeRoot.svelte';
 	import { SiteState, site_context } from '@fuzdev/fuz_ui/site.svelte.ts';

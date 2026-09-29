@@ -4,7 +4,7 @@
  * links (including newcomer links and their redemption), and its members.
  *
  * The server's handlers are in `crates/cord_server/src/cord_actions.rs`,
- * `cord_invite_actions.rs`, and `cord_member_actions.rs`; these specs are
+ * `invite/actions.rs`, and `cord_member_actions.rs`; these specs are
  * their wire contract, which the frontend RPC client and the generated action
  * types read. Authorization beyond the spec-level gates (cord membership and
  * role, the global admin grant) is the server's.

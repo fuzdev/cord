@@ -9,9 +9,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::cord_invite_sweep::{CORD_INVITE_SWEEP_INTERVAL, run_cord_invite_sweep};
 use crate::env::CordEnv;
 use crate::error::StartupError;
+use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, run_cord_invite_sweep};
 use crate::router::{BuiltRouter, build_router};
 
 /// cord's instantiation of the spine's extra-action-specs factory, over
@@ -76,7 +76,7 @@ pub struct RunAppOptions {
 /// Run the server to completion.
 ///
 /// With a database, the invite expiry sweep
-/// ([`crate::cord_invite_sweep`]) runs beside the server: once migrations
+/// ([`crate::invite::sweep`]) runs beside the server: once migrations
 /// have run, then every [`CORD_INVITE_SWEEP_INTERVAL`]. It stops when
 /// shutdown begins.
 ///

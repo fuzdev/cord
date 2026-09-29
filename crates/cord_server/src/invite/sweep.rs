@@ -46,10 +46,10 @@ use serde_json::json;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use crate::cord_invite_queries::{
+use crate::invite::queries::{
     CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, query_cord_invite_try_lock_expired_beyond,
 };
-use crate::cord_invite_redemption_queries::{
+use crate::invite::redemption_queries::{
     query_cord_invite_expired_with_waiting_redemptions, query_cord_invite_redemption_release,
 };
 

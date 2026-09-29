@@ -20,7 +20,7 @@
 
 use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};
-use fuz_auth::{AuditEventType, AuditLogInput, AuthSpec, CredentialGate, RequestActorContext};
+use fuz_auth::{AuditEventType, AuthSpec, CredentialGate, RequestActorContext};
 use fuz_http::{
     JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params, not_found,
     parse_strict_params,
@@ -29,14 +29,16 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::cord_actions::{cord_not_found, dispatch_db, dispatch_db_ctx, handler, require_actor};
+use crate::cord_actions::{
+    CordGrantAudit, audit_cord_grant_event, cord_not_found, dispatch_db, dispatch_db_ctx, handler,
+    require_actor,
+};
 use crate::cord_authz::{CordRole, is_cord_member};
 use crate::cord_member_queries::{
     CORD_REVOKE_REASON_LEAVE, CORD_REVOKE_REASON_REMOVE, CORD_REVOKE_REASON_ROLE_SET, CordMember,
     CordMemberChange, CordMemberError, query_cord_leave, query_cord_member_remove,
     query_cord_member_role_set, query_cord_members,
 };
-use crate::roles::CORD_SCOPE_KIND;
 
 /// Error reason: the target isn't a member of the cord.
 pub const ERROR_CORD_MEMBER_NOT_FOUND: &str = "cord_member_not_found";
@@ -164,40 +166,32 @@ async fn audit_member_change<C: GenericClient + ?Sized>(
     change: &CordMemberChange,
     reason: &str,
 ) -> Result<(), JsonrpcError> {
+    let grant = |role_grant_id, role| CordGrantAudit {
+        target_account_id: change.member.account_id,
+        target_actor_id: change.member.actor_id,
+        cord_id,
+        role,
+        role_grant_id,
+    };
     for revoked in &change.revoked {
-        ctx.audit_emit(
+        audit_cord_grant_event(
             client,
-            AuditLogInput::for_event(AuditEventType::RoleGrantRevoke)
-                .actor(auth.actor.id)
-                .account(auth.account.id)
-                .target_account(change.member.account_id)
-                .target_actor(Some(change.member.actor_id))
-                .ip(ctx.client_ip.clone())
-                .metadata(json!({
-                    "role": revoked.role,
-                    "role_grant_id": revoked.role_grant_id,
-                    "scope_kind": CORD_SCOPE_KIND,
-                    "scope_id": cord_id,
-                    "reason": reason,
-                })),
+            ctx,
+            auth,
+            AuditEventType::RoleGrantRevoke,
+            &grant(revoked.role_grant_id, revoked.role),
+            Some(("reason", json!(reason))),
         )
         .await?;
     }
     if let Some((role_grant_id, role)) = change.granted {
-        ctx.audit_emit(
+        audit_cord_grant_event(
             client,
-            AuditLogInput::for_event(AuditEventType::RoleGrantCreate)
-                .actor(auth.actor.id)
-                .account(auth.account.id)
-                .target_account(change.member.account_id)
-                .target_actor(Some(change.member.actor_id))
-                .ip(ctx.client_ip.clone())
-                .metadata(json!({
-                    "role": role,
-                    "role_grant_id": role_grant_id,
-                    "scope_kind": CORD_SCOPE_KIND,
-                    "scope_id": cord_id,
-                })),
+            ctx,
+            auth,
+            AuditEventType::RoleGrantCreate,
+            &grant(role_grant_id, role),
+            None,
         )
         .await?;
     }

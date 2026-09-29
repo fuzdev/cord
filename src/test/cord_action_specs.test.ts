@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { assert, describe, test } from 'vitest';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 
@@ -14,33 +14,16 @@ import {
 	CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
 	CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
 	CORD_INVITE_MAX_USES_MAX,
-	CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
-	CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX,
 	CordInviteCreateInput,
-	ERROR_CORD_INVITE_EXHAUSTED,
-	ERROR_CORD_INVITE_EXPIRED,
-	ERROR_CORD_INVITE_FORBIDDEN,
-	ERROR_CORD_INVITE_INVALID,
-	ERROR_CORD_INVITE_NOT_FOUND,
-	ERROR_CORD_INVITE_REVOKED,
-	ERROR_CORD_LAST_OWNER,
-	ERROR_CORD_MEMBER_FORBIDDEN,
-	ERROR_CORD_MEMBER_NOT_FOUND,
-	ERROR_CORD_MEMBER_REMOVE_SELF,
 	CORD_INVITE_TOKEN_LENGTH_MAX,
 	CordInviteToken,
 	cord_invite_create_action_spec,
 	cord_invite_preview_action_spec,
 	cord_invite_redeem_action_spec,
 	CordInviteRedeemInput,
-	CordInvitePreviewOutput,
-	ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN,
-	ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED,
-	ERROR_CORD_INVITE_NEWCOMERS_CLOSED,
-	ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS,
-	ERROR_CORD_INVITE_USERNAME_INVALID,
-	ERROR_CORD_INVITE_USERNAME_UNAVAILABLE
+	CordInvitePreviewOutput
 } from '#lib/cord_action_specs.ts';
+import * as cord_action_specs from '#lib/cord_action_specs.ts';
 import { all_cord_action_specs } from '#lib/action_specs.ts';
 
 describe('CordName', () => {
@@ -337,89 +320,81 @@ describe('CordInviteCreateInput', () => {
 	});
 });
 
-describe('the invite and member twins', () => {
-	/** The value of `pub const {name}` in a server source file. */
-	const rust_const = (file: string, name: string): string => {
-		const source = readFileSync(`crates/cord_server/src/${file}`, 'utf8');
-		const match = new RegExp(`pub const ${name}: [^=]+= ([^;]+);`).exec(source);
-		assert.ok(match, `${name} in ${file}`);
-		return match[1]!.trim();
+describe('the server twins', () => {
+	const RUST_SRC = 'crates/cord_server/src';
+
+	/**
+	 * Every `pub const` in the server crate whose value is a string literal
+	 * or an integer (a product of integer literals, as the limits are
+	 * written), by name.
+	 */
+	const rust_consts = (): Map<string, string | number> => {
+		const consts: Map<string, string | number> = new Map();
+		for (const file of readdirSync(RUST_SRC, { recursive: true, encoding: 'utf8' })) {
+			if (!file.endsWith('.rs')) continue;
+			const source = readFileSync(`${RUST_SRC}/${file}`, 'utf8');
+			for (const m of source.matchAll(/pub const (\w+): &str = "([^"]*)";/g)) {
+				consts.set(m[1]!, m[2]!);
+			}
+			for (const m of source.matchAll(/pub const (\w+): (?:u32|u64|usize) = ([\d_ *]+);/g)) {
+				const factors = m[2]!.split('*').map((f) => Number(f.trim().replaceAll('_', '')));
+				consts.set(
+					m[1]!,
+					factors.reduce((a, b) => a * b, 1)
+				);
+			}
+		}
+		return consts;
 	};
 
-	test('the limits match the server', () => {
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_EXPIRES_IN_SECONDS_MIN'),
-			String(CORD_INVITE_EXPIRES_IN_SECONDS_MIN)
+	/** The entries of `consts` whose names pass `keep`, sorted by name. */
+	const entries = (
+		consts: Iterable<[string, unknown]>,
+		keep: (name: string, value: unknown) => boolean
+	): Array<[string, unknown]> =>
+		Array.from(consts)
+			.filter(([name, value]) => keep(name, value))
+			.sort(([a], [b]) => a.localeCompare(b));
+
+	const rust = rust_consts();
+	const ts = Object.entries(cord_action_specs);
+
+	test('every error reason is on both sides, with the same value', () => {
+		const is_reason = (name: string, value: unknown): boolean =>
+			name.startsWith('ERROR_CORD_') && typeof value === 'string';
+		const rust_reasons = entries(rust, is_reason);
+		assert.ok(
+			rust_reasons.some(([name]) => name === 'ERROR_CORD_NOT_FOUND'),
+			'the sweep reads the Rust sources'
 		);
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_EXPIRES_IN_SECONDS_MAX'),
-			'365 * 24 * 60 * 60'
-		);
-		assert.strictEqual(CORD_INVITE_EXPIRES_IN_SECONDS_MAX, 365 * 24 * 60 * 60);
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX'),
-			'30 * 24 * 60 * 60'
-		);
-		assert.strictEqual(CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX, 30 * 24 * 60 * 60);
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS'),
-			'60 * 60'
-		);
-		assert.strictEqual(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, 60 * 60);
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_MAX_USES_MAX'),
-			String(CORD_INVITE_MAX_USES_MAX)
-		);
-		assert.strictEqual(
-			rust_const('cord_invite_queries.rs', 'CORD_INVITE_TOKEN_LENGTH_MAX'),
-			String(CORD_INVITE_TOKEN_LENGTH_MAX)
-		);
+		assert.deepEqual(rust_reasons, entries(ts, is_reason));
 	});
 
-	test('the error reasons match the server', () => {
-		for (const [file, name, value] of [
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_NOT_FOUND', ERROR_CORD_INVITE_NOT_FOUND],
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_REVOKED', ERROR_CORD_INVITE_REVOKED],
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_EXPIRED', ERROR_CORD_INVITE_EXPIRED],
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_EXHAUSTED', ERROR_CORD_INVITE_EXHAUSTED],
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_FORBIDDEN', ERROR_CORD_INVITE_FORBIDDEN],
-			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_INVALID', ERROR_CORD_INVITE_INVALID],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN',
-				ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN
-			],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED',
-				ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED
-			],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS',
-				ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS
-			],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_NEWCOMERS_CLOSED',
-				ERROR_CORD_INVITE_NEWCOMERS_CLOSED
-			],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_USERNAME_INVALID',
-				ERROR_CORD_INVITE_USERNAME_INVALID
-			],
-			[
-				'cord_invite_actions.rs',
-				'ERROR_CORD_INVITE_USERNAME_UNAVAILABLE',
-				ERROR_CORD_INVITE_USERNAME_UNAVAILABLE
-			],
-			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_NOT_FOUND', ERROR_CORD_MEMBER_NOT_FOUND],
-			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_FORBIDDEN', ERROR_CORD_MEMBER_FORBIDDEN],
-			['cord_member_actions.rs', 'ERROR_CORD_LAST_OWNER', ERROR_CORD_LAST_OWNER],
-			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_REMOVE_SELF', ERROR_CORD_MEMBER_REMOVE_SELF]
-		] as const) {
-			assert.strictEqual(rust_const(file, name), JSON.stringify(value), name);
+	test('every limit is on both sides, with the same value', () => {
+		const is_limit = (name: string, value: unknown): boolean =>
+			name.startsWith('CORD_') && typeof value === 'number';
+		const rust_limits = entries(rust, is_limit);
+		assert.ok(
+			rust_limits.some(([name]) => name === 'CORD_NAME_LENGTH_MAX'),
+			'the sweep reads the Rust sources'
+		);
+		assert.deepEqual(rust_limits, entries(ts, is_limit));
+	});
+
+	test("the server's cord verbs are exactly the TS twin's", () => {
+		// every spec the crate builds, by the method it's constructed with
+		const rust_methods: Array<string> = [];
+		for (const file of readdirSync(RUST_SRC, { recursive: true, encoding: 'utf8' })) {
+			if (!file.endsWith('.rs')) continue;
+			const source = readFileSync(`${RUST_SRC}/${file}`, 'utf8');
+			for (const m of source.matchAll(/ActionSpec::\w+\(\s*"(\w+)"/g)) {
+				rust_methods.push(m[1]!);
+			}
 		}
+		assert.ok(rust_methods.includes('cord_create'), 'the sweep reads the Rust sources');
+		const ts_methods = all_cord_action_specs
+			.map((spec) => spec.method)
+			.filter((method) => method.startsWith('cord_'));
+		assert.deepEqual(rust_methods.sort(), ts_methods.sort());
 	});
 });

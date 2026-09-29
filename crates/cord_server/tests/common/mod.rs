@@ -1,5 +1,6 @@
 //! Shared setup for the Postgres-backed integration tests: a freshly
-//! migrated database and seeded actors.
+//! migrated database, seeded actors, and the cord and invite-link steps the
+//! suites take, each run in its own transaction as the actions do.
 //!
 //! Every suite here drops and recreates the `public` schema of the one test
 //! database (`CORD_SCHEMA_READY_TEST_URL`, default
@@ -9,13 +10,40 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
 
-use cord_server::cord_invite_redemption_queries::{
-    CORD_INVITE_REDEMPTION_COLUMNS, CordInviteRedemptionRow,
+use cord_server::cord_queries::{CordRow, query_cord_create};
+use cord_server::invite::queries::{
+    CordInviteAccepted, CordInviteError, CordInviteStatus, generate_cord_invite_token,
+    hash_cord_invite_token, query_cord_invite_accept, query_cord_invite_by_token_hash,
+    query_cord_invite_create,
+};
+use cord_server::invite::redemption_queries::{
+    CORD_INVITE_REDEMPTION_COLUMNS, CordInviteRedeemed, CordInviteRedemptionRow,
+    query_cord_invite_redeem,
 };
 use cord_server::router::cord_migration_namespaces;
 use fuz_db::{Pool, col, create_pool, iso8601_timestamp_expr, qualify_columns, run_migrations};
 use uuid::Uuid;
 
+/// Run `$body` in its own transaction bound to `$tx`, committing on `Ok`
+/// and rolling back on `Err`, as the action dispatcher does.
+macro_rules! in_tx {
+    ($pool:expr, |$tx:ident| $body:expr) => {{
+        let mut client = $pool.get().await.expect("pool.get");
+        let $tx = client.transaction().await.expect("begin");
+        let result = $body;
+        if result.is_ok() {
+            $tx.commit().await.expect("commit");
+        } else {
+            $tx.rollback().await.expect("rollback");
+        }
+        result
+    }};
+}
+
+#[allow(unused_imports)]
+pub(crate) use in_tx;
+
+/// The test database's URL: `CORD_SCHEMA_READY_TEST_URL`, or the default.
 pub fn test_url() -> String {
     std::env::var("CORD_SCHEMA_READY_TEST_URL")
         .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned())
@@ -35,6 +63,78 @@ pub async fn fresh_db_pool() -> Pool {
         .await
         .expect("migrations");
     pool
+}
+
+/// Create a cord owned by `owner`.
+pub async fn create_cord(pool: &Pool, name: &str, owner: Uuid) -> CordRow {
+    let client = pool.get().await.expect("pool.get");
+    query_cord_create(&client, name, owner)
+        .await
+        .expect("create cord")
+        .cord
+}
+
+/// Mint a link on the cord `cord_id` as `by`, returning its raw token and id.
+pub async fn mint(
+    pool: &Pool,
+    cord_id: Uuid,
+    by: Uuid,
+    expires_in_seconds: Option<u32>,
+    max_uses: Option<u32>,
+    admits_newcomers: bool,
+) -> (String, Uuid) {
+    let client = pool.get().await.expect("pool.get");
+    let minted = generate_cord_invite_token();
+    let created = query_cord_invite_create(
+        &client,
+        cord_id,
+        &minted.token_hash,
+        by,
+        expires_in_seconds,
+        max_uses,
+        admits_newcomers,
+    )
+    .await
+    .expect("create invite");
+    (minted.token, created.invite.id)
+}
+
+/// Accept `token` as `actor_id` in its own transaction, as the action does.
+pub async fn accept(
+    pool: &Pool,
+    token: &str,
+    actor_id: Uuid,
+) -> Result<CordInviteAccepted, CordInviteError> {
+    in_tx!(pool, |tx| query_cord_invite_accept(
+        &tx,
+        &hash_cord_invite_token(token),
+        actor_id
+    )
+    .await)
+}
+
+/// Redeem `token` for `username` in its own transaction, as the action does.
+pub async fn redeem(
+    pool: &Pool,
+    token: &str,
+    username: &str,
+) -> Result<CordInviteRedeemed, CordInviteError> {
+    in_tx!(pool, |tx| query_cord_invite_redeem(
+        &tx,
+        &hash_cord_invite_token(token),
+        username
+    )
+    .await)
+}
+
+/// The status of the link `token` as a read reports it now.
+pub async fn status_of(pool: &Pool, token: &str) -> CordInviteStatus {
+    let client = pool.get().await.expect("pool.get");
+    query_cord_invite_by_token_hash(&client, &hash_cord_invite_token(token))
+        .await
+        .expect("read")
+        .expect("exists")
+        .status()
 }
 
 /// Seed an account and its actor, returning the actor id.

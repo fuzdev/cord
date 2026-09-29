@@ -9,15 +9,13 @@
 //!
 //! An actor holds at most one cord role per cord. The spine can't enforce
 //! that: its unique index is per (actor, role, scope), so `cord_member` and
-//! `cord_admin` on one cord can coexist. Today `cord_create` is the only verb
-//! that confers a cord role, on a cord that didn't exist, so the rule holds.
-//! [`cord_role_in`] still resolves a pair to the higher role, as a backstop.
-//!
-//! The member and invite verbs keep the rule themselves
-//! ([`crate::cord_member_queries`], [`crate::cord_invite_queries`]): changing
-//! a role revokes the old grant and creates the new one within one
-//! transaction, and accepting an invite never adds a grant beside an existing
-//! cord role on the same cord.
+//! `cord_admin` on one cord can coexist. Cord's verbs keep the rule
+//! themselves: `cord_create` confers the owner role on a cord that didn't
+//! exist, a role change ([`crate::cord_member_queries`]) revokes the old
+//! grant and creates the new one within one transaction, and accepting an
+//! invite ([`crate::invite::queries`]) never adds a grant beside an
+//! existing cord role on the same cord. [`cord_role_in`] still resolves a
+//! pair to the higher role, as a backstop.
 //!
 //! The member rules are pure predicates here too: who may change roles
 //! ([`CordRole::can_set_member_roles`]), who may remove whom
@@ -134,12 +132,6 @@ pub fn is_cord_member(grants: &[RoleGrantRow], cord_id: Uuid) -> bool {
     cord_role_in(grants, cord_id).is_some()
 }
 
-/// Whether the actor may manage the cord `cord_id`: its owner or an admin.
-#[must_use]
-pub fn can_manage_cord(grants: &[RoleGrantRow], cord_id: Uuid) -> bool {
-    cord_role_in(grants, cord_id).is_some_and(CordRole::can_manage)
-}
-
 /// Every cord the actor is in, with its role there, in the order the grants
 /// arrive (the spine loads them oldest first). A cord role with no scope is
 /// malformed for Cord and is skipped.
@@ -195,7 +187,6 @@ mod tests {
         // owning one cord confers nothing in another
         assert_eq!(cord_role_in(&grants, CORD_B), None);
         assert!(!is_cord_member(&grants, CORD_B));
-        assert!(!can_manage_cord(&grants, CORD_B));
     }
 
     #[test]
@@ -211,7 +202,6 @@ mod tests {
     fn instance_admin_is_not_a_cord_member() {
         let grants = [grant("admin", None), grant("keeper", None)];
         assert!(!is_cord_member(&grants, CORD_A));
-        assert!(!can_manage_cord(&grants, CORD_A));
         assert!(cord_memberships(&grants).is_empty());
     }
 
@@ -223,11 +213,10 @@ mod tests {
 
     #[test]
     fn management_is_owner_or_admin() {
-        assert!(can_manage_cord(&[grant(CORD_OWNER, Some(CORD_A))], CORD_A));
-        assert!(can_manage_cord(&[grant(CORD_ADMIN, Some(CORD_A))], CORD_A));
-        let member = [grant(CORD_MEMBER, Some(CORD_A))];
-        assert!(is_cord_member(&member, CORD_A));
-        assert!(!can_manage_cord(&member, CORD_A));
+        assert!(CordRole::Owner.can_manage());
+        assert!(CordRole::Admin.can_manage());
+        assert!(!CordRole::Member.can_manage());
+        assert!(is_cord_member(&[grant(CORD_MEMBER, Some(CORD_A))], CORD_A));
     }
 
     #[test]

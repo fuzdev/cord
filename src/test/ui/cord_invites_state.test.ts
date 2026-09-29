@@ -159,22 +159,30 @@ describe('to_cord_invite_minter', () => {
 });
 
 describe('CordInvitesState', () => {
-	test('create_invite keeps the token once and reloads the list', async () => {
-		let invites: Array<CordInviteJson> = [];
+	test('create_invite keeps the token once and prepends the link without a reload', async () => {
+		let lists = 0;
+		const older = invite({ id: '44444444-4444-4444-8444-444444444444' as Uuid });
 		const state = new CordInvitesState({
 			api: stub_api({
-				cord_invite_list: () => Promise.resolve({ invites }),
-				cord_invite_create: (input: { max_uses?: number }) => {
-					const created = invite({ max_uses: input.max_uses ?? null });
-					invites = [created];
-					return Promise.resolve({ invite: created, token: 'tok_secret' });
-				}
+				cord_invite_list: () => {
+					lists++;
+					return Promise.resolve({ invites: [older] });
+				},
+				cord_invite_create: (input: { max_uses?: number }) =>
+					Promise.resolve({
+						invite: invite({ max_uses: input.max_uses ?? null }),
+						token: 'tok_secret'
+					})
 			})
 		});
 		await state.fetch(CORD_ID);
-		assert.deepEqual(state.invites, []);
 		assert.isTrue(await state.create_invite({ cord_id: CORD_ID, max_uses: 5 }));
 		assert.strictEqual(state.minted?.token, 'tok_secret');
+		assert.strictEqual(lists, 1);
+		assert.deepEqual(
+			state.invites.map((i) => i.id),
+			[INVITE_ID, older.id]
+		);
 		assert.strictEqual(state.invites[0]?.max_uses, 5);
 		assert.notProperty(state.invites[0]!, 'token', 'the list never carries tokens');
 		state.dismiss_minted();

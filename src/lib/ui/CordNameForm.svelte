@@ -2,7 +2,9 @@
 	/**
 	 * A one-field form for a cord's name, shared by creating a cord and
 	 * renaming one. Checks the name against `CordName` before calling
-	 * `onsubmit`, and clears the field after a successful create.
+	 * `onsubmit`, and clears the field after a successful create. While a
+	 * submit runs the field is `readonly` and the button `aria-disabled`, so
+	 * focus stays put and a failed attempt keeps its input.
 	 *
 	 * @module
 	 */
@@ -38,6 +40,7 @@
 	let invalid: string | null = $state.raw(null);
 
 	const submit = async (): Promise<void> => {
+		if (pending) return;
 		const parsed = CordName.safeParse(name);
 		if (!parsed.success) {
 			invalid = parsed.error.issues[0]?.message ?? 'invalid name';
@@ -61,10 +64,12 @@
 >
 	<label>
 		<div class="title">name</div>
-		<input name="name" type="text" bind:value={name} placeholder="cord name" disabled={pending} />
+		<input name="name" type="text" bind:value={name} placeholder="cord name" readonly={pending} />
 	</label>
 	<div class="row gap_sm">
-		<PendingButton {pending} disabled={pending} onclick={submit}>{submit_label}</PendingButton>
+		<PendingButton {pending} disabled={false} aria-disabled={pending} onclick={submit}>
+			{submit_label}
+		</PendingButton>
 	</div>
 	{#if invalid ?? error}
 		<p class="color_c_50 font_size_sm mt_xs mb_0">{invalid ?? error}</p>

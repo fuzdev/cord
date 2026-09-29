@@ -17,11 +17,7 @@ import { untrack } from 'svelte';
 import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { AsyncSlot } from '@fuzdev/fuz_app/ui/async_slot.svelte.ts';
 import { Password, PASSWORD_LENGTH_MIN } from '@fuzdev/fuz_app/auth/password.ts';
-import {
-	Username,
-	USERNAME_LENGTH_MAX,
-	USERNAME_LENGTH_MIN
-} from '@fuzdev/fuz_app/primitive_schemas.ts';
+import { Username } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import type { AsyncStatus } from '@fuzdev/fuz_util/async.ts';
 
 import type { FrontendActionsApi } from '../action_metatypes.ts';
@@ -41,7 +37,12 @@ import {
 	type CordInviteRedeemOutput,
 	type CordJson
 } from '../cord_action_specs.ts';
-import { CORD_ERROR_MESSAGES, rpc_error_reason, to_cord_error_message } from './cord_errors.ts';
+import {
+	CORD_ERROR_MESSAGES,
+	CORD_USERNAME_RULE,
+	rpc_error_reason,
+	to_cord_error_message
+} from './cord_errors.ts';
 import type { CordsStateOptions } from './cords_state.svelte.ts';
 
 /** The `sessionStorage` key the join page keeps its link under. */
@@ -299,10 +300,7 @@ export const check_cord_newcomer_fields = (
 	password_confirm: string
 ): { field: CordNewcomerField; message: string } | null => {
 	if (!Username.safeParse(username.trim()).success) {
-		return {
-			field: 'username',
-			message: `A username is ${USERNAME_LENGTH_MIN} to ${USERNAME_LENGTH_MAX} characters: letters, numbers, dashes, and underscores, starting with a letter and ending with a letter or number.`
-		};
+		return { field: 'username', message: CORD_USERNAME_RULE };
 	}
 	if (!Password.safeParse(password).success) {
 		return {

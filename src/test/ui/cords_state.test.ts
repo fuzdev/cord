@@ -26,23 +26,25 @@ describe('CordsState', () => {
 		);
 	});
 
-	test('create_cord creates, reloads the list, and returns the new cord', async () => {
-		const created: Array<string> = [];
+	test('create_cord creates, appends to the list without a reload, and returns the new cord', async () => {
+		let lists = 0;
 		const state = new CordsState({
 			api: stub_api({
-				cord_create: (input: { name: string }) => {
-					created.push(input.name);
-					return Promise.resolve({ cord: cord(input.name) });
-				},
-				cord_list: () => Promise.resolve({ cords: created.map((name) => cord(name)) })
+				cord_create: (input: { name: string }) => Promise.resolve({ cord: cord(input.name) }),
+				cord_list: () => {
+					lists++;
+					return Promise.resolve({ cords: [cord('the yard')] });
+				}
 			})
 		});
+		await state.fetch();
 		const result = await state.create_cord('the porch');
 		assert.strictEqual(result?.name, 'the porch');
 		assert.deepEqual(
 			state.cords.map((c) => c.name),
-			['the porch']
+			['the yard', 'the porch']
 		);
+		assert.strictEqual(lists, 1);
 	});
 
 	test('a failed create returns undefined and keeps the error', async () => {

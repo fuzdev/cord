@@ -604,26 +604,16 @@ mod tests {
     fn action_registry_compiles_with_the_spine_surface() {
         let registry =
             build_action_registry(&lazy_app(), None, None, None).expect("registry compiles");
-        for method in [
-            "heartbeat",
-            "account_verify",
-            "admin_account_list",
-            "cord_create",
-            "cord_list",
-            "cord_get",
-            "cord_update",
-            "cord_admin_list",
-            "cord_invite_create",
-            "cord_invite_list",
-            "cord_invite_revoke",
-            "cord_invite_preview",
-            "cord_invite_accept",
-            "cord_member_list",
-            "cord_member_role_set",
-            "cord_member_remove",
-            "cord_leave",
-        ] {
+        for method in ["heartbeat", "account_verify", "admin_account_list"] {
             assert!(registry.get(method).is_some(), "missing action {method}");
+        }
+        // every cord spec, however the list grows
+        for spec in crate::cord_actions::cord_action_specs() {
+            assert!(
+                registry.get(spec.method).is_some(),
+                "missing action {}",
+                spec.method
+            );
         }
     }
 

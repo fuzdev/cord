@@ -12,7 +12,7 @@
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
-//! schema, so the scenarios run in one test function:
+//! schema, so the scenarios run in order from one test function:
 //!
 //! ```bash
 //! cargo test -p cord_server --test cord_members -- --ignored
@@ -22,38 +22,21 @@
 
 mod common;
 
-use common::{fresh_db_pool, seed_actor};
+use common::{create_cord, fresh_db_pool, in_tx, mint, seed_actor};
 use cord_server::cord_authz::{CordRole, cord_role_in};
-use cord_server::cord_invite_queries::{
-    CordInviteAcceptError, generate_cord_invite_token, query_cord_invite_accept,
-    query_cord_invite_create,
-};
 use cord_server::cord_member_queries::{
     CORD_REVOKE_REASON_LEAVE, CORD_REVOKE_REASON_REMOVE, CORD_REVOKE_REASON_ROLE_SET,
     CordMemberChange, CordMemberError, query_cord_leave, query_cord_manager_role,
     query_cord_member_remove, query_cord_member_role_set, query_cord_members,
 };
-use cord_server::cord_queries::query_cord_create;
+use cord_server::cord_queries::CordRow;
+use cord_server::invite::queries::{
+    CordInviteError, hash_cord_invite_token, query_cord_invite_accept,
+};
 use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
 use fuz_auth::query_create_role_grant;
 use fuz_db::Pool;
 use uuid::Uuid;
-
-/// Run `f` in its own transaction, committing on `Ok` and rolling back on
-/// `Err`, as the action dispatcher does.
-macro_rules! in_tx {
-    ($pool:expr, |$tx:ident| $body:expr) => {{
-        let mut client = $pool.get().await.expect("pool.get");
-        let $tx = client.transaction().await.expect("begin");
-        let result = $body;
-        if result.is_ok() {
-            $tx.commit().await.expect("commit");
-        } else {
-            $tx.rollback().await.expect("rollback");
-        }
-        result
-    }};
-}
 
 async fn add_member(pool: &Pool, cord_id: Uuid, actor_id: Uuid, role: CordRole) {
     let client = pool.get().await.expect("pool.get");
@@ -123,6 +106,17 @@ fn assert_refused(result: Result<CordMemberChange, CordMemberError>, expected: &
     }
 }
 
+/// The first cord and the people in and around it.
+#[derive(Debug, Clone)]
+struct Porch {
+    cord: CordRow,
+    owner: Uuid,
+    admin: Uuid,
+    member: Uuid,
+    other: Uuid,
+    stranger: Uuid,
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn membership_changes_keep_one_role_and_an_owner() {
@@ -132,21 +126,42 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     let member = seed_actor(&pool, "member").await;
     let other = seed_actor(&pool, "other").await;
     let stranger = seed_actor(&pool, "stranger").await;
-
-    let cord = {
-        let client = pool.get().await.expect("pool.get");
-        query_cord_create(&client, "the porch", owner)
-            .await
-            .expect("create")
-            .cord
-    };
+    let cord = create_cord(&pool, "the porch", owner).await;
     add_member(&pool, cord.id, admin, CordRole::Admin).await;
     add_member(&pool, cord.id, member, CordRole::Member).await;
     add_member(&pool, cord.id, other, CordRole::Member).await;
+    let porch = Porch {
+        cord,
+        owner,
+        admin,
+        member,
+        other,
+        stranger,
+    };
 
-    // -- the roster: owners first, soft-deleted actors left out ------------
+    scenario_the_roster(&pool, &porch).await;
+    scenario_only_owners_set_roles(&pool, &porch).await;
+    scenario_the_last_owner_stays(&pool, &porch).await;
+    scenario_remove(&pool, &porch).await;
+    scenario_leave(&pool, &porch).await;
+    scenario_soft_deleted_actors_arent_members(&pool, &porch).await;
+    scenario_two_owners_leaving_at_once(&pool).await;
+    let (shed, host) = scenario_the_unlocked_verbs_read_the_role_afresh(&pool, stranger).await;
+    scenario_accept_remove_and_role_set_race(&pool, &shed, host).await;
+}
+
+/// Owners first, soft-deleted actors left out.
+async fn scenario_the_roster(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord,
+        owner,
+        admin,
+        member,
+        other,
+        ..
+    } = porch.clone();
     assert_eq!(
-        roster(&pool, cord.id).await,
+        roster(pool, cord.id).await,
         vec![
             (owner, CordRole::Owner),
             (admin, CordRole::Admin),
@@ -154,8 +169,18 @@ async fn membership_changes_keep_one_role_and_an_owner() {
             (other, CordRole::Member),
         ]
     );
+}
 
-    // -- role set: owners only --------------------------------------------
+/// Owners set roles, keeping one role per (actor, cord).
+async fn scenario_only_owners_set_roles(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord,
+        owner,
+        admin,
+        member,
+        other,
+        stranger,
+    } = porch.clone();
     assert_refused(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
@@ -228,7 +253,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     assert_eq!(change.revoked[0].role, CordRole::Member);
     assert_eq!(change.granted.map(|(_, role)| role), Some(CordRole::Admin));
     assert!(
-        active_grants(&pool, cord.id)
+        active_grants(pool, cord.id)
             .await
             .iter()
             .filter(|(actor, _)| *actor == member)
@@ -237,7 +262,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
         "one role per (actor, cord)"
     );
     assert_eq!(
-        revoke_reasons(&pool, cord.id, member).await,
+        revoke_reasons(pool, cord.id, member).await,
         [CORD_REVOKE_REASON_ROLE_SET]
     );
 
@@ -255,7 +280,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
 
     // a stray second grant (which no verb writes) is folded away by the next
     // role change
-    add_member(&pool, cord.id, other, CordRole::Admin).await;
+    add_member(pool, cord.id, other, CordRole::Admin).await;
     in_tx!(pool, |tx| query_cord_member_role_set(
         &tx,
         cord.id,
@@ -266,15 +291,26 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     .await)
     .expect("normalize");
     assert!(
-        active_grants(&pool, cord.id)
+        active_grants(pool, cord.id)
             .await
             .iter()
             .filter(|(actor, _)| *actor == other)
             .map(|(_, role)| role.as_str())
             .eq([CORD_MEMBER]),
     );
+}
 
-    // -- the last owner --------------------------------------------------------
+/// The last owner can't step down or leave until another owner is made;
+/// after this, `admin` is the only owner and `member` an admin.
+async fn scenario_the_last_owner_stays(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord,
+        owner,
+        admin,
+        member,
+        other,
+        ..
+    } = porch.clone();
     assert_refused(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
@@ -319,7 +355,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     .await)
     .expect("step down");
     assert_eq!(
-        roster(&pool, cord.id).await,
+        roster(pool, cord.id).await,
         vec![
             (admin, CordRole::Owner),
             (member, CordRole::Admin),
@@ -341,10 +377,19 @@ async fn membership_changes_keep_one_role_and_an_owner() {
         "Forbidden",
     );
     // `admin` is now the only owner
-    let new_owner = admin;
-    let new_admin = member;
+}
 
-    // -- remove ----------------------------------------------------------------
+async fn scenario_remove(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord,
+        owner,
+        admin,
+        member,
+        other,
+        stranger,
+    } = porch.clone();
+    // the last-owner scenario made `admin` the only owner, `member` an admin
+    let (new_owner, new_admin) = (admin, member);
     // an admin removes plain members only
     assert_refused(
         in_tx!(pool, |tx| query_cord_member_remove(
@@ -385,7 +430,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     .expect("admin removes a member");
     assert_eq!(change.revoked.len(), 1);
     assert_eq!(
-        revoke_reasons(&pool, cord.id, other).await.last().unwrap(),
+        revoke_reasons(pool, cord.id, other).await.last().unwrap(),
         CORD_REVOKE_REASON_REMOVE
     );
     // the owner removes an admin
@@ -395,7 +440,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     .await)
     .expect("owner removes an admin");
     assert_eq!(
-        roster(&pool, cord.id).await,
+        roster(pool, cord.id).await,
         vec![(new_owner, CordRole::Owner), (owner, CordRole::Member)]
     );
     // a removed member is out: they can't act on the cord
@@ -403,20 +448,33 @@ async fn membership_changes_keep_one_role_and_an_owner() {
         in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, other).await),
         "CordNotFound",
     );
+}
 
-    // -- leave -----------------------------------------------------------------
+async fn scenario_leave(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord, owner, admin, ..
+    } = porch.clone();
+    let new_owner = admin;
     in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, owner).await).expect("a member leaves");
     assert_eq!(
-        revoke_reasons(&pool, cord.id, owner).await.last().unwrap(),
+        revoke_reasons(pool, cord.id, owner).await.last().unwrap(),
         CORD_REVOKE_REASON_LEAVE
     );
     assert_eq!(
-        roster(&pool, cord.id).await,
+        roster(pool, cord.id).await,
         vec![(new_owner, CordRole::Owner)]
     );
+}
 
-    // -- soft-deleted actors aren't members --------------------------------
-    add_member(&pool, cord.id, stranger, CordRole::Owner).await;
+async fn scenario_soft_deleted_actors_arent_members(pool: &Pool, porch: &Porch) {
+    let Porch {
+        cord,
+        admin,
+        stranger,
+        ..
+    } = porch.clone();
+    let new_owner = admin;
+    add_member(pool, cord.id, stranger, CordRole::Owner).await;
     {
         let client = pool.get().await.expect("pool.get");
         client
@@ -428,7 +486,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
             .expect("soft-delete");
     }
     assert_eq!(
-        roster(&pool, cord.id).await,
+        roster(pool, cord.id).await,
         vec![(new_owner, CordRole::Owner)]
     );
     // so a soft-deleted owner doesn't count toward keeping the cord owned
@@ -447,18 +505,14 @@ async fn membership_changes_keep_one_role_and_an_owner() {
         .await),
         "MemberNotFound",
     );
+}
 
-    // -- concurrency: two owners leave at once, one stays --------------------
-    let a = seed_actor(&pool, "race_a").await;
-    let b = seed_actor(&pool, "race_b").await;
-    let raced = {
-        let client = pool.get().await.expect("pool.get");
-        query_cord_create(&client, "the stoop", a)
-            .await
-            .expect("create")
-            .cord
-    };
-    add_member(&pool, raced.id, b, CordRole::Owner).await;
+/// Two owners leave at once: one stays.
+async fn scenario_two_owners_leaving_at_once(pool: &Pool) {
+    let a = seed_actor(pool, "race_a").await;
+    let b = seed_actor(pool, "race_b").await;
+    let raced = create_cord(pool, "the stoop", a).await;
+    add_member(pool, raced.id, b, CordRole::Owner).await;
     for _ in 0..5 {
         let leave = |actor: Uuid| {
             let pool = pool.clone();
@@ -490,28 +544,27 @@ async fn membership_changes_keep_one_role_and_an_owner() {
             matches!(refused, Err(CordMemberError::LastOwner)),
             "{refused:?}"
         );
-        let remaining = roster(&pool, raced.id).await;
+        let remaining = roster(pool, raced.id).await;
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].1, CordRole::Owner);
         // put the one who left back for the next round
         let gone = if remaining[0].0 == a { b } else { a };
-        add_member(&pool, raced.id, gone, CordRole::Owner).await;
+        add_member(pool, raced.id, gone, CordRole::Owner).await;
     }
+}
 
-    // -- the unlocked managing verbs read the role afresh --------------------
-    // rename and invite create and revoke gate on `query_cord_manager_role`,
-    // which reads the database in the action's transaction; the request's
-    // role-grant snapshot, taken before it, can still show a lost role
-    let host = seed_actor(&pool, "host").await;
-    let deputy = seed_actor(&pool, "deputy").await;
-    let shed = {
-        let client = pool.get().await.expect("pool.get");
-        query_cord_create(&client, "the shed", host)
-            .await
-            .expect("create")
-            .cord
-    };
-    add_member(&pool, shed.id, deputy, CordRole::Admin).await;
+/// Rename and invite create and revoke gate on `query_cord_manager_role`,
+/// which reads the database in the action's transaction; the request's
+/// role-grant snapshot, taken before it, can still show a lost role.
+/// Returns the cord it made and its owner.
+async fn scenario_the_unlocked_verbs_read_the_role_afresh(
+    pool: &Pool,
+    stranger: Uuid,
+) -> (CordRow, Uuid) {
+    let host = seed_actor(pool, "host").await;
+    let deputy = seed_actor(pool, "deputy").await;
+    let shed = create_cord(pool, "the shed", host).await;
+    add_member(pool, shed.id, deputy, CordRole::Admin).await;
     let snapshot = || async {
         let client = pool.get().await.expect("pool.get");
         fuz_auth::actor_queries::query_role_grants_for_actor(&client, &deputy)
@@ -565,35 +618,23 @@ async fn membership_changes_keep_one_role_and_an_owner() {
         manager_role().await,
         Err(CordMemberError::CordNotFound)
     ));
+    (shed, host)
+}
 
-    // -- concurrency: accept, remove, and role set on one actor ---------------
-    // the three writers take the cord's lock (accept after the link's), so
-    // whatever order they land in, the actor ends with at most one cord role
-    // and nobody deadlocks
-    let token = {
-        let client = pool.get().await.expect("pool.get");
-        let minted = generate_cord_invite_token();
-        query_cord_invite_create(
-            &client,
-            shed.id,
-            &minted.token_hash,
-            host,
-            None,
-            None,
-            false,
-        )
-        .await
-        .expect("mint");
-        minted
-    };
+/// The three writers take the cord's lock (accept after the link's), so
+/// whatever order they land in, the actor ends with at most one cord role
+/// and nobody deadlocks.
+async fn scenario_accept_remove_and_role_set_race(pool: &Pool, shed: &CordRow, host: Uuid) {
+    let (token, _) = mint(pool, shed.id, host, None, None, false).await;
+    let token_hash = hash_cord_invite_token(&token);
     for round in 0..8_u64 {
-        let target = seed_actor(&pool, &format!("contested_{round}")).await;
-        add_member(&pool, shed.id, target, CordRole::Member).await;
+        let target = seed_actor(pool, &format!("contested_{round}")).await;
+        add_member(pool, shed.id, target, CordRole::Member).await;
         // stagger the starts differently each round to vary the interleaving
         let delay = |slot: u64| std::time::Duration::from_millis(((round + slot) % 3) * 5);
         let run = |slot: u64, op: u8| {
             let pool = pool.clone();
-            let token_hash = token.token_hash.clone();
+            let token_hash = token_hash.clone();
             let cord_id = shed.id;
             let start = delay(slot);
             tokio::spawn(async move {
@@ -604,7 +645,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
                     0 => match query_cord_invite_accept(&tx, &token_hash, target).await {
                         Ok(a) if a.role_grant_id.is_some() => Ok("joined"),
                         Ok(_) => Ok("already in"),
-                        Err(e @ CordInviteAcceptError::Db(_)) => Err(format!("{e:?}")),
+                        Err(e @ CordInviteError::Db(_)) => Err(format!("{e:?}")),
                         Err(e) => Err(format!("unexpected: {e:?}")),
                     },
                     1 => match query_cord_member_remove(&tx, cord_id, host, target).await {
@@ -647,7 +688,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
             promoted.expect("join").expect("role set"),
         ];
         // one role per (actor, cord), and the roster agrees with the grants
-        let grants: Vec<String> = active_grants(&pool, shed.id)
+        let grants: Vec<String> = active_grants(pool, shed.id)
             .await
             .into_iter()
             .filter(|(actor, _)| *actor == target)
@@ -657,7 +698,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
             grants.len() <= 1,
             "round {round}: {outcome:?} left {grants:?}"
         );
-        let listed: Vec<CordRole> = roster(&pool, shed.id)
+        let listed: Vec<CordRole> = roster(pool, shed.id)
             .await
             .into_iter()
             .filter(|(actor, _)| *actor == target)

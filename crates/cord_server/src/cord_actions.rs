@@ -1,7 +1,7 @@
 //! Cord's RPC actions: creating, listing, reading, and renaming cords.
 //!
 //! This module also holds the helpers the invite and member actions share
-//! ([`crate::cord_invite_actions`], [`crate::cord_member_actions`]), and
+//! ([`crate::invite::actions`], [`crate::cord_member_actions`]), and
 //! [`cord_action_specs`] returns all of them.
 //!
 //! - `cord_create`: instance admins only. Creates the cord cell, grants the
@@ -30,8 +30,8 @@ use std::sync::Arc;
 use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
 use fuz_auth::{
-    AuditLogInput, AuditRouting, AuthSpec, CredentialGate, ROLE_ADMIN, RequestActorContext,
-    ResolvedAuthContext,
+    AuditEventType, AuditLogInput, AuditRouting, AuthSpec, CredentialGate, ROLE_ADMIN,
+    RequestActorContext, ResolvedAuthContext,
 };
 use fuz_http::{
     JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_params, not_found,
@@ -47,6 +47,7 @@ use crate::cord_queries::{
     CordAdminRow, CordCreated, CordRow, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids, validate_cord_name,
 };
+use crate::roles::CORD_SCOPE_KIND;
 
 /// Error reason: no such cord, or the caller isn't in it.
 pub const ERROR_CORD_NOT_FOUND: &str = "cord_not_found";
@@ -211,14 +212,99 @@ fn name_invalid(e: impl std::fmt::Display) -> JsonrpcError {
     invalid_params(&e.to_string(), Some(ERROR_CORD_NAME_INVALID))
 }
 
-/// Deserialize an optional field that may be absent but never `null`, the
-/// twin of a TS `.optional()`. Pair it with `#[serde(default)]`.
-pub(crate) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
+fn update_forbidden() -> JsonrpcError {
+    forbidden(
+        "only the cord's owner or admins may change it",
+        Some(ERROR_CORD_UPDATE_FORBIDDEN),
+    )
+}
+
+/// The caller's role in the cord, read afresh in the action's transaction
+/// ([`query_cord_manager_role`]) rather than from the request's snapshot, for
+/// the managing verbs that take no cord lock (rename, invite create and
+/// revoke): `cord_not_found` outside the cord (the IDOR mask), and the
+/// verb's own refusal, `member_forbidden()`, for a plain member, who already
+/// knows the cord exists.
+pub(crate) async fn require_cord_manager_fresh<C: GenericClient + ?Sized>(
+    client: &C,
+    method: &str,
+    auth: &RequestActorContext,
+    cord_id: Uuid,
+    member_forbidden: fn() -> JsonrpcError,
+) -> Result<CordRole, JsonrpcError> {
+    query_cord_manager_role(client, cord_id, auth.actor.id)
+        .await
+        .map_err(|e| match e {
+            CordMemberError::CordNotFound => cord_not_found(),
+            CordMemberError::Forbidden => member_forbidden(),
+            e => internal_error_with_source(method, &e),
+        })
+}
+
+// -- Audit --------------------------------------------------------------------
+
+/// Audit one of Cord's own events (`cord_create`, `cord_update`,
+/// `cord_invite_*`) in the action's transaction: in the caller's name, or,
+/// for an anonymous caller (`auth` of `None`), with the request's IP alone.
+pub(crate) async fn audit_cord_event<C: GenericClient + ?Sized>(
+    client: &C,
+    ctx: &ActionContext<'_>,
+    auth: Option<&RequestActorContext>,
+    event: &'static str,
+    metadata: Value,
+) -> Result<(), JsonrpcError> {
+    let mut input = AuditLogInput::for_custom_event(event, AuditRouting::InTx, AuditRouting::Pool);
+    if let Some(auth) = auth {
+        input = input.actor(auth.actor.id).account(auth.account.id);
+    }
+    ctx.audit_emit(client, input.ip(ctx.client_ip.clone()).metadata(metadata))
+        .await
+}
+
+/// A cord-role grant, as the spine's grant events record it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CordGrantAudit {
+    /// The grant holder's account.
+    pub target_account_id: Uuid,
+    /// The grant holder.
+    pub target_actor_id: Uuid,
+    pub cord_id: Uuid,
+    pub role: CordRole,
+    pub role_grant_id: Uuid,
+}
+
+/// Audit a cord-role grant change as the spine's own event
+/// (`role_grant_create` or `role_grant_revoke`), in the caller's name, with
+/// the cord as the grant's scope. `extra` appends one more metadata field
+/// (a revoke's `reason`, an accept's `source_invite_id`).
+pub(crate) async fn audit_cord_grant_event<C: GenericClient + ?Sized>(
+    client: &C,
+    ctx: &ActionContext<'_>,
+    auth: &RequestActorContext,
+    event: AuditEventType,
+    grant: &CordGrantAudit,
+    extra: Option<(&str, Value)>,
+) -> Result<(), JsonrpcError> {
+    let mut metadata = json!({
+        "role": grant.role,
+        "role_grant_id": grant.role_grant_id,
+        "scope_kind": CORD_SCOPE_KIND,
+        "scope_id": grant.cord_id,
+    });
+    if let Some((key, value)) = extra {
+        metadata[key] = value;
+    }
+    ctx.audit_emit(
+        client,
+        AuditLogInput::for_event(event)
+            .actor(auth.actor.id)
+            .account(auth.account.id)
+            .target_account(grant.target_account_id)
+            .target_actor(Some(grant.target_actor_id))
+            .ip(ctx.client_ip.clone())
+            .metadata(metadata),
+    )
+    .await
 }
 
 // -- Handlers -----------------------------------------------------------------
@@ -243,17 +329,16 @@ async fn handle_cord_create<C: GenericClient + ?Sized>(
         .await
         .map_err(|e| internal_error_with_source("cord_create", &e))?;
     // the cell has no `created_by`, so the audit row is the creator's record
-    ctx.audit_emit(
+    audit_cord_event(
         client,
-        AuditLogInput::for_custom_event("cord_create", AuditRouting::InTx, AuditRouting::Pool)
-            .actor(auth.actor.id)
-            .account(auth.account.id)
-            .ip(ctx.client_ip.clone())
-            .metadata(json!({
-                "cord_id": cord.id,
-                "name": cord.name,
-                "owner_role_grant_id": owner_role_grant_id,
-            })),
+        ctx,
+        Some(auth),
+        "cord_create",
+        json!({
+            "cord_id": cord.id,
+            "name": cord.name,
+            "owner_role_grant_id": owner_role_grant_id,
+        }),
     )
     .await?;
     Ok(json!({ "cord": to_cord_json(&cord, CordRole::Owner) }))
@@ -302,31 +387,21 @@ async fn handle_cord_update<C: GenericClient + ?Sized>(
     input: &CordUpdateInput,
 ) -> Result<Value, JsonrpcError> {
     // the role as the database has it now, not the dispatcher's snapshot,
-    // so an admin demoted or removed a moment ago can't rename; a member
-    // already knows the cord exists, so refusing them isn't a leak
-    let role = match query_cord_manager_role(client, input.cord_id, auth.actor.id).await {
-        Ok(role) => role,
-        Err(CordMemberError::CordNotFound) => return Err(cord_not_found()),
-        Err(CordMemberError::Forbidden) => {
-            return Err(forbidden(
-                "only the cord's owner or admins may change it",
-                Some(ERROR_CORD_UPDATE_FORBIDDEN),
-            ));
-        }
-        Err(e) => return Err(internal_error_with_source("cord_update", &e)),
-    };
+    // so an admin demoted or removed a moment ago can't rename
+    let role =
+        require_cord_manager_fresh(client, "cord_update", auth, input.cord_id, update_forbidden)
+            .await?;
     let name = validate_cord_name(&input.name).map_err(name_invalid)?;
     let cord = query_cord_rename(client, input.cord_id, &name, auth.actor.id)
         .await
         .map_err(|e| internal_error_with_source("cord_update", &e))?
         .ok_or_else(cord_not_found)?;
-    ctx.audit_emit(
+    audit_cord_event(
         client,
-        AuditLogInput::for_custom_event("cord_update", AuditRouting::InTx, AuditRouting::Pool)
-            .actor(auth.actor.id)
-            .account(auth.account.id)
-            .ip(ctx.client_ip.clone())
-            .metadata(json!({ "cord_id": cord.id, "name": cord.name })),
+        ctx,
+        Some(auth),
+        "cord_update",
+        json!({ "cord_id": cord.id, "name": cord.name }),
     )
     .await?;
     Ok(json!({ "cord": to_cord_json(&cord, role) }))
@@ -356,7 +431,7 @@ async fn handle_cord_admin_list<C: GenericClient + ?Sized>(
 #[must_use]
 pub fn cord_action_specs() -> Vec<ActionSpec> {
     let mut specs = cord_domain_action_specs();
-    specs.extend(crate::cord_invite_actions::cord_invite_action_specs());
+    specs.extend(crate::invite::actions::cord_invite_action_specs());
     specs.extend(crate::cord_member_actions::cord_member_action_specs());
     specs
 }

@@ -90,7 +90,7 @@ async fn main() -> ExitCode {
                     Box::pin(async move {
                         db.execute(
                             "TRUNCATE cord_invite_redemption, cord_invite, cell_field, cell_item, \
-                         cell_grant, cell RESTART IDENTITY CASCADE",
+                             cell_grant, cell RESTART IDENTITY CASCADE",
                             &[],
                         )
                         .await

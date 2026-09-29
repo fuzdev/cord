@@ -13,7 +13,7 @@
 //!   deletes the reservations still waiting on their signup, and is audited
 //!   as `cord_invite_revoke`. An expired link can be revoked too, which
 //!   releases its reservations ahead of the expiry sweep
-//!   ([`crate::cord_invite_sweep`]).
+//!   ([`crate::invite::sweep`]).
 //! - `cord_invite_preview`: anyone holding a token, signed in or not. The
 //!   link's status, whether it admits newcomers, and whether it can be
 //!   redeemed right now (`newcomers_open`: active, admitting newcomers, and
@@ -24,7 +24,7 @@
 //!   cord to anyone outside it.
 //! - `cord_invite_redeem`: anyone, identity unused. Reserves a username on
 //!   the instance through a newcomer link, spending one of its uses
-//!   ([`crate::cord_invite_redemption_queries`]); the newcomer then signs up
+//!   ([`crate::invite::redemption_queries`]); the newcomer then signs up
 //!   through the stock invite-gated signup with that username and accepts
 //!   the link. Redeeming a username already waiting on the link answers
 //!   `created: false` and spends nothing wherever accept would still take
@@ -53,7 +53,7 @@
 //! out.
 //!
 //! Create and revoke read the caller's role afresh inside the action's
-//! transaction ([`query_cord_manager_role`]), not from the request's
+//! transaction (`require_cord_manager_fresh`), not from the request's
 //! role-grant snapshot, which the dispatcher takes before the transaction
 //! opens: an admin removed in that gap can't mint a link to rejoin through.
 //! Neither takes the cord's row lock. Accept locks the link and then the
@@ -70,8 +70,8 @@ use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};
 use fuz_auth::primitive_schemas::{USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN};
 use fuz_auth::{
-    AuditEventType, AuditLogInput, AuditRouting, AuthSpec, CredentialGate, RateLimitClass,
-    RequestActorContext, is_valid_username_for_creation,
+    AuditEventType, AuthSpec, CredentialGate, RateLimitClass, RequestActorContext,
+    is_valid_username_for_creation,
 };
 use fuz_http::{
     JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params, not_found,
@@ -82,25 +82,23 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::cord_actions::{
-    cord_not_found, deserialize_present, dispatch_db, dispatch_db_ctx, handler, require_actor,
-    to_cord_json,
+    CordGrantAudit, audit_cord_event, audit_cord_grant_event, cord_not_found, dispatch_db,
+    dispatch_db_ctx, handler, require_actor, require_cord_manager_fresh, to_cord_json,
 };
 use crate::cord_authz::{CordRole, cord_role_in};
-use crate::cord_invite_queries::{
+use crate::cord_queries::query_cord_get;
+use crate::invite::queries::{
     CORD_INVITE_EXPIRES_IN_SECONDS_MAX, CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
-    CORD_INVITE_MAX_USES_MAX, CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX, CordInviteAcceptError,
-    CordInviteRevoked, CordInviteRow, CordInviteStatus, generate_cord_invite_token,
-    hash_cord_invite_token, is_plausible_cord_invite_token, query_cord_invite_accept,
-    query_cord_invite_by_token_hash, query_cord_invite_create, query_cord_invite_list,
-    query_cord_invite_revoke,
+    CORD_INVITE_MAX_USES_MAX, CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX, CordInviteError,
+    CordInviteRevoked, CordInviteRow, CordInviteStatus, CordInviteWithCounts,
+    generate_cord_invite_token, hash_cord_invite_token, is_plausible_cord_invite_token,
+    query_cord_invite_accept, query_cord_invite_by_token_hash, query_cord_invite_create,
+    query_cord_invite_list, query_cord_invite_revoke,
 };
-use crate::cord_invite_redemption_queries::{
-    CordInviteRedeemError, query_actor_holds_global_admin, query_actor_holds_global_admin_unlocked,
+use crate::invite::redemption_queries::{
+    query_actor_holds_global_admin, query_actor_holds_global_admin_unlocked,
     query_cord_invite_redeem,
 };
-use crate::cord_member_queries::{CordMemberError, query_cord_manager_role};
-use crate::cord_queries::query_cord_get;
-use crate::roles::CORD_SCOPE_KIND;
 
 /// Error reason: no link has that token (or id, on this cord).
 pub const ERROR_CORD_INVITE_NOT_FOUND: &str = "cord_invite_not_found";
@@ -138,11 +136,11 @@ pub const ERROR_CORD_INVITE_USERNAME_UNAVAILABLE: &str = "cord_invite_username_u
 struct CordInviteCreateInput {
     #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
     cord_id: Uuid,
-    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(default)]
     expires_in_seconds: Option<u32>,
-    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(default)]
     max_uses: Option<u32>,
-    #[serde(default, deserialize_with = "deserialize_present")]
+    #[serde(default)]
     admits_newcomers: Option<bool>,
     #[serde(
         default,
@@ -205,7 +203,8 @@ struct CordInviteRedeemInput {
 
 /// A link as its cord's owner and admins see it: `CordInviteJson` in
 /// `cord_action_specs.ts`. Never carries the token or its digest.
-fn to_cord_invite_json(row: &CordInviteRow) -> Value {
+fn to_cord_invite_json(invite: &CordInviteWithCounts) -> Value {
+    let row = &invite.invite;
     json!({
         "id": row.id,
         "cord_id": row.cord_id,
@@ -218,8 +217,8 @@ fn to_cord_invite_json(row: &CordInviteRow) -> Value {
         "use_count": row.use_count,
         "revoked_at": row.revoked_at,
         "status": row.status(),
-        "redemption_count": row.redemption_count,
-        "redemption_accepted_count": row.redemption_accepted_count,
+        "redemption_count": invite.redemption_count,
+        "redemption_accepted_count": invite.redemption_accepted_count,
     })
 }
 
@@ -229,25 +228,36 @@ fn invite_not_found() -> JsonrpcError {
     not_found("cord invite", Some(ERROR_CORD_INVITE_NOT_FOUND))
 }
 
-fn invite_revoked() -> JsonrpcError {
-    conflict(
-        "this invite link was revoked",
-        Some(ERROR_CORD_INVITE_REVOKED),
-    )
-}
-
-fn invite_expired() -> JsonrpcError {
-    conflict(
-        "this invite link has expired",
-        Some(ERROR_CORD_INVITE_EXPIRED),
-    )
-}
-
-fn invite_exhausted() -> JsonrpcError {
-    conflict(
-        "this invite link has no uses left",
-        Some(ERROR_CORD_INVITE_EXHAUSTED),
-    )
+/// The wire error for why a link can't be accepted or redeemed.
+fn invite_error(method: &str, e: CordInviteError) -> JsonrpcError {
+    match e {
+        CordInviteError::NotFound => invite_not_found(),
+        CordInviteError::Revoked => conflict(
+            "this invite link was revoked",
+            Some(ERROR_CORD_INVITE_REVOKED),
+        ),
+        CordInviteError::Expired => conflict(
+            "this invite link has expired",
+            Some(ERROR_CORD_INVITE_EXPIRED),
+        ),
+        CordInviteError::Exhausted => conflict(
+            "this invite link has no uses left",
+            Some(ERROR_CORD_INVITE_EXHAUSTED),
+        ),
+        CordInviteError::NotForNewcomers => conflict(
+            "this invite link is for people who already have an account; sign in to use it",
+            Some(ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS),
+        ),
+        CordInviteError::NewcomersClosed => conflict(
+            "this invite link no longer brings new people onto the instance",
+            Some(ERROR_CORD_INVITE_NEWCOMERS_CLOSED),
+        ),
+        CordInviteError::UsernameUnavailable => conflict(
+            "that username is taken",
+            Some(ERROR_CORD_INVITE_USERNAME_UNAVAILABLE),
+        ),
+        CordInviteError::Db(e) => internal_error_with_source(method, &e),
+    }
 }
 
 fn invite_forbidden() -> JsonrpcError {
@@ -260,7 +270,7 @@ fn invite_forbidden() -> JsonrpcError {
 /// Check, from the request's role-grant snapshot, that the caller may manage
 /// the cord's links: `cord_not_found` outside the cord (the IDOR mask),
 /// `cord_invite_forbidden` for a plain member. For the read-only list; the
-/// writes use [`require_invite_manager_fresh`].
+/// writes read the role afresh ([`require_cord_manager_fresh`]).
 fn require_invite_manager(auth: &RequestActorContext, cord_id: Uuid) -> Result<(), JsonrpcError> {
     let Some(role) = cord_role_in(&auth.role_grants, cord_id) else {
         return Err(cord_not_found());
@@ -269,22 +279,6 @@ fn require_invite_manager(auth: &RequestActorContext, cord_id: Uuid) -> Result<(
         return Err(invite_forbidden());
     }
     Ok(())
-}
-
-/// The same check against the caller's role read afresh in the action's
-/// transaction ([`query_cord_manager_role`]), for create and revoke.
-async fn require_invite_manager_fresh<C: GenericClient + ?Sized>(
-    client: &C,
-    method: &str,
-    auth: &RequestActorContext,
-    cord_id: Uuid,
-) -> Result<(), JsonrpcError> {
-    match query_cord_manager_role(client, cord_id, auth.actor.id).await {
-        Ok(_) => Ok(()),
-        Err(CordMemberError::CordNotFound) => Err(cord_not_found()),
-        Err(CordMemberError::Forbidden) => Err(invite_forbidden()),
-        Err(e) => Err(internal_error_with_source(method, &e)),
-    }
 }
 
 /// Refuse a newcomer link unless the caller holds a global `admin`, read
@@ -366,7 +360,14 @@ async fn handle_cord_invite_create<C: GenericClient + ?Sized>(
     auth: &RequestActorContext,
     input: &CordInviteCreateInput,
 ) -> Result<Value, JsonrpcError> {
-    require_invite_manager_fresh(client, "cord_invite_create", auth, input.cord_id).await?;
+    require_cord_manager_fresh(
+        client,
+        "cord_invite_create",
+        auth,
+        input.cord_id,
+        invite_forbidden,
+    )
+    .await?;
     validate_invite_limits(input)?;
     require_newcomer_minter_fresh(client, auth, input).await?;
     // a grant can outlive its cell only in a race with deletion; answer as
@@ -390,23 +391,19 @@ async fn handle_cord_invite_create<C: GenericClient + ?Sized>(
     )
     .await
     .map_err(|e| internal_error_with_source("cord_invite_create", &e))?;
-    ctx.audit_emit(
+    let row = &invite.invite;
+    audit_cord_event(
         client,
-        AuditLogInput::for_custom_event(
-            "cord_invite_create",
-            AuditRouting::InTx,
-            AuditRouting::Pool,
-        )
-        .actor(auth.actor.id)
-        .account(auth.account.id)
-        .ip(ctx.client_ip.clone())
-        .metadata(json!({
-            "cord_id": invite.cord_id,
-            "invite_id": invite.id,
-            "expires_at": invite.expires_at,
-            "max_uses": invite.max_uses,
-            "admits_newcomers": invite.admits_newcomers,
-        })),
+        ctx,
+        Some(auth),
+        "cord_invite_create",
+        json!({
+            "cord_id": row.cord_id,
+            "invite_id": row.id,
+            "expires_at": row.expires_at,
+            "max_uses": row.max_uses,
+            "admits_newcomers": row.admits_newcomers,
+        }),
     )
     .await?;
     Ok(json!({
@@ -436,7 +433,14 @@ async fn handle_cord_invite_revoke<C: GenericClient + ?Sized>(
 ) -> Result<Value, JsonrpcError> {
     // no cord lock: accept locks the link then the cord, and this UPDATE
     // locks the link, so taking the cord first would invert that order
-    require_invite_manager_fresh(client, "cord_invite_revoke", auth, input.cord_id).await?;
+    require_cord_manager_fresh(
+        client,
+        "cord_invite_revoke",
+        auth,
+        input.cord_id,
+        invite_forbidden,
+    )
+    .await?;
     let Some(CordInviteRevoked {
         invite,
         revoked,
@@ -448,21 +452,16 @@ async fn handle_cord_invite_revoke<C: GenericClient + ?Sized>(
         return Err(invite_not_found());
     };
     if revoked {
-        ctx.audit_emit(
+        audit_cord_event(
             client,
-            AuditLogInput::for_custom_event(
-                "cord_invite_revoke",
-                AuditRouting::InTx,
-                AuditRouting::Pool,
-            )
-            .actor(auth.actor.id)
-            .account(auth.account.id)
-            .ip(ctx.client_ip.clone())
-            .metadata(json!({
-                "cord_id": invite.cord_id,
-                "invite_id": invite.id,
+            ctx,
+            Some(auth),
+            "cord_invite_revoke",
+            json!({
+                "cord_id": invite.invite.cord_id,
+                "invite_id": invite.invite.id,
                 "released_signup_invite_ids": released_signup_invite_ids,
-            })),
+            }),
         )
         .await?;
     }
@@ -560,51 +559,23 @@ async fn handle_cord_invite_redeem<C: GenericClient + ?Sized>(
     }
     let username = input.username.to_lowercase();
     let token_hash = hash_cord_invite_token(&input.token);
-    let redeemed = match query_cord_invite_redeem(client, &token_hash, &username).await {
-        Ok(redeemed) => redeemed,
-        Err(CordInviteRedeemError::NotFound) => return Err(invite_not_found()),
-        Err(CordInviteRedeemError::Revoked) => return Err(invite_revoked()),
-        Err(CordInviteRedeemError::Expired) => return Err(invite_expired()),
-        Err(CordInviteRedeemError::Exhausted) => return Err(invite_exhausted()),
-        Err(CordInviteRedeemError::NotForNewcomers) => {
-            return Err(conflict(
-                "this invite link is for people who already have an account; sign in to use it",
-                Some(ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS),
-            ));
-        }
-        Err(CordInviteRedeemError::NewcomersClosed) => {
-            return Err(conflict(
-                "this invite link no longer brings new people onto the instance",
-                Some(ERROR_CORD_INVITE_NEWCOMERS_CLOSED),
-            ));
-        }
-        Err(CordInviteRedeemError::UsernameUnavailable) => {
-            return Err(conflict(
-                "that username is taken",
-                Some(ERROR_CORD_INVITE_USERNAME_UNAVAILABLE),
-            ));
-        }
-        Err(CordInviteRedeemError::Db(e)) => {
-            return Err(internal_error_with_source("cord_invite_redeem", &e));
-        }
-    };
+    let redeemed = query_cord_invite_redeem(client, &token_hash, &username)
+        .await
+        .map_err(|e| invite_error("cord_invite_redeem", e))?;
     if redeemed.created {
         // anonymous: the row carries no actor or account, only the IP
-        ctx.audit_emit(
+        audit_cord_event(
             client,
-            AuditLogInput::for_custom_event(
-                "cord_invite_redeem",
-                AuditRouting::InTx,
-                AuditRouting::Pool,
-            )
-            .ip(ctx.client_ip.clone())
-            .metadata(json!({
+            ctx,
+            None,
+            "cord_invite_redeem",
+            json!({
                 "cord_id": redeemed.cord.id,
                 "invite_id": redeemed.invite_id,
                 "redemption_id": redeemed.redemption.id,
                 "signup_invite_id": redeemed.redemption.signup_invite_id,
                 "username": redeemed.redemption.username,
-            })),
+            }),
         )
         .await?;
     }
@@ -625,56 +596,42 @@ async fn handle_cord_invite_accept<C: GenericClient + ?Sized>(
         return Err(invite_not_found());
     }
     let token_hash = hash_cord_invite_token(&input.token);
-    let accepted = match query_cord_invite_accept(client, &token_hash, auth.actor.id).await {
-        Ok(accepted) => accepted,
-        Err(CordInviteAcceptError::NotFound) => return Err(invite_not_found()),
-        Err(CordInviteAcceptError::Revoked) => return Err(invite_revoked()),
-        Err(CordInviteAcceptError::Expired) => return Err(invite_expired()),
-        Err(CordInviteAcceptError::Exhausted) => return Err(invite_exhausted()),
-        Err(CordInviteAcceptError::Db(e)) => {
-            return Err(internal_error_with_source("cord_invite_accept", &e));
-        }
-    };
+    let accepted = query_cord_invite_accept(client, &token_hash, auth.actor.id)
+        .await
+        .map_err(|e| invite_error("cord_invite_accept", e))?;
     if let Some(role_grant_id) = accepted.role_grant_id {
         // the spine's grant event, as its offer accept emits: the caller is
         // both the actor and the target
-        ctx.audit_emit(
+        audit_cord_grant_event(
             client,
-            AuditLogInput::for_event(AuditEventType::RoleGrantCreate)
-                .actor(auth.actor.id)
-                .account(auth.account.id)
-                .target_account(auth.account.id)
-                .target_actor(Some(auth.actor.id))
-                .ip(ctx.client_ip.clone())
-                .metadata(json!({
-                    "role": accepted.role,
-                    "role_grant_id": role_grant_id,
-                    "scope_kind": CORD_SCOPE_KIND,
-                    "scope_id": accepted.cord.id,
-                    "source_invite_id": accepted.invite_id,
-                })),
+            ctx,
+            auth,
+            AuditEventType::RoleGrantCreate,
+            &CordGrantAudit {
+                target_account_id: auth.account.id,
+                target_actor_id: auth.actor.id,
+                cord_id: accepted.cord.id,
+                role: accepted.role,
+                role_grant_id,
+            },
+            Some(("source_invite_id", json!(accepted.invite_id))),
         )
         .await?;
     }
     // a grant, or an existing member completing their redemption
     if accepted.role_grant_id.is_some() || accepted.redemption_id.is_some() {
-        ctx.audit_emit(
+        audit_cord_event(
             client,
-            AuditLogInput::for_custom_event(
-                "cord_invite_accept",
-                AuditRouting::InTx,
-                AuditRouting::Pool,
-            )
-            .actor(auth.actor.id)
-            .account(auth.account.id)
-            .ip(ctx.client_ip.clone())
-            .metadata(json!({
+            ctx,
+            Some(auth),
+            "cord_invite_accept",
+            json!({
                 "cord_id": accepted.cord.id,
                 "invite_id": accepted.invite_id,
                 "role_grant_id": accepted.role_grant_id,
                 "redemption_id": accepted.redemption_id,
                 "claimed_signup_invite_id": accepted.claimed_signup_invite_id,
-            })),
+            }),
         )
         .await?;
     }
@@ -947,19 +904,50 @@ mod tests {
     }
 
     #[test]
+    fn errors_map_to_their_reasons() {
+        let reason = |e| {
+            invite_error("m", e)
+                .data
+                .and_then(|d| d.get("reason").cloned())
+        };
+        for (e, expected) in [
+            (CordInviteError::NotFound, ERROR_CORD_INVITE_NOT_FOUND),
+            (CordInviteError::Revoked, ERROR_CORD_INVITE_REVOKED),
+            (CordInviteError::Expired, ERROR_CORD_INVITE_EXPIRED),
+            (CordInviteError::Exhausted, ERROR_CORD_INVITE_EXHAUSTED),
+            (
+                CordInviteError::NotForNewcomers,
+                ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS,
+            ),
+            (
+                CordInviteError::NewcomersClosed,
+                ERROR_CORD_INVITE_NEWCOMERS_CLOSED,
+            ),
+            (
+                CordInviteError::UsernameUnavailable,
+                ERROR_CORD_INVITE_USERNAME_UNAVAILABLE,
+            ),
+        ] {
+            assert_eq!(reason(e), Some(json!(expected)), "{expected}");
+        }
+    }
+
+    #[test]
     fn invite_json_never_carries_a_token() {
-        let row = CordInviteRow {
-            id: Uuid::from_u128(1),
-            cord_id: Uuid::from_u128(2),
-            role: "cord_member".to_owned(),
-            admits_newcomers: false,
-            created_by: None,
-            created_at: "2026-01-01T00:00:00Z".to_owned(),
-            expires_at: None,
-            max_uses: Some(3),
-            use_count: 3,
-            revoked_at: None,
-            expired: false,
+        let row = CordInviteWithCounts {
+            invite: CordInviteRow {
+                id: Uuid::from_u128(1),
+                cord_id: Uuid::from_u128(2),
+                role: "cord_member".to_owned(),
+                admits_newcomers: false,
+                created_by: None,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+                expires_at: None,
+                max_uses: Some(3),
+                use_count: 3,
+                revoked_at: None,
+                expired: false,
+            },
             redemption_count: 1,
             redemption_accepted_count: 0,
         };
