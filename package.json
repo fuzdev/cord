@@ -1,13 +1,14 @@
 {
-  "name": "@ryanatkn/cord",
+  "name": "@fuzdev/fuz_template",
   "version": "0.0.1",
-  "description": "a self-hosted hangout for friend groups and small communities: rooms, chat, forums, and Bluesky feeds over the fuz spine",
+  "description": "a web app template with TypeScript + SvelteKit + optional Rust for the fuz-stack",
   "glyph": "❄",
   "logo": "logo.svg",
   "logo_alt": "a friendly pixelated spider facing you",
   "license": "MIT",
   "private": true,
-  "repository": "https://github.com/ryanatkn/cord",
+  "homepage": "https://template.fuz.dev/",
+  "repository": "https://github.com/fuzdev/fuz_template",
   "scripts": {
     "start": "gro dev",
     "dev": "gro dev",
