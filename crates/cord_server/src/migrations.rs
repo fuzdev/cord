@@ -1,6 +1,6 @@
 //! Cord's own migration namespace (`cord`), chained after the spine's auth
 //! and cell namespaces in [`crate::router::cord_migration_namespaces`]: the
-//! cord tables reference `actor` and `cell`.
+//! cord tables reference `actor`, `invite`, and `cell`.
 //!
 //! Forward-only: append new entries and never edit one that has shipped.
 //! Every statement is guarded (`IF NOT EXISTS`), so a partly migrated
@@ -9,6 +9,7 @@
 use fuz_db::{ColumnProjections, Migration, MigrationNamespace};
 
 use crate::cord_invite_queries::CORD_INVITE_COLUMNS;
+use crate::cord_invite_redemption_queries::CORD_INVITE_REDEMPTION_COLUMNS;
 
 /// The namespace key in `schema_version`.
 pub const CORD_MIGRATIONS_NAMESPACE: &str = "cord";
@@ -21,8 +22,8 @@ pub const CORD_MIGRATIONS_NAMESPACE: &str = "cord";
 ///   CHECK, so a later link kind widens the constraint rather than adding a
 ///   column and backfilling it.
 /// - `admits_newcomers` marks a link that may bring someone who has no
-///   account yet onto the instance. Nothing sets it yet; it stays false, and
-///   every link works for existing accounts only.
+///   account yet onto the instance, through a redemption
+///   ([`CORD_INVITE_REDEMPTION_SCHEMA`]). Only an instance admin sets it.
 /// - `created_by` keeps the minter for the record, and goes null if their
 ///   actor is purged, as the spine's own `created_by` columns do; the link
 ///   belongs to the cord, not to its minter.
@@ -51,10 +52,46 @@ CREATE TABLE IF NOT EXISTS cord_invite (
 CREATE INDEX IF NOT EXISTS cord_invite_cord_idx ON cord_invite (cord_id, created_at DESC);
 ";
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    name: "cord_invite_schema",
-    sql: CORD_INVITE_SCHEMA,
-}];
+/// `cord_invite_redemption`: a newcomer link redeemed for a username, one
+/// row per redemption.
+///
+/// - `cord_invite_id` is the link; a redemption goes with its link.
+/// - `signup_invite_id` is the spine's username invite the redemption
+///   created, which the newcomer's signup claims. It goes null if an admin
+///   deletes that invite while it's unclaimed: the redemption stays as a
+///   record, its use stays spent, and nobody can accept through it.
+/// - `username` is the reserved username, lowercased as the spine stores it.
+/// - `accepted_by` and `accepted_at` are filled when the newcomer accepts the
+///   link; `accepted_by` goes null if their actor is purged, and
+///   `accepted_at` stays.
+const CORD_INVITE_REDEMPTION_SCHEMA: &str = r"
+CREATE TABLE IF NOT EXISTS cord_invite_redemption (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cord_invite_id UUID NOT NULL REFERENCES cord_invite(id) ON DELETE CASCADE,
+    signup_invite_id UUID REFERENCES invite(id) ON DELETE SET NULL,
+    username TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_by UUID REFERENCES actor(id) ON DELETE SET NULL,
+    accepted_at TIMESTAMPTZ,
+    CONSTRAINT cord_invite_redemption_signup_invite_unique UNIQUE (signup_invite_id),
+    CONSTRAINT cord_invite_redemption_accepted_paired CHECK (
+        accepted_by IS NULL OR accepted_at IS NOT NULL
+    )
+);
+CREATE INDEX IF NOT EXISTS cord_invite_redemption_invite_idx
+    ON cord_invite_redemption (cord_invite_id, created_at);
+";
+
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        name: "cord_invite_schema",
+        sql: CORD_INVITE_SCHEMA,
+    },
+    Migration {
+        name: "cord_invite_redemption_schema",
+        sql: CORD_INVITE_REDEMPTION_SCHEMA,
+    },
+];
 
 /// Cord's migration namespace, run after `fuz_auth::AUTH_MIGRATIONS` and
 /// `fuz_cell::CELL_MIGRATIONS`.
@@ -64,7 +101,10 @@ pub const CORD_MIGRATIONS: MigrationNamespace =
 /// The `cord` chain's columns registry, composed with the spine's by the
 /// column-projection guard (`tests/columns.rs`).
 pub const CORD_COLUMN_PROJECTIONS: ColumnProjections = ColumnProjections {
-    projections: &[("cord_invite", &CORD_INVITE_COLUMNS)],
+    projections: &[
+        ("cord_invite", &CORD_INVITE_COLUMNS),
+        ("cord_invite_redemption", &CORD_INVITE_REDEMPTION_COLUMNS),
+    ],
     exempt: &[],
 };
 

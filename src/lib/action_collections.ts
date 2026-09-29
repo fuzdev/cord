@@ -60,6 +60,7 @@ export const ActionSpecs = {
 	cord_invite_list: cord_specs.cord_invite_list_action_spec,
 	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec,
 	cord_invite_preview: cord_specs.cord_invite_preview_action_spec,
+	cord_invite_redeem: cord_specs.cord_invite_redeem_action_spec,
 	cord_invite_accept: cord_specs.cord_invite_accept_action_spec,
 	cord_member_list: cord_specs.cord_member_list_action_spec,
 	cord_member_role_set: cord_specs.cord_member_role_set_action_spec,
@@ -108,6 +109,7 @@ export interface ActionSpecs {
 	cord_invite_list: typeof cord_specs.cord_invite_list_action_spec;
 	cord_invite_revoke: typeof cord_specs.cord_invite_revoke_action_spec;
 	cord_invite_preview: typeof cord_specs.cord_invite_preview_action_spec;
+	cord_invite_redeem: typeof cord_specs.cord_invite_redeem_action_spec;
 	cord_invite_accept: typeof cord_specs.cord_invite_accept_action_spec;
 	cord_member_list: typeof cord_specs.cord_member_list_action_spec;
 	cord_member_role_set: typeof cord_specs.cord_member_role_set_action_spec;
@@ -164,6 +166,7 @@ export const ActionInputs = {
 	cord_invite_list: cord_specs.cord_invite_list_action_spec.input,
 	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec.input,
 	cord_invite_preview: cord_specs.cord_invite_preview_action_spec.input,
+	cord_invite_redeem: cord_specs.cord_invite_redeem_action_spec.input,
 	cord_invite_accept: cord_specs.cord_invite_accept_action_spec.input,
 	cord_member_list: cord_specs.cord_member_list_action_spec.input,
 	cord_member_role_set: cord_specs.cord_member_role_set_action_spec.input,
@@ -228,6 +231,7 @@ export interface ActionInputs {
 	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.input>;
 	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.input>;
 	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.input>;
+	cord_invite_redeem: z.infer<typeof cord_specs.cord_invite_redeem_action_spec.input>;
 	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.input>;
 	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.input>;
 	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
@@ -282,6 +286,7 @@ export const ActionOutputs = {
 	cord_invite_list: cord_specs.cord_invite_list_action_spec.output,
 	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec.output,
 	cord_invite_preview: cord_specs.cord_invite_preview_action_spec.output,
+	cord_invite_redeem: cord_specs.cord_invite_redeem_action_spec.output,
 	cord_invite_accept: cord_specs.cord_invite_accept_action_spec.output,
 	cord_member_list: cord_specs.cord_member_list_action_spec.output,
 	cord_member_role_set: cord_specs.cord_member_role_set_action_spec.output,
@@ -346,6 +351,7 @@ export interface ActionOutputs {
 	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.output>;
 	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.output>;
 	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.output>;
+	cord_invite_redeem: z.infer<typeof cord_specs.cord_invite_redeem_action_spec.output>;
 	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.output>;
 	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.output>;
 	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.output>;
@@ -559,6 +565,11 @@ export interface ActionEventDatas {
 		'cord_invite_preview',
 		ActionInputs['cord_invite_preview'],
 		ActionOutputs['cord_invite_preview']
+	>;
+	cord_invite_redeem: ActionEventRequestResponseData<
+		'cord_invite_redeem',
+		ActionInputs['cord_invite_redeem'],
+		ActionOutputs['cord_invite_redeem']
 	>;
 	cord_invite_accept: ActionEventRequestResponseData<
 		'cord_invite_accept',

@@ -69,6 +69,15 @@ pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 3] {
     ]
 }
 
+/// What [`build_router`] builds: the router, and the composition root behind
+/// it for the work [`crate::runtime::run_app`] runs beside the server.
+#[derive(Debug)]
+pub struct BuiltRouter {
+    pub router: Router,
+    /// `None` in boot-only mode, with no database.
+    pub app: Option<CordApp>,
+}
+
 /// Build the top-level router.
 ///
 /// Falls back to a boot-only router (`/health` and `/` only) when
@@ -90,10 +99,13 @@ pub async fn build_router(
     daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
     pre_migration_hook: Option<PreMigrationHook>,
-) -> Result<Router, StartupError> {
+) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
         tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
-        return Ok(boot_only_router());
+        return Ok(BuiltRouter {
+            router: boot_only_router(),
+            app: None,
+        });
     }
 
     let app = CordApp::build(env, password_hasher, rate_limiters, daemon_token_state)?;
@@ -144,13 +156,17 @@ pub async fn build_router(
         expected: Arc::new(expected_ready_schema()?),
     });
 
-    compose_full_router(
+    let router = compose_full_router(
         &app,
         env.trusted_proxies.clone(),
         ready,
         extra_action_specs_factory,
         rate_limiters,
-    )
+    )?;
+    Ok(BuiltRouter {
+        router,
+        app: Some(app),
+    })
 }
 
 /// The committed `expected_schema.json` (the column map of cord's full

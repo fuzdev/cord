@@ -573,9 +573,17 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     let token = {
         let client = pool.get().await.expect("pool.get");
         let minted = generate_cord_invite_token();
-        query_cord_invite_create(&client, shed.id, &minted.token_hash, host, None, None)
-            .await
-            .expect("mint");
+        query_cord_invite_create(
+            &client,
+            shed.id,
+            &minted.token_hash,
+            host,
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("mint");
         minted
     };
     for round in 0..8_u64 {

@@ -15,7 +15,15 @@
 //! so concurrent accepts can't push `use_count` past `max_uses` and can't
 //! race a membership change. Both locks are `FOR NO KEY UPDATE`: enough to
 //! serialize the writers (a revoke's UPDATE waits on the link's lock), and
-//! no stronger. The table's own CHECK refuses an overshoot too.
+//! no stronger. The table's own CHECK refuses an overshoot too. Redeeming a
+//! newcomer link ([`crate::cord_invite_redemption_queries`]) takes the
+//! link's lock first as well.
+//!
+//! A newcomer link spends its use at redemption, not at accept: the
+//! newcomer's accept finds their redemption and joins without spending
+//! another. Revoking a newcomer link releases its waiting reservations, and
+//! the expiry sweep ([`crate::cord_invite_sweep`]) releases them once the
+//! link has been expired for longer than the accept grace.
 //!
 //! Every function takes any `GenericClient`, so it composes on a pooled
 //! client or inside the action's transaction.
@@ -29,6 +37,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::cord_authz::CordRole;
+use crate::cord_invite_redemption_queries::{
+    query_cord_invite_redemption_complete, query_cord_invite_redemption_pending_for_actor,
+    query_cord_invite_redemption_release,
+};
 use crate::cord_member_queries::{query_cord_lock, query_cord_members};
 use crate::cord_queries::{CordRow, query_cord_get};
 use crate::roles::CORD_SCOPE_KIND;
@@ -77,6 +89,14 @@ pub const CORD_INVITE_TOKEN_LENGTH_MAX: usize = 128;
 pub const CORD_INVITE_EXPIRES_IN_SECONDS_MIN: u32 = 60;
 /// The longest expiry a link may be given, in seconds (365 days).
 pub const CORD_INVITE_EXPIRES_IN_SECONDS_MAX: u32 = 365 * 24 * 60 * 60;
+/// The longest expiry a link that admits newcomers may be given, in seconds
+/// (30 days): such a link reserves usernames on the instance, so it stays
+/// short-lived.
+pub const CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX: u32 = 30 * 24 * 60 * 60;
+/// How long after a newcomer link expires a newcomer who redeemed it before
+/// then may still accept it, in seconds (one hour): enough to finish the
+/// signup the redemption led to, and no longer.
+pub const CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS: u32 = 60 * 60;
 /// The most uses a link may be given.
 pub const CORD_INVITE_MAX_USES_MAX: u32 = 1000;
 
@@ -128,7 +148,8 @@ pub enum CordInviteStatus {
 }
 
 /// A link's status from its fields. Revocation wins over expiry, and expiry
-/// over exhaustion, so a link reports the most deliberate reason it's dead.
+/// over exhaustion, so a link reports the most deliberate reason it isn't
+/// active.
 #[must_use]
 pub fn cord_invite_status(
     revoked: bool,
@@ -165,6 +186,10 @@ pub struct CordInviteRow {
     pub revoked_at: Option<String>,
     /// Whether `expires_at` had passed when the row was read.
     pub expired: bool,
+    /// How many times the link was redeemed for a newcomer.
+    pub redemption_count: i64,
+    /// How many of those redemptions the newcomer has since accepted.
+    pub redemption_accepted_count: i64,
 }
 
 impl CordInviteRow {
@@ -181,7 +206,7 @@ impl CordInviteRow {
 }
 
 /// The read projection qualified by `alias`, timestamps ISO-formatted, then
-/// the computed `expired` flag.
+/// the computed `expired` flag and the redemption counts.
 fn invite_cols(alias: &str) -> String {
     let columns = qualify_columns(
         &CORD_INVITE_READ_COLUMNS,
@@ -192,7 +217,12 @@ fn invite_cols(alias: &str) -> String {
             alias,
         ),
     );
-    format!("{columns}, ({alias}.expires_at IS NOT NULL AND {alias}.expires_at <= NOW())")
+    format!(
+        "{columns}, ({alias}.expires_at IS NOT NULL AND {alias}.expires_at <= NOW()),
+         (SELECT COUNT(*) FROM cord_invite_redemption r WHERE r.cord_invite_id = {alias}.id),
+         (SELECT COUNT(*) FROM cord_invite_redemption r
+          WHERE r.cord_invite_id = {alias}.id AND r.accepted_at IS NOT NULL)"
+    )
 }
 
 /// Decode the [`invite_cols`] projection positionally.
@@ -209,6 +239,8 @@ fn decode_invite(row: &Row) -> CordInviteRow {
         use_count: row.get(col!(CORD_INVITE_READ_COLUMNS, "use_count")),
         revoked_at: row.get(col!(CORD_INVITE_READ_COLUMNS, "revoked_at")),
         expired: row.get(CORD_INVITE_READ_COLUMNS.len()),
+        redemption_count: row.get(CORD_INVITE_READ_COLUMNS.len() + 1),
+        redemption_accepted_count: row.get(CORD_INVITE_READ_COLUMNS.len() + 2),
     }
 }
 
@@ -216,7 +248,8 @@ fn decode_invite(row: &Row) -> CordInviteRow {
 ///
 /// `expires_in_seconds` counts from the database's now; `None` never
 /// expires. `max_uses` of `None` is unlimited. The caller validates both
-/// against the bounds above.
+/// against the bounds above, and checks that only an instance admin sets
+/// `admits_newcomers`, with both bounds.
 ///
 /// # Errors
 ///
@@ -229,10 +262,12 @@ pub async fn query_cord_invite_create<C: GenericClient + ?Sized>(
     created_by: Uuid,
     expires_in_seconds: Option<u32>,
     max_uses: Option<u32>,
+    admits_newcomers: bool,
 ) -> Result<CordInviteRow, CellError> {
     let sql = format!(
-        "INSERT INTO cord_invite (cord_id, token_hash, created_by, expires_at, max_uses)
-         VALUES ($1, $2, $3, NOW() + $4::bigint * INTERVAL '1 second', $5)
+        "INSERT INTO cord_invite
+             (cord_id, token_hash, created_by, expires_at, max_uses, admits_newcomers)
+         VALUES ($1, $2, $3, NOW() + $4::bigint * INTERVAL '1 second', $5, $6)
          RETURNING {}",
         invite_cols("cord_invite"),
     );
@@ -249,6 +284,7 @@ pub async fn query_cord_invite_create<C: GenericClient + ?Sized>(
                 &created_by,
                 &expires_in_seconds,
                 &max_uses,
+                &admits_newcomers,
             ],
         )
         .await?;
@@ -289,11 +325,27 @@ pub async fn query_cord_invite_by_token_hash<C: GenericClient + ?Sized>(
     Ok(row.as_ref().map(decode_invite))
 }
 
+/// A revoke's result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CordInviteRevoked {
+    /// The link, as of the revoke.
+    pub invite: CordInviteRow,
+    /// Whether this call revoked it; `false` when it already was.
+    pub revoked: bool,
+    /// The spine username invites this call deleted: the reservations of the
+    /// link's redemptions that were still waiting on their signup.
+    pub released_signup_invite_ids: Vec<Uuid>,
+}
+
 /// Revoke the link `invite_id` on the cord `cord_id`.
 ///
-/// Idempotent: revoking a revoked link keeps its first `revoked_at`. Returns
-/// the link and whether this call revoked it, or `None` when the cord has no
-/// such link.
+/// Idempotent: revoking a revoked link keeps its first `revoked_at` and
+/// changes nothing else. The revoke that revokes also releases the link's
+/// waiting reservations
+/// ([`query_cord_invite_redemption_release`]), so the stock signup no
+/// longer admits their usernames. An expired link can be revoked too, which
+/// releases its reservations without waiting for the expiry sweep. Returns
+/// `None` when the cord has no such link.
 ///
 /// # Errors
 ///
@@ -302,7 +354,7 @@ pub async fn query_cord_invite_revoke<C: GenericClient + ?Sized>(
     client: &C,
     cord_id: Uuid,
     invite_id: Uuid,
-) -> Result<Option<(CordInviteRow, bool)>, CellError> {
+) -> Result<Option<CordInviteRevoked>, CellError> {
     let sql = format!(
         "UPDATE cord_invite SET revoked_at = NOW()
          WHERE id = $1 AND cord_id = $2 AND revoked_at IS NULL
@@ -310,7 +362,13 @@ pub async fn query_cord_invite_revoke<C: GenericClient + ?Sized>(
         invite_cols("cord_invite"),
     );
     if let Some(row) = client.query_opt(&sql, &[&invite_id, &cord_id]).await? {
-        return Ok(Some((decode_invite(&row), true)));
+        let released_signup_invite_ids =
+            query_cord_invite_redemption_release(client, invite_id).await?;
+        return Ok(Some(CordInviteRevoked {
+            invite: decode_invite(&row),
+            revoked: true,
+            released_signup_invite_ids,
+        }));
     }
     let sql = format!(
         "SELECT {} FROM cord_invite i WHERE i.id = $1 AND i.cord_id = $2",
@@ -319,7 +377,83 @@ pub async fn query_cord_invite_revoke<C: GenericClient + ?Sized>(
     Ok(client
         .query_opt(&sql, &[&invite_id, &cord_id])
         .await?
-        .map(|row| (decode_invite(&row), false)))
+        .map(|row| CordInviteRevoked {
+            invite: decode_invite(&row),
+            revoked: false,
+            released_signup_invite_ids: Vec::new(),
+        }))
+}
+
+/// Whether the link `invite_id` expired more than `grace_seconds` ago, by
+/// the database clock. A link with no expiry never has.
+///
+/// # Errors
+///
+/// [`CellError::Db`] on a driver failure.
+async fn query_cord_invite_expired_beyond<C: GenericClient + ?Sized>(
+    client: &C,
+    invite_id: Uuid,
+    grace_seconds: u32,
+) -> Result<bool, CellError> {
+    Ok(client
+        .query_one(
+            "SELECT expires_at IS NOT NULL
+                AND expires_at + $2::bigint * INTERVAL '1 second' <= NOW()
+             FROM cord_invite WHERE id = $1",
+            &[&invite_id, &i64::from(grace_seconds)],
+        )
+        .await?
+        .get(0))
+}
+
+/// Lock the link `invite_id` if it expired more than `grace_seconds` ago,
+/// returning its cord's id.
+///
+/// `None` when it hasn't (by the database clock), when there's no such
+/// link, or when another transaction holds its lock.
+///
+/// The lock is accept's and redeem's first lock (`FOR NO KEY UPDATE`), taken
+/// with `SKIP LOCKED`, so the expiry sweep orders against them as revoke
+/// does, and passes over a busy link instead of waiting on it.
+///
+/// # Errors
+///
+/// [`CellError::Db`] on a driver failure.
+pub async fn query_cord_invite_try_lock_expired_beyond<C: GenericClient + ?Sized>(
+    client: &C,
+    invite_id: Uuid,
+    grace_seconds: u32,
+) -> Result<Option<Uuid>, CellError> {
+    Ok(client
+        .query_opt(
+            "SELECT cord_id FROM cord_invite
+             WHERE id = $1
+               AND expires_at IS NOT NULL
+               AND expires_at + $2::bigint * INTERVAL '1 second' <= NOW()
+             FOR NO KEY UPDATE SKIP LOCKED",
+            &[&invite_id, &i64::from(grace_seconds)],
+        )
+        .await?
+        .map(|row| row.get(0)))
+}
+
+/// Lock the link whose token hashes to `token_hash` (`FOR NO KEY UPDATE`,
+/// until the transaction ends) and read it, or `None`. The first lock both
+/// accept and redeem take.
+///
+/// # Errors
+///
+/// [`CellError::Db`] on a driver failure.
+pub async fn query_cord_invite_lock_by_token_hash<C: GenericClient + ?Sized>(
+    client: &C,
+    token_hash: &str,
+) -> Result<Option<CordInviteRow>, CellError> {
+    let sql = format!(
+        "SELECT {} FROM cord_invite i WHERE i.token_hash = $1 FOR NO KEY UPDATE OF i",
+        invite_cols("i"),
+    );
+    let row = client.query_opt(&sql, &[&token_hash]).await?;
+    Ok(row.as_ref().map(decode_invite))
 }
 
 /// Why accepting a link failed.
@@ -352,16 +486,37 @@ pub struct CordInviteAccepted {
     /// The grant created, or `None` when the caller was already a member (so
     /// nothing changed and no use was spent).
     pub role_grant_id: Option<Uuid>,
+    /// The newcomer redemption this accept completed, whose use was spent
+    /// when it was redeemed, or `None` for an ordinary accept.
+    pub redemption_id: Option<Uuid>,
+    /// The redemption's spine invite when this accept claimed it for the
+    /// caller's account, because their signup claimed none; `None` otherwise.
+    pub claimed_signup_invite_id: Option<Uuid>,
 }
 
 /// Accept the link whose token hashes to `token_hash`, as the actor
 /// `actor_id`.
 ///
-/// Locks the link's row, then the cord's. A caller already in the cord gets
-/// their current role back and spends no use, whatever the link's state.
-/// Otherwise the link must be active: then the caller is granted the link's
-/// role on the cord and `use_count` goes up by one, in the caller's
-/// transaction.
+/// Locks the link's row, then the cord's, then the caller's pending
+/// redemption of the link, if they have one
+/// ([`query_cord_invite_redemption_pending_for_actor`]): an unaccepted
+/// redemption whose signup invite the caller's account claimed, or, when
+/// their signup claimed none (open signup, or an older invite matching their
+/// email won), one whose signup invite is still unclaimed and names the
+/// caller's username. Completing the latter claims that invite for the
+/// caller's account ([`query_cord_invite_redemption_complete`]).
+///
+/// - A caller already in the cord gets their current role back and spends
+///   no use, whatever the link's state (completing their pending
+///   redemption, if any).
+/// - A caller with a pending redemption joins unless the link was revoked
+///   or expired more than [`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`]
+///   ago: the use was spent at redemption, so an exhausted link still
+///   admits them. The minter's authority isn't re-read: it was checked when
+///   the link was redeemed, and it confers nothing here but the cord role.
+/// - Anyone else needs an active link, and spends a use.
+///
+/// A join grants the link's role on the cord, in the caller's transaction.
 ///
 /// # Errors
 ///
@@ -372,17 +527,7 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     token_hash: &str,
     actor_id: Uuid,
 ) -> Result<CordInviteAccepted, CordInviteAcceptError> {
-    let sql = format!(
-        "SELECT {} FROM cord_invite i WHERE i.token_hash = $1 FOR NO KEY UPDATE",
-        invite_cols("i"),
-    );
-    let Some(invite) = client
-        .query_opt(&sql, &[&token_hash])
-        .await
-        .map_err(CellError::Db)?
-        .as_ref()
-        .map(decode_invite)
-    else {
+    let Some(invite) = query_cord_invite_lock_by_token_hash(client, token_hash).await? else {
         return Err(CordInviteAcceptError::NotFound);
     };
     if !query_cord_lock(client, invite.cord_id).await? {
@@ -391,20 +536,47 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     let Some(cord) = query_cord_get(client, invite.cord_id).await? else {
         return Err(CordInviteAcceptError::NotFound);
     };
+    let pending = if invite.admits_newcomers {
+        query_cord_invite_redemption_pending_for_actor(client, invite.id, actor_id).await?
+    } else {
+        None
+    };
+    let redemption_id = pending.as_ref().map(|p| p.id);
+    // every successful path below completes `pending`, claiming this invite
+    let claimed_signup_invite_id = pending.as_ref().and_then(|p| {
+        p.unclaimed_signup
+            .map(|(signup_invite_id, _)| signup_invite_id)
+    });
     let members = query_cord_members(client, invite.cord_id).await?;
     if let Some(member) = members.iter().find(|m| m.actor_id == actor_id) {
+        if let Some(pending) = &pending {
+            query_cord_invite_redemption_complete(client, pending, actor_id).await?;
+        }
         return Ok(CordInviteAccepted {
             cord,
             invite_id: invite.id,
             role: member.role,
             role_grant_id: None,
+            redemption_id,
+            claimed_signup_invite_id,
         });
     }
-    match invite.status() {
-        CordInviteStatus::Active => {}
-        CordInviteStatus::Revoked => return Err(CordInviteAcceptError::Revoked),
-        CordInviteStatus::Expired => return Err(CordInviteAcceptError::Expired),
-        CordInviteStatus::Exhausted => return Err(CordInviteAcceptError::Exhausted),
+    match (invite.status(), &pending) {
+        (CordInviteStatus::Active, _) | (CordInviteStatus::Exhausted, Some(_)) => {}
+        (CordInviteStatus::Expired, Some(_)) => {
+            if query_cord_invite_expired_beyond(
+                client,
+                invite.id,
+                CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
+            )
+            .await?
+            {
+                return Err(CordInviteAcceptError::Expired);
+            }
+        }
+        (CordInviteStatus::Revoked, _) => return Err(CordInviteAcceptError::Revoked),
+        (CordInviteStatus::Expired, None) => return Err(CordInviteAcceptError::Expired),
+        (CordInviteStatus::Exhausted, None) => return Err(CordInviteAcceptError::Exhausted),
     }
     let role = CordRole::from_role(&invite.role)
         .ok_or_else(|| CellError::Decode(format!("not a cord role: {}", invite.role)))?;
@@ -419,18 +591,25 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     )
     .await
     .map_err(CellError::Db)?;
-    client
-        .execute(
-            "UPDATE cord_invite SET use_count = use_count + 1 WHERE id = $1",
-            &[&invite.id],
-        )
-        .await
-        .map_err(CellError::Db)?;
+    if let Some(pending) = &pending {
+        // the use was spent when the link was redeemed
+        query_cord_invite_redemption_complete(client, pending, actor_id).await?;
+    } else {
+        client
+            .execute(
+                "UPDATE cord_invite SET use_count = use_count + 1 WHERE id = $1",
+                &[&invite.id],
+            )
+            .await
+            .map_err(CellError::Db)?;
+    }
     Ok(CordInviteAccepted {
         cord,
         invite_id: invite.id,
         role,
         role_grant_id: Some(grant.id),
+        redemption_id,
+        claimed_signup_invite_id,
     })
 }
 

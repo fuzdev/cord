@@ -14,6 +14,8 @@ import {
 	CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
 	CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
 	CORD_INVITE_MAX_USES_MAX,
+	CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
+	CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX,
 	CordInviteCreateInput,
 	ERROR_CORD_INVITE_EXHAUSTED,
 	ERROR_CORD_INVITE_EXPIRED,
@@ -27,7 +29,17 @@ import {
 	ERROR_CORD_MEMBER_REMOVE_SELF,
 	CORD_INVITE_TOKEN_LENGTH_MAX,
 	CordInviteToken,
-	cord_invite_create_action_spec
+	cord_invite_create_action_spec,
+	cord_invite_preview_action_spec,
+	cord_invite_redeem_action_spec,
+	CordInviteRedeemInput,
+	CordInvitePreviewOutput,
+	ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN,
+	ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED,
+	ERROR_CORD_INVITE_NEWCOMERS_CLOSED,
+	ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS,
+	ERROR_CORD_INVITE_USERNAME_INVALID,
+	ERROR_CORD_INVITE_USERNAME_UNAVAILABLE
 } from '#lib/cord_action_specs.ts';
 import { all_cord_action_specs } from '#lib/action_specs.ts';
 
@@ -193,6 +205,7 @@ describe('cord action specs', () => {
 			'cord_update',
 			'cord_invite_create',
 			'cord_invite_revoke',
+			'cord_invite_redeem',
 			'cord_invite_accept',
 			'cord_member_role_set',
 			'cord_member_remove',
@@ -211,14 +224,68 @@ describe('cord action specs', () => {
 		}
 	});
 
-	test('rate-limit only minting, per account', () => {
+	test('rate-limit minting per account, and what anonymous callers reach per IP', () => {
 		for (const spec of all_cord_domain_action_specs) {
-			assert.strictEqual(
-				spec.rate_limit,
-				spec === cord_invite_create_action_spec ? 'account' : undefined,
-				spec.method
+			const expected =
+				spec === cord_invite_create_action_spec
+					? 'account'
+					: spec === cord_invite_preview_action_spec || spec === cord_invite_redeem_action_spec
+						? 'ip'
+						: undefined;
+			assert.strictEqual(spec.rate_limit, expected, spec.method);
+		}
+	});
+
+	test('admit anonymous callers only to the preview and redemption', () => {
+		for (const spec of all_cord_domain_action_specs) {
+			const expected: Array<string | undefined> =
+				spec === cord_invite_preview_action_spec
+					? ['optional', 'optional']
+					: spec === cord_invite_redeem_action_spec
+						? ['none', 'none']
+						: ['required', 'required'];
+			assert.deepEqual([spec.auth?.account, spec.auth?.actor], expected, spec.method);
+		}
+	});
+});
+
+describe('CordInviteRedeemInput', () => {
+	test('takes a token and a username the instance would create, lowercased', () => {
+		assert.deepEqual(CordInviteRedeemInput.parse({ token: 't', username: 'NewComer' }), {
+			token: 't',
+			username: 'newcomer'
+		});
+		for (const username of ['ab', '1abc', 'abc_', 'a b c', 'ab.cd', 'x'.repeat(40)]) {
+			assert.ok(
+				!CordInviteRedeemInput.safeParse({ token: 't', username }).success,
+				JSON.stringify(username)
 			);
 		}
+	});
+
+	test('takes no acting actor, since redeem never reads the caller', () => {
+		assert.ok(
+			!CordInviteRedeemInput.safeParse({
+				token: 't',
+				username: 'newcomer',
+				acting: '11111111-1111-4111-8111-111111111111'
+			}).success
+		);
+	});
+});
+
+describe('CordInvitePreviewOutput', () => {
+	test('says whether the link can be redeemed now', () => {
+		const preview = {
+			status: 'active',
+			admits_newcomers: true,
+			newcomers_open: false,
+			cord: null,
+			role: null
+		};
+		assert.ok(CordInvitePreviewOutput.safeParse(preview).success);
+		const { newcomers_open: _, ...without } = preview;
+		assert.ok(!CordInvitePreviewOutput.safeParse(without).success);
 	});
 });
 
@@ -239,6 +306,14 @@ describe('CordInviteCreateInput', () => {
 		assert.ok(
 			CordInviteCreateInput.safeParse({
 				cord_id,
+				expires_in_seconds: 3600,
+				max_uses: 5,
+				admits_newcomers: true
+			}).success
+		);
+		assert.ok(
+			CordInviteCreateInput.safeParse({
+				cord_id,
 				expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
 				max_uses: CORD_INVITE_MAX_USES_MAX
 			}).success
@@ -250,7 +325,9 @@ describe('CordInviteCreateInput', () => {
 			{ expires_in_seconds: null },
 			{ max_uses: 0 },
 			{ max_uses: CORD_INVITE_MAX_USES_MAX + 1 },
-			{ max_uses: null }
+			{ max_uses: null },
+			{ admits_newcomers: null },
+			{ admits_newcomers: 'yes' }
 		]) {
 			assert.ok(
 				!CordInviteCreateInput.safeParse({ cord_id, ...limits }).success,
@@ -280,6 +357,16 @@ describe('the invite and member twins', () => {
 		);
 		assert.strictEqual(CORD_INVITE_EXPIRES_IN_SECONDS_MAX, 365 * 24 * 60 * 60);
 		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX'),
+			'30 * 24 * 60 * 60'
+		);
+		assert.strictEqual(CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX, 30 * 24 * 60 * 60);
+		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS'),
+			'60 * 60'
+		);
+		assert.strictEqual(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, 60 * 60);
+		assert.strictEqual(
 			rust_const('cord_invite_queries.rs', 'CORD_INVITE_MAX_USES_MAX'),
 			String(CORD_INVITE_MAX_USES_MAX)
 		);
@@ -297,6 +384,36 @@ describe('the invite and member twins', () => {
 			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_EXHAUSTED', ERROR_CORD_INVITE_EXHAUSTED],
 			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_FORBIDDEN', ERROR_CORD_INVITE_FORBIDDEN],
 			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_INVALID', ERROR_CORD_INVITE_INVALID],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN',
+				ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN
+			],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED',
+				ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED
+			],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS',
+				ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS
+			],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_NEWCOMERS_CLOSED',
+				ERROR_CORD_INVITE_NEWCOMERS_CLOSED
+			],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_USERNAME_INVALID',
+				ERROR_CORD_INVITE_USERNAME_INVALID
+			],
+			[
+				'cord_invite_actions.rs',
+				'ERROR_CORD_INVITE_USERNAME_UNAVAILABLE',
+				ERROR_CORD_INVITE_USERNAME_UNAVAILABLE
+			],
 			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_NOT_FOUND', ERROR_CORD_MEMBER_NOT_FOUND],
 			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_FORBIDDEN', ERROR_CORD_MEMBER_FORBIDDEN],
 			['cord_member_actions.rs', 'ERROR_CORD_LAST_OWNER', ERROR_CORD_LAST_OWNER],

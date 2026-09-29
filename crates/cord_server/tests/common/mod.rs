@@ -9,8 +9,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
 
+use cord_server::cord_invite_redemption_queries::{
+    CORD_INVITE_REDEMPTION_COLUMNS, CordInviteRedemptionRow,
+};
 use cord_server::router::cord_migration_namespaces;
-use fuz_db::{Pool, create_pool, run_migrations};
+use fuz_db::{Pool, col, create_pool, iso8601_timestamp_expr, qualify_columns, run_migrations};
 use uuid::Uuid;
 
 pub fn test_url() -> String {
@@ -53,4 +56,38 @@ pub async fn seed_actor(pool: &Pool, username: &str) -> Uuid {
         .await
         .expect("insert actor")
         .get(0)
+}
+
+/// Every redemption of the link `cord_invite_id`, oldest first. The server
+/// never lists them (the link list carries counts), so the read lives here.
+pub async fn redemption_list(pool: &Pool, cord_invite_id: Uuid) -> Vec<CordInviteRedemptionRow> {
+    let columns = &CORD_INVITE_REDEMPTION_COLUMNS;
+    let projection = qualify_columns(
+        columns,
+        "r",
+        iso8601_timestamp_expr(columns, &["created_at", "accepted_at"], "r"),
+    );
+    let client = pool.get().await.expect("pool.get");
+    client
+        .query(
+            &format!(
+                "SELECT {projection} FROM cord_invite_redemption r
+                 WHERE r.cord_invite_id = $1
+                 ORDER BY r.created_at, r.id"
+            ),
+            &[&cord_invite_id],
+        )
+        .await
+        .expect("list redemptions")
+        .iter()
+        .map(|row| CordInviteRedemptionRow {
+            id: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "id")),
+            cord_invite_id: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "cord_invite_id")),
+            signup_invite_id: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "signup_invite_id")),
+            username: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "username")),
+            created_at: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "created_at")),
+            accepted_by: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "accepted_by")),
+            accepted_at: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "accepted_at")),
+        })
+        .collect()
 }

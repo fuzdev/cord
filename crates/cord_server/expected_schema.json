@@ -113,6 +113,15 @@
     "token_hash",
     "use_count"
   ],
+  "cord_invite_redemption": [
+    "accepted_at",
+    "accepted_by",
+    "cord_invite_id",
+    "created_at",
+    "id",
+    "signup_invite_id",
+    "username"
+  ],
   "invite": [
     "claimed_at",
     "claimed_by",

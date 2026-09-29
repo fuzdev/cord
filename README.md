@@ -60,9 +60,11 @@ database.
   member count
 - cord invites and members, on the server so far: a cord's owner and
   admins make invite links that bring in people who already have an
-  account on the instance, owners set members' roles, and members can be
-  removed or leave. The pages for joining and for the member list come
-  next, then a cord's spaces and everything inside them
+  account on the instance, and an instance admin can make a link that
+  also welcomes someone new, who picks a username with it, signs up, and
+  joins. Owners set members' roles, and members can be removed or leave.
+  The pages for joining and for the member list come next, then a cord's
+  spaces and everything inside them
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
   sessions, invite-gated signup, first-account bootstrap, the cord,
   invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,

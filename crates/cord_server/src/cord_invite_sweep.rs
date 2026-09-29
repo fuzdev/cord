@@ -1,0 +1,234 @@
+//! The expiry sweep: releases the waiting reservations of newcomer links
+//! that expired past the accept grace.
+//!
+//! A redemption reserves its username as a spine username invite, which the
+//! stock signup admits whoever signs up with. Revoking the link releases the
+//! reservations still waiting on their signup; expiry alone doesn't, and
+//! once a link has been expired for longer than
+//! [`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`], accept refuses its
+//! newcomers, so its waiting reservations can no longer lead anyone into the
+//! cord. The sweep deletes them, so the stock signup stops admitting their
+//! usernames on an invite-gated instance.
+//!
+//! [`crate::runtime::run_app`] runs [`run_cord_invite_sweep`] beside the
+//! server: a pass at startup, after migrations, then one every
+//! [`CORD_INVITE_SWEEP_INTERVAL`], until shutdown.
+//!
+//! A pass ([`cord_invite_sweep_pass`]) selects the links expired past the
+//! grace (by the database clock) that still have waiting reservations, then
+//! releases each in its own transaction: it takes the link's lock with
+//! `SKIP LOCKED`, the first lock accept and redeem take, so it orders
+//! against them as revoke does, and a link that's busy waits for the next
+//! pass. It then releases through
+//! [`query_cord_invite_redemption_release`] and audits `cord_invite_expire`
+//! with the released spine invite ids, in the same transaction. The event
+//! has no actor, account, or IP: no request is behind it.
+//!
+//! A live link whose minter is no longer an instance admin isn't swept.
+//! Redeem refuses it new reservations, but the ones it already made were
+//! authorized when made, and accept doesn't re-read the minter, so they're
+//! still pending. They go when the link expires past the grace (a newcomer
+//! link expires within 30 days), or sooner if the link is revoked.
+//!
+//! Failures never stop the server: a failed link is logged and the pass
+//! moves on, and a pass that can't reach the database is logged and retried
+//! on the next tick.
+
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+
+use deadpool_postgres::{Object, Pool};
+use fuz_actions::PostCommitEffects;
+use fuz_auth::{AuditEmitter, AuditLogInput, AuditRouting};
+use fuz_cell::CellError;
+use serde_json::json;
+use tokio::time::MissedTickBehavior;
+use uuid::Uuid;
+
+use crate::cord_invite_queries::{
+    CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, query_cord_invite_try_lock_expired_beyond,
+};
+use crate::cord_invite_redemption_queries::{
+    query_cord_invite_expired_with_waiting_redemptions, query_cord_invite_redemption_release,
+};
+
+/// How often the expiry sweep runs after its startup pass (10 minutes).
+pub const CORD_INVITE_SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// The audit event a sweep writes for each link it releases.
+pub const CORD_INVITE_EXPIRE_AUDIT_EVENT: &str = "cord_invite_expire";
+
+/// One link's reservations, released by a sweep pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CordInviteExpireReleased {
+    pub cord_id: Uuid,
+    pub invite_id: Uuid,
+    /// The spine username invites deleted, never empty.
+    pub released_signup_invite_ids: Vec<Uuid>,
+}
+
+/// Run the expiry sweep until `shutdown` resolves: a pass now, then one
+/// every `interval`.
+///
+/// Shutdown drops a pass in progress, which rolls back the link it was on;
+/// the next start's pass picks it up.
+pub async fn run_cord_invite_sweep(
+    pool: Pool,
+    audit: Arc<AuditEmitter>,
+    interval: Duration,
+    shutdown: impl Future<Output = ()>,
+) {
+    let sweeping = async {
+        // the first tick completes at once: the startup pass
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            let released = cord_invite_sweep_pass(&pool, &audit).await;
+            if !released.is_empty() {
+                tracing::info!(
+                    links = released.len(),
+                    "released the waiting reservations of expired newcomer links"
+                );
+            }
+        }
+    };
+    tokio::select! {
+        () = shutdown => {}
+        _ = sweeping => {}
+    }
+}
+
+/// One sweep pass, returning what it released.
+///
+/// Releases the waiting reservations of every newcomer link expired past
+/// [`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`], each link in its own
+/// transaction, auditing `cord_invite_expire` for each.
+///
+/// Never fails: a database it can't reach, or a link that fails, is logged
+/// at `warn` and left for the next pass.
+pub async fn cord_invite_sweep_pass(
+    pool: &Pool,
+    audit: &Arc<AuditEmitter>,
+) -> Vec<CordInviteExpireReleased> {
+    let mut client = match pool.get().await {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(error = %e, "cord invite sweep: no database connection");
+            return Vec::new();
+        }
+    };
+    let invite_ids = match query_cord_invite_expired_with_waiting_redemptions(
+        &client,
+        CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
+    )
+    .await
+    {
+        Ok(invite_ids) => invite_ids,
+        Err(e) => {
+            tracing::warn!(error = %e, "cord invite sweep: selecting expired links failed");
+            return Vec::new();
+        }
+    };
+    let mut released = Vec::new();
+    for invite_id in invite_ids {
+        match sweep_link(&mut client, audit, invite_id).await {
+            Ok(Some(link)) => released.push(link),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    %invite_id,
+                    "cord invite sweep: releasing a link's reservations failed"
+                );
+            }
+        }
+    }
+    released
+}
+
+/// Release one link's waiting reservations in their own transaction, or
+/// `None` when the link is busy, no longer qualifies, or had nothing left
+/// to release.
+async fn sweep_link(
+    client: &mut Object,
+    audit: &Arc<AuditEmitter>,
+    invite_id: Uuid,
+) -> Result<Option<CordInviteExpireReleased>, CellError> {
+    let tx = client.transaction().await?;
+    // dropping `tx` uncommitted rolls it back
+    let Some(cord_id) = query_cord_invite_try_lock_expired_beyond(
+        &tx,
+        invite_id,
+        CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let released_signup_invite_ids = query_cord_invite_redemption_release(&tx, invite_id).await?;
+    if released_signup_invite_ids.is_empty() {
+        // a signup claimed what was waiting since the pass selected the link
+        return Ok(None);
+    }
+    // the listener fan-out (the admin audit stream) runs once the row commits
+    let post_commit = PostCommitEffects::new();
+    // no request behind it, so no actor, account, or IP
+    audit
+        .emit_in_tx(
+            &tx,
+            AuditLogInput::for_custom_event(
+                CORD_INVITE_EXPIRE_AUDIT_EVENT,
+                AuditRouting::InTx,
+                AuditRouting::Pool,
+            )
+            .metadata(json!({
+                "cord_id": cord_id,
+                "invite_id": invite_id,
+                "released_signup_invite_ids": released_signup_invite_ids,
+            })),
+            &post_commit,
+        )
+        .await?;
+    tx.commit().await?;
+    post_commit.drain_all().await;
+    Ok(Some(CordInviteExpireReleased {
+        cord_id,
+        invite_id,
+        released_signup_invite_ids,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pool whose every checkout fails fast (nothing listens on port 1).
+    fn unreachable_pool() -> Pool {
+        fuz_db::create_pool("postgres://127.0.0.1:1/cord_unreachable").expect("the pool is lazy")
+    }
+
+    #[tokio::test]
+    async fn a_pass_without_a_database_logs_and_releases_nothing() {
+        let pool = unreachable_pool();
+        let audit = Arc::new(AuditEmitter::new(pool.clone()));
+        assert!(cord_invite_sweep_pass(&pool, &audit).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_survives_an_outage_and_stops_on_shutdown() {
+        let pool = unreachable_pool();
+        let audit = Arc::new(AuditEmitter::new(pool.clone()));
+        // several failing passes, then shutdown
+        let sweep = run_cord_invite_sweep(
+            pool,
+            audit,
+            Duration::from_millis(10),
+            tokio::time::sleep(Duration::from_millis(100)),
+        );
+        tokio::time::timeout(Duration::from_secs(10), sweep)
+            .await
+            .expect("the sweep stops once shutdown resolves");
+    }
+}

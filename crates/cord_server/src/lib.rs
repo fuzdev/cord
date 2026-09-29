@@ -20,14 +20,19 @@
 //! the `cord_*` verbs. Membership changes live in [`cord_member_queries`]
 //! and [`cord_member_actions`]; invite links in cord's own `cord_invite`
 //! table ([`migrations`]), through [`cord_invite_queries`] and
-//! [`cord_invite_actions`]. [`offer_authorize`] restates, as defense in
-//! depth, the spine's refusal to offer a scoped builtin role.
+//! [`cord_invite_actions`], and newcomer links' redemptions in
+//! `cord_invite_redemption`, through [`cord_invite_redemption_queries`], whose
+//! reservations [`cord_invite_sweep`] releases once their link has expired.
+//! [`offer_authorize`] restates, as defense in depth, the spine's refusal to
+//! offer a scoped builtin role.
 
 pub mod app;
 pub mod cord_actions;
 pub mod cord_authz;
 pub mod cord_invite_actions;
 pub mod cord_invite_queries;
+pub mod cord_invite_redemption_queries;
+pub mod cord_invite_sweep;
 pub mod cord_member_actions;
 pub mod cord_member_queries;
 pub mod cord_queries;

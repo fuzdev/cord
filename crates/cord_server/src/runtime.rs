@@ -1,16 +1,18 @@
 //! The server lifecycle, owned by [`run_app`].
 //!
 //! [`run_app`] loads env, installs the signal handler, builds the router,
-//! binds the listener, and drains on shutdown, so the binary's `main` is
-//! tracing init, hasher selection, and one call.
+//! starts the invite expiry sweep, binds the listener, and drains on
+//! shutdown, so the binary's `main` is tracing init, hasher selection, and
+//! one call.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::cord_invite_sweep::{CORD_INVITE_SWEEP_INTERVAL, run_cord_invite_sweep};
 use crate::env::CordEnv;
 use crate::error::StartupError;
-use crate::router::build_router;
+use crate::router::{BuiltRouter, build_router};
 
 /// cord's instantiation of the spine's extra-action-specs factory, over
 /// [`crate::app::CordApp`].
@@ -73,6 +75,11 @@ pub struct RunAppOptions {
 
 /// Run the server to completion.
 ///
+/// With a database, the invite expiry sweep
+/// ([`crate::cord_invite_sweep`]) runs beside the server: once migrations
+/// have run, then every [`CORD_INVITE_SWEEP_INTERVAL`]. It stops when
+/// shutdown begins.
+///
 /// Returns once SIGINT or SIGTERM arrives and connections have drained.
 ///
 /// # Errors
@@ -98,7 +105,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // servers.
     let shutdown = fuz_http::shutdown_token();
 
-    let router = build_router(
+    let BuiltRouter { router, app } = build_router(
         &env,
         password_hasher,
         rate_limiters,
@@ -112,14 +119,34 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
 
+    // Migrations have run, so the sweep's first pass can start now.
+    let sweep = app.map(|app| {
+        let shutdown = shutdown.clone();
+        tokio::spawn(run_cord_invite_sweep(
+            app.pool,
+            app.audit_emitter,
+            CORD_INVITE_SWEEP_INTERVAL,
+            async move { shutdown.cancelled().await },
+        ))
+    });
+
     // Unconditional human-visible sentinel, whatever the log filter.
     eprintln!("cordd listening on http://{addr}");
 
     // `serve_with_shutdown` supplies `ConnectInfo<SocketAddr>` per connection
     // and bounds the drain.
-    fuz_http::serve_with_shutdown(listener, router, shutdown, drain_timeout)
-        .await
-        .map_err(StartupError::Serve)?;
+    let served =
+        fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), drain_timeout).await;
+
+    // A serve error returns without the signal, so cancel for the sweep's
+    // sake; it stops at once either way.
+    shutdown.cancel();
+    if let Some(sweep) = sweep
+        && let Err(e) = sweep.await
+    {
+        tracing::warn!(error = %e, "the invite expiry sweep task failed");
+    }
+    served.map_err(StartupError::Serve)?;
 
     eprintln!("cordd shutdown complete");
     Ok(())

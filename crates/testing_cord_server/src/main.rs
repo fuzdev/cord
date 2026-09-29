@@ -65,9 +65,9 @@ async fn main() -> ExitCode {
     eprintln!("testing_cordd starting (test-mode argon2 active)");
 
     // `_testing_reset` wipes the auth tables and seeds a fresh keeper; its
-    // `reset_state` hook then empties cord's invite links and the cell tables
-    // (cords live there) in the same transaction, so no cord or link outlives
-    // the accounts that were in it.
+    // `reset_state` hook then empties cord's invite links and their
+    // redemptions and the cell tables (cords live there) in the same
+    // transaction, so no cord or link outlives the accounts that were in it.
     let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
         #[allow(
             clippy::expect_used,
@@ -89,8 +89,8 @@ async fn main() -> ExitCode {
                 reset_state: Some(Arc::new(|db: fuz_actions::ActionDb<'_>| {
                     Box::pin(async move {
                         db.execute(
-                            "TRUNCATE cord_invite, cell_field, cell_item, cell_grant, cell \
-                         RESTART IDENTITY CASCADE",
+                            "TRUNCATE cord_invite_redemption, cord_invite, cell_field, cell_item, \
+                         cell_grant, cell RESTART IDENTITY CASCADE",
                             &[],
                         )
                         .await

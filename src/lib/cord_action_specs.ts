@@ -1,7 +1,7 @@
 /**
  * Action specs for the cord actions `cordd` defines: creating, listing,
  * reading, and renaming cords, the instance admins' ops list, a cord's invite
- * links, and its members.
+ * links (including newcomer links and their redemption), and its members.
  *
  * The server's handlers are in `crates/cord_server/src/cord_actions.rs`,
  * `cord_invite_actions.rs`, and `cord_member_actions.rs`; these specs are
@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { Uuid } from '@fuzdev/fuz_util/id.ts';
 import { ActingActor } from '@fuzdev/fuz_app/http/auth_shape.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
+import { Username } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import type {
 	ActionSpecUnion,
 	RequestResponseActionSpec
@@ -43,6 +44,18 @@ export const ERROR_CORD_INVITE_EXHAUSTED = 'cord_invite_exhausted';
 export const ERROR_CORD_INVITE_FORBIDDEN = 'cord_invite_forbidden';
 /** Error reason: an invite link's expiry or use limit is out of bounds. */
 export const ERROR_CORD_INVITE_INVALID = 'cord_invite_invalid';
+/** Error reason: only instance admins mint links that admit newcomers. */
+export const ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN = 'cord_invite_newcomer_forbidden';
+/** Error reason: a link that admits newcomers needs both an expiry and a use limit. */
+export const ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED = 'cord_invite_newcomer_unbounded';
+/** Error reason: the link is for people who already have an account. */
+export const ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS = 'cord_invite_not_for_newcomers';
+/** Error reason: the link's minter is no longer an instance admin, so it brings no one new onto the instance. */
+export const ERROR_CORD_INVITE_NEWCOMERS_CLOSED = 'cord_invite_newcomers_closed';
+/** Error reason: the username breaks the instance's username rules. */
+export const ERROR_CORD_INVITE_USERNAME_INVALID = 'cord_invite_username_invalid';
+/** Error reason: an account has the username, or an invite reserves it. */
+export const ERROR_CORD_INVITE_USERNAME_UNAVAILABLE = 'cord_invite_username_unavailable';
 /** Error reason: the target isn't a member of the cord. */
 export const ERROR_CORD_MEMBER_NOT_FOUND = 'cord_member_not_found';
 /** Error reason: the caller's cord role can't make this change. */
@@ -56,6 +69,14 @@ export const ERROR_CORD_MEMBER_REMOVE_SELF = 'cord_member_remove_self';
 export const CORD_INVITE_EXPIRES_IN_SECONDS_MIN = 60;
 /** The longest expiry an invite link may be given, in seconds (365 days). */
 export const CORD_INVITE_EXPIRES_IN_SECONDS_MAX = 365 * 24 * 60 * 60;
+/** The longest expiry a link that admits newcomers may be given, in seconds (30 days); the twin of the server's constant. */
+export const CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX = 30 * 24 * 60 * 60;
+/**
+ * How long after a newcomer link expires a newcomer who redeemed it before
+ * then may still accept it, in seconds (one hour); the twin of the server's
+ * constant.
+ */
+export const CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS = 60 * 60;
 /** The most uses an invite link may be given. */
 export const CORD_INVITE_MAX_USES_MAX = 1000;
 /** The longest invite token the server looks up; the twin of the server's constant. */
@@ -211,13 +232,19 @@ export const CordInviteJson = z.strictObject({
 	id: Uuid,
 	cord_id: Uuid,
 	role: CordRole,
+	/** Whether the link can bring someone with no account onto the instance. */
+	admits_newcomers: z.boolean(),
 	created_by: Uuid.nullable(),
 	created_at: z.string(),
 	expires_at: z.string().nullable(),
 	max_uses: z.number().int().nullable(),
 	use_count: z.number().int(),
 	revoked_at: z.string().nullable(),
-	status: CordInviteStatus
+	status: CordInviteStatus,
+	/** How many times the link was redeemed for a newcomer; each spent a use. */
+	redemption_count: z.number().int(),
+	/** How many of those newcomers have since accepted the link. */
+	redemption_accepted_count: z.number().int()
 });
 export type CordInviteJson = z.infer<typeof CordInviteJson>;
 
@@ -306,6 +333,10 @@ export const CordInviteCreateInput = z.strictObject({
 		.max(CORD_INVITE_MAX_USES_MAX)
 		.optional()
 		.meta({ description: 'How many people the link may bring in; absent, no limit.' }),
+	admits_newcomers: z.boolean().optional().meta({
+		description:
+			'Whether the link can bring someone with no account onto the instance. Instance admins only, and the link needs both a use limit and an expiry, of at most `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`.'
+	}),
 	acting: ActingActor
 });
 export type CordInviteCreateInput = z.infer<typeof CordInviteCreateInput>;
@@ -342,14 +373,46 @@ export const CordInvitePreviewInput = z.strictObject({
 });
 export type CordInvitePreviewInput = z.infer<typeof CordInvitePreviewInput>;
 
+/** A cord as a link's preview and redemption show it. */
+export const CordInviteCordJson = z.strictObject({ id: Uuid, name: z.string() });
+export type CordInviteCordJson = z.infer<typeof CordInviteCordJson>;
+
 export const CordInvitePreviewOutput = z.strictObject({
 	status: CordInviteStatus,
-	/** The cord, when the link is active or the caller is already in it. */
-	cord: z.strictObject({ id: Uuid, name: z.string() }).nullable(),
-	/** The caller's role in the cord, or `null` when they aren't in it. */
+	/** Whether the link can bring someone with no account onto the instance. */
+	admits_newcomers: z.boolean(),
+	/**
+	 * Whether the link can be redeemed now: it's active, admits newcomers,
+	 * and its minter is still an instance admin.
+	 */
+	newcomers_open: z.boolean(),
+	/**
+	 * The cord: for a signed-in caller, when the link is active or they're
+	 * already in it; for an anonymous one, only when `newcomers_open`.
+	 */
+	cord: CordInviteCordJson.nullable(),
+	/** The caller's role in the cord, or `null` when they aren't in it or aren't signed in. */
 	role: CordRole.nullable()
 });
 export type CordInvitePreviewOutput = z.infer<typeof CordInvitePreviewOutput>;
+
+/** No `acting`: redeem is public and never reads the caller. */
+export const CordInviteRedeemInput = z.strictObject({
+	token: CordInviteToken,
+	username: Username.meta({
+		description: 'The username to reserve for the newcomer, who then signs up with it.'
+	})
+});
+export type CordInviteRedeemInput = z.infer<typeof CordInviteRedeemInput>;
+
+export const CordInviteRedeemOutput = z.strictObject({
+	cord: CordInviteCordJson,
+	/** The reserved username, lowercased as the instance stores it. */
+	username: z.string(),
+	/** `false` when this username's redemption through the link was already waiting, so nothing changed and no use was spent. */
+	created: z.boolean()
+});
+export type CordInviteRedeemOutput = z.infer<typeof CordInviteRedeemOutput>;
 
 export const CordInviteAcceptInput = z.strictObject({
 	token: CordInviteToken,
@@ -477,7 +540,7 @@ export const cord_invite_create_action_spec = {
 	async: true,
 	rate_limit: 'account',
 	description:
-		"Create an invite link to a cord, with an optional expiry and use limit. The cord's owner or admins only. Returns the link's token, which is never shown again."
+		"Create an invite link to a cord, with an optional expiry and use limit. The cord's owner or admins only; a link that admits newcomers also needs an instance admin (a global `admin` grant) and both limits, with an expiry of at most 30 days. Returns the link's token, which is never shown again."
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_list_action_spec = {
@@ -490,7 +553,7 @@ export const cord_invite_list_action_spec = {
 	output: CordInviteListOutput,
 	async: true,
 	description:
-		"A cord's invite links with their status, newest first. The cord's owner or admins only."
+		"A cord's invite links with their status and redemption counts, newest first. The cord's owner or admins only."
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_revoke_action_spec = {
@@ -510,13 +573,28 @@ export const cord_invite_preview_action_spec = {
 	method: 'cord_invite_preview',
 	kind: 'request_response',
 	initiator: 'frontend',
-	auth: { account: 'required', actor: 'required' },
+	auth: { account: 'optional', actor: 'optional' },
 	side_effects: false,
 	input: CordInvitePreviewInput,
 	output: CordInvitePreviewOutput,
 	async: true,
+	rate_limit: 'ip',
 	description:
-		"An invite link's status, with its cord's name when the link is active or the caller is already in the cord."
+		"An invite link's status, whether it admits newcomers, and whether it can be redeemed now, signed in or not. Names its cord to a signed-in caller when the link is active or they're already in the cord, and to an anonymous caller only when the link can be redeemed now."
+} satisfies RequestResponseActionSpec;
+
+export const cord_invite_redeem_action_spec = {
+	method: 'cord_invite_redeem',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'none', actor: 'none' },
+	side_effects: true,
+	input: CordInviteRedeemInput,
+	output: CordInviteRedeemOutput,
+	async: true,
+	rate_limit: 'ip',
+	description:
+		'Reserve a username on the instance through a newcomer link, spending one of its uses; the newcomer then signs up with that username and accepts the link. Needs no session, and ignores one. Redeeming the same username through the same link again, before its signup, changes nothing and answers `created: false`, even once the link is used up. A dead link (revoked, expired, not for newcomers, or closed because its minter is no longer an instance admin) refuses it as it would any other username.'
 } satisfies RequestResponseActionSpec;
 
 export const cord_invite_accept_action_spec = {
@@ -529,7 +607,7 @@ export const cord_invite_accept_action_spec = {
 	output: CordInviteAcceptOutput,
 	async: true,
 	description:
-		'Join a cord through an invite link, as a member. A cookie session only. Someone already in the cord keeps their role and spends no use of the link.'
+		'Join a cord through an invite link, as a member. A cookie session only. Someone already in the cord keeps their role and spends no use of the link, and so does a newcomer who redeemed the link before signing up, whose use was spent then; they may accept until an hour after the link expires.'
 } satisfies RequestResponseActionSpec;
 
 export const cord_member_list_action_spec = {
@@ -593,6 +671,7 @@ export const all_cord_domain_action_specs: Array<ActionSpecUnion> = [
 	cord_invite_list_action_spec,
 	cord_invite_revoke_action_spec,
 	cord_invite_preview_action_spec,
+	cord_invite_redeem_action_spec,
 	cord_invite_accept_action_spec,
 	cord_member_list_action_spec,
 	cord_member_role_set_action_spec,

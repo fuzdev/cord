@@ -159,13 +159,16 @@ describe('invite links', () => {
 				id: '',
 				cord_id: cord.id,
 				role: CORD_MEMBER,
+				admits_newcomers: false,
 				created_by: fixture.actor.id,
 				created_at: '',
 				expires_at: '',
 				max_uses: 2,
 				use_count: 0,
 				revoked_at: null,
-				status: 'active'
+				status: 'active',
+				redemption_count: 0,
+				redemption_accepted_count: 0
 			}
 		);
 
@@ -176,6 +179,8 @@ describe('invite links', () => {
 		);
 		assert.deepEqual(preview, {
 			status: 'active',
+			admits_newcomers: false,
+			newcomers_open: false,
 			cord: { id: cord.id, name: 'the porch' },
 			role: null
 		});
@@ -239,7 +244,9 @@ describe('invite links', () => {
 				{
 					cord_id: cord.id,
 					invite_id: minted.invite.id,
-					role_grant_id: (grants[0]!.metadata as { role_grant_id: string }).role_grant_id
+					role_grant_id: (grants[0]!.metadata as { role_grant_id: string }).role_grant_id,
+					redemption_id: null,
+					claimed_signup_invite_id: null
 				}
 			]
 		);
@@ -366,7 +373,13 @@ describe('invite links', () => {
 				await call(fixture, late, 'cord_invite_preview', { token }),
 				CordInvitePreviewOutput
 			);
-			assert.deepEqual(preview, { status, cord: null, role: null });
+			assert.deepEqual(preview, {
+				status,
+				admits_newcomers: false,
+				newcomers_open: false,
+				cord: null,
+				role: null
+			});
 		}
 		// a member sees their cord and role, whatever the link's state
 		const member_preview = expect_output(
@@ -375,6 +388,8 @@ describe('invite links', () => {
 		);
 		assert.deepEqual(member_preview, {
 			status: 'exhausted',
+			admits_newcomers: false,
+			newcomers_open: false,
 			cord: { id: cord.id, name: 'the porch' },
 			role: CORD_MEMBER
 		});

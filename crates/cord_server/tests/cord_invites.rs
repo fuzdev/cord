@@ -67,6 +67,7 @@ async fn mint(
         by,
         expires_in_seconds,
         max_uses,
+        false,
     )
     .await
     .expect("create invite");
@@ -211,18 +212,19 @@ async fn invite_links_admit_existing_accounts() {
     let (revokable, revokable_id) = mint(&pool, cord.id, owner, None, None).await;
     {
         let client = pool.get().await.expect("pool.get");
-        let (row, revoked) = query_cord_invite_revoke(&client, cord.id, revokable_id)
+        let first = query_cord_invite_revoke(&client, cord.id, revokable_id)
             .await
             .expect("revoke")
             .expect("exists");
-        assert!(revoked);
-        let first_revoked_at = row.revoked_at.clone().expect("revoked_at");
-        let (row, revoked) = query_cord_invite_revoke(&client, cord.id, revokable_id)
+        assert!(first.revoked);
+        assert!(first.released_signup_invite_ids.is_empty());
+        let first_revoked_at = first.invite.revoked_at.clone().expect("revoked_at");
+        let again = query_cord_invite_revoke(&client, cord.id, revokable_id)
             .await
             .expect("revoke again")
             .expect("exists");
-        assert!(!revoked, "a second revoke changes nothing");
-        assert_eq!(row.revoked_at, Some(first_revoked_at));
+        assert!(!again.revoked, "a second revoke changes nothing");
+        assert_eq!(again.invite.revoked_at, Some(first_revoked_at));
         // another cord's id doesn't reach it
         assert!(
             query_cord_invite_revoke(&client, Uuid::nil(), revokable_id)

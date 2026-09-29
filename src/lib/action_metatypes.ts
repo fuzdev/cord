@@ -51,6 +51,7 @@ export const ActionMethod = z.enum([
 	'cord_invite_list',
 	'cord_invite_revoke',
 	'cord_invite_preview',
+	'cord_invite_redeem',
 	'cord_invite_accept',
 	'cord_member_list',
 	'cord_member_role_set',
@@ -103,6 +104,7 @@ export const RequestResponseActionMethod = z.enum([
 	'cord_invite_list',
 	'cord_invite_revoke',
 	'cord_invite_preview',
+	'cord_invite_redeem',
 	'cord_invite_accept',
 	'cord_member_list',
 	'cord_member_role_set',
@@ -162,6 +164,7 @@ export const FrontendActionMethod = z.enum([
 	'cord_invite_list',
 	'cord_invite_revoke',
 	'cord_invite_preview',
+	'cord_invite_redeem',
 	'cord_invite_accept',
 	'cord_member_list',
 	'cord_member_role_set',
@@ -215,6 +218,7 @@ export const BackendActionMethod = z.enum([
 	'cord_invite_list',
 	'cord_invite_revoke',
 	'cord_invite_preview',
+	'cord_invite_redeem',
 	'cord_invite_accept',
 	'cord_member_list',
 	'cord_member_role_set',
@@ -265,6 +269,7 @@ export const BackendRequestResponseMethod = z.enum([
 	'cord_invite_list',
 	'cord_invite_revoke',
 	'cord_invite_preview',
+	'cord_invite_redeem',
 	'cord_invite_accept',
 	'cord_member_list',
 	'cord_member_role_set',
@@ -491,6 +496,12 @@ export interface FrontendActionsApi {
 		options?: RpcClientCallOptions
 	) => Promise<
 		Result<{ value: ActionOutputs['cord_invite_preview'] }, { error: JsonrpcErrorObject }>
+	>;
+	cord_invite_redeem: (
+		input: ActionInputs['cord_invite_redeem'],
+		options?: RpcClientCallOptions
+	) => Promise<
+		Result<{ value: ActionOutputs['cord_invite_redeem'] }, { error: JsonrpcErrorObject }>
 	>;
 	cord_invite_accept: (
 		input: ActionInputs['cord_invite_accept'],

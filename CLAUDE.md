@@ -9,13 +9,14 @@ The repo is a SvelteKit static frontend plus a Rust workspace whose server
 crate, `crates/cord_server` (bin `cordd`), is the server skeleton over the
 fuz spine: accounts, sessions, bootstrap, invite-gated signup, JSON-RPC,
 WebSocket, health and readiness, plus cords themselves (create, list, read,
-rename), their invite links for people who already have an account, and
-their members (list, role changes, remove, leave); see Cords below. The
+rename), their invite links (for people who already have an account, and
+admin-minted ones that bring someone new onto the instance), and their
+members (list, role changes, remove, leave); see Cords below. The
 frontend is the auth shell over that server (login, signup, bootstrap,
 account, admin) with the cord list, a minimal cord page, and the admin
 cords list; it has no invite, join, or member screens yet. Nothing happens
-inside a cord yet (no spaces), and a link can't bring someone new onto the
-instance; don't describe planned features as working.
+inside a cord yet (no spaces); don't describe planned features as
+working.
 
 The intended shape, briefly:
 
@@ -131,9 +132,12 @@ recorded in the `cord_create` audit event instead.
   (`query_cord_manager_role`), since the request's role-grant snapshot is
   taken before the transaction opens. An admin demoted or removed before
   that read can't rename the cord or mint a link to rejoin through; a
-  demotion committing while the verb runs is ordered after it. Revoke
-  must not lock the cord: accept locks the link and then the cord, so the
-  reverse order would deadlock. The read-only verbs (`cord_get`,
+  demotion committing while the verb runs is ordered after it. Minting a
+  newcomer link reads the caller's global `admin` grant the same way
+  (under a share lock). Revoke must not lock the cord: accept locks the
+  link and then the cord, so the reverse order would deadlock. Redeem
+  locks the link and then share-locks its minter's global `admin` grant,
+  and takes no cord lock. The read-only verbs (`cord_get`,
   `cord_invite_list`, `cord_member_list`) trust the snapshot.
 - **No scoped builtin roles.** A builtin role (`admin`, `keeper`) is
   only ever granted globally. The spine enforces this on every grant path
@@ -164,42 +168,146 @@ generic `fuz_cell_actions` verb set is not mounted):
   count (live actors on live accounts), for operations
 
 Invite links (`cord_invite_actions.rs` over `cord_invite_queries.rs`) are
-rows in cord's own `cord_invite` table, the first table in its `cord`
-migration namespace (`migrations.rs`, chained after the spine's auth and
-cell namespaces). A link stores only the blake3 digest of its token, made
-with the spine's session-token helpers; the raw token is returned once. A
-link confers `cord_member` (a CHECK holds the role column to it), may
-expire (from 60 seconds to 365 days) and may carry a use limit (1 to
-1000); the table refuses a use past the limit. Its status is derived:
-revoked, else expired (against the database clock), else exhausted, else
-active. `admits_newcomers` marks a link that may bring someone with no
-account onto the instance; nothing sets it yet, so every link works for
-existing accounts only. Links belong to the cord: they cascade with its
-cell and outlive their minter's membership.
+rows in cord's own `cord_invite` table, in its `cord` migration namespace
+(`migrations.rs`, chained after the spine's auth and cell namespaces). A
+link stores only the blake3 digest of its token, made with the spine's
+session-token helpers; the raw token is returned once. A link confers
+`cord_member` (a CHECK holds the role column to it), may expire (from 60
+seconds to 365 days) and may carry a use limit (1 to 1000); the table
+refuses a use past the limit. Its status is derived: revoked, else
+expired (against the database clock), else exhausted, else active. Links
+belong to the cord: they cascade with its cell and outlive their minter's
+membership.
+
+**Newcomer links.** Most links work for existing accounts only. A link
+with `admits_newcomers` can also bring someone with no account onto the
+instance; only an instance admin (a global `admin` grant, read afresh)
+who is also the cord's owner or admin mints one, and it must carry both
+a use limit and an expiry of at most 30 days
+(`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`). The newcomer, signed
+out, **redeems** the link for a username: in one transaction under the
+link's lock, that checks the link, re-checks that its minter still holds
+a global `admin` on a live actor and account (a purged minter's null
+`created_by` fails closed), reserves the username as a spine username
+invite created in the minter's name (`query_create_invite`), records a
+row in the `cord_invite_redemption` table
+(`cord_invite_redemption_queries.rs`), and spends one use. They then sign
+up through the stock invite-gated signup with that username, which claims
+the spine invite, and **accept** the link signed in. That accept finds
+their redemption and spends nothing more, so a link used up by reserved
+uses still admits them. It doesn't re-check the minter, whose authority
+was checked at redemption and confers nothing further. A revoke refuses
+them; an expiry after they redeemed doesn't until an hour has passed
+(`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`), then the ordinary expired
+refusal applies. A redemption row keeps the link, the spine invite
+(`signup_invite_id`, null once that invite is deleted unclaimed, which
+leaves the use spent and the redemption unacceptable), the username, and,
+once accepted, the actor and time.
+
+A reserved username belongs to whoever signs up with it first. The
+spine's username invites carry no secret: its signup matches a
+username-only invite on the username alone. A join page can keep that
+window short by running redeem and signup back to back. A revoke deletes
+the link's waiting reservations (through the spine's
+`query_invite_delete_unclaimed`), so the stock signup refuses them from
+then on; revoking a link that has already expired works too, a manual
+release that needn't wait for the sweep.
+
+Expiry releases them as well. Once a link has been expired for longer
+than the accept grace, accept refuses its newcomers, so the server's
+expiry sweep (`cord_invite_sweep.rs`) deletes what the link still
+reserves. `run_app` runs it beside the server in `cordd` and
+`testing_cordd` alike: a pass once migrations have run, then one every
+`CORD_INVITE_SWEEP_INTERVAL`, stopping when shutdown begins. A pass
+selects the links expired past the grace (by the database clock) that
+still have waiting reservations, and releases each in its own
+transaction: it locks the link as accept and redeem do but with
+`SKIP LOCKED`, so it orders against them as revoke does and a busy link
+waits for the next pass, then audits `cord_invite_expire` with the
+released ids (`released_signup_invite_ids`) and no actor, account, or IP.
+A failed link is logged and skipped, and a pass that can't reach the
+database is logged and retried on the next tick. A live link whose
+minter is no longer an instance admin isn't swept: redeem refuses it new
+reservations, but the ones already made were authorized when made and
+accept doesn't re-read the minter, so they're still pending until the
+link expires or is revoked.
+
+The spine's signup can also claim no reservation: under open
+signup it claims no invite, and with several matches it claims the
+oldest, so an older email-only invite matching the newcomer's email wins.
+Accept covers both: finding no redemption their account claimed, it takes
+a waiting redemption of the same link whose spine invite is still
+unclaimed and whose username is the caller's, claims that invite for them
+in the same transaction, and completes it without spending a use. That
+trusts the username no more than the spine's own claim would have.
 
 - `cord_invite_create` — the owner or admins; optional
-  `expires_in_seconds` and `max_uses`; returns the link and its token;
-  audits `cord_invite_create` (never the token); rate-limited per account,
-  the spine's account class, as on `role_grant_assign`
+  `expires_in_seconds`, `max_uses`, and `admits_newcomers` (instance
+  admins only, `cord_invite_newcomer_forbidden`; both bounds required,
+  `cord_invite_newcomer_unbounded`; an expiry past 30 days,
+  `cord_invite_invalid`); returns the link and its token; audits
+  `cord_invite_create` (never the token); rate-limited per account, the
+  spine's account class, as on `role_grant_assign`
 - `cord_invite_list` — the owner or admins; the cord's links with their
-  status, newest first, never their tokens
+  status, whether they admit newcomers, and their redemption counts
+  (redeemed, and accepted since), newest first, never their tokens
 - `cord_invite_revoke` — the owner or admins; idempotent (a second revoke
-  succeeds and changes nothing); audits `cord_invite_revoke` when it
-  revokes
-- `cord_invite_preview` — any signed-in account holding a token: the
-  link's status, the caller's role in the cord if any, and the cord's id
-  and name only when the link is active or the caller is in the cord
+  succeeds and changes nothing). The revoke that revokes deletes the
+  link's waiting reservations (unclaimed spine invites of unaccepted
+  redemptions; a claimed one stays, its account refused by the revoked
+  link) and audits `cord_invite_revoke` with their ids
+  (`released_signup_invite_ids`). It revokes an expired link too, which
+  releases its reservations without waiting for the sweep
+- `cord_invite_preview` — anyone holding a token, signed in or not
+  (optional identity); rate-limited per IP. The link's status, whether it
+  admits newcomers, `newcomers_open` (whether it can be redeemed now: it's
+  active, admits newcomers, and its minter still holds a global `admin`,
+  read without a lock), the caller's role in the cord if any, and the
+  cord's id and name: for a signed-in caller when the link is active or
+  they're in the cord, for an anonymous one only when `newcomers_open`.
+  The preview alone is enough to choose between redeem, accept, and
+  asking for a new link
+- `cord_invite_redeem` — public: it grants its caller nothing, so it
+  never reads a session, and a signed-in caller is treated like anyone
+  else; rate-limited per IP. `{token, username}`, the username held to
+  the spine's creation rules (`cord_invite_username_invalid`) and
+  lowercased. Refuses an ordinary link (`cord_invite_not_for_newcomers`),
+  a revoked or expired one, a link whose minter is no longer an instance
+  admin (`cord_invite_newcomers_closed`), an exhausted one, and a username
+  an account has or an unclaimed spine invite reserves
+  (`cord_invite_username_unavailable`, one answer for both). Redeeming the
+  same username through the same link again, while its redemption waits
+  (unaccepted, its spine invite unclaimed), succeeds with
+  `created: false` and changes nothing, even on an exhausted link, since
+  the reservation holds a use already. A dead link (revoked, expired, not
+  for newcomers, or closed because its minter is no longer an instance
+  admin) refuses it as it would any other username. Audits
+  `cord_invite_redeem` (no actor; never the token)
 - `cord_invite_accept` — cookie session only; locks the link, then the
-  cord; a caller already in the cord gets their role back and spends no
-  use, whatever the link's state; otherwise an active link grants
-  `cord_member` and spends a use; audits the spine's `role_grant_create`
-  and `cord_invite_accept`. The grant's `granted_by` is the link's minter,
-  who may since have left the cord.
+  cord, then the caller's pending redemption of the link if any; a
+  caller already in the cord gets their role back and spends no use,
+  whatever the link's state (completing a pending redemption); a caller
+  with a pending redemption joins unless the link was revoked or expired
+  more than an hour ago, spending nothing; otherwise an active link
+  grants `cord_member` and spends a use. A join audits the spine's
+  `role_grant_create` and `cord_invite_accept` (with the `redemption_id`
+  it completed, or null, and `claimed_signup_invite_id`, the spine invite
+  it claimed when the signup claimed none, or null); a member completing
+  a redemption audits
+  `cord_invite_accept` alone, with a null `role_grant_id`. The grant's
+  `granted_by` is the link's minter, who may since have left the cord.
 
 The token is the secret, so a real token's refusals name their reason
 (`cord_invite_revoked`, `cord_invite_expired`, `cord_invite_exhausted`,
-all `conflict`), and any other string gets `cord_invite_not_found`. A
-member who can't manage links gets `cord_invite_forbidden`.
+and for redeem the two newcomer refusals, all `conflict`), and any other
+string gets `cord_invite_not_found`. Past what an anonymous preview
+shows, redeem on a live newcomer link also tells its caller whether a
+username is free (no account has it and no unclaimed invite reserves it),
+the cord's name, and whether this link already holds a waiting
+reservation for that username; a dead link (revoked, expired, not for
+newcomers, or closed) answers every username alike, while an exhausted
+one still answers a waiting username with `created: false`.
+A member who can't manage links gets `cord_invite_forbidden`.
 
 The member verbs (`cord_member_actions.rs` over `cord_member_queries.rs`):
 
@@ -377,7 +485,7 @@ proxies `/api` and `/health` to `cordd`). Modules:
   `127.0.0.1:4061`, drain timeout, rate-limiter mode, and the test-only
   seams `cordd` passes as `None`: `extra_action_specs_factory`,
   `pre_migration_hook`, `daemon_token_state`), signal handling and
-  graceful drain via `fuz_http`
+  graceful drain via `fuz_http`, and the invite expiry sweep's task
 - `env.rs` — `CordEnv`, read once through an injectable `from_vars`
   (tests pass a map; no process-env mutation)
 - `app.rs` — `CordApp`, the composition root (pool, keyring, audit
@@ -396,9 +504,9 @@ proxies `/api` and `/health` to `cordd`). Modules:
   spine's auth spec set built over cord's `RoleRegistry`; the session
   cookie `cord_session`
 - `roles.rs` — the cord roles, `CORD_SCOPE_KIND`, `cord_role_registry`
-- `migrations.rs` — cord's `cord` migration namespace (`CORD_MIGRATIONS`,
-  the `cord_invite` table) and its column-projection registry
-  (`CORD_COLUMN_PROJECTIONS`)
+- `migrations.rs` — cord's `cord` migration namespace (`CORD_MIGRATIONS`:
+  the `cord_invite` and `cord_invite_redemption` tables) and its
+  column-projection registry (`CORD_COLUMN_PROJECTIONS`)
 - `cord_authz.rs` — `CordRole`, the exact-scope predicates, and the member
   rules (pure, unit tested)
 - `cord_queries.rs` — cords over the `cell` / `cell_grant` / `role_grant`
@@ -407,7 +515,17 @@ proxies `/api` and `/health` to `cordd`). Modules:
 - `cord_member_queries.rs` — membership over `role_grant`: the cord lock,
   the member read, and the role set, remove, and leave transactions
 - `cord_invite_queries.rs` — the `cord_invite` table: tokens and their
-  digests, create, list, revoke, lookup, and the accept transaction
+  digests, create, list, revoke, lookup, the link lock (and the sweep's
+  `SKIP LOCKED` try of it), and the accept transaction
+- `cord_invite_redemption_queries.rs` — the `cord_invite_redemption`
+  table: the redeem transaction, the global-admin re-check
+  (`query_actor_holds_global_admin`, and an unlocked twin for the
+  preview), the pending-redemption lookup and completion accept uses
+  (with the fallback by username), the release of waiting reservations
+  a revoke or the sweep runs, and the sweep's selection of links
+- `cord_invite_sweep.rs` — the expiry sweep: `run_cord_invite_sweep` (the
+  interval loop `run_app` spawns) and `cord_invite_sweep_pass` (one pass,
+  each link in its own transaction)
 - `cord_actions.rs` — the cord verbs' specs and handlers, the helpers the
   other action modules share, and `cord_action_specs` (every cord spec)
 - `cord_invite_actions.rs`, `cord_member_actions.rs` — the invite and
@@ -425,7 +543,9 @@ Spine-wide var names stay unprefixed; cord-only ones take `CORD_`.
 
 Unit tests live in `#[cfg(test)]` modules and need no database: env
 parsing, exit codes, the keyring guard, the action registry, cord authz,
-the member rules, invite status and limits, name validation, and router
+the member rules, invite status and limits, the newcomer-link bounds and
+anonymous preview rule, the invite sweep surviving a database outage and
+stopping on shutdown, name validation, and router
 posture driven in-process with
 `tower::ServiceExt::oneshot` over a lazy pool. The Postgres-backed
 integration tests in `crates/cord_server/tests/` are `#[ignore]`d; they
@@ -439,7 +559,22 @@ verbs' fresh role read against a stale snapshot, two owners leaving at
 once, an accept racing a removal and a role change on one actor), and
 `cord_invites.rs` (the stored digest and the table's CHECKs, accept and
 its statuses, the cascades, concurrent accepts never overshooting the use
-limit). `tests/common/` holds their shared setup:
+limit), and `cord_newcomers.rs` (a redemption's spine invite, row, and
+use; idempotent re-redeem, even once the link is exhausted, and none
+on a dead link; taken and
+reserved usernames; a demoted, deleted, or purged minter closing the
+link; a scoped `admin` conferring nothing; an admin deleting the spine
+invite; concurrent redemptions against the use limit; accept after
+redemption spending nothing once the link is exhausted, or within the
+grace after expiry, and refused past it; accept claiming the reservation
+when the signup claimed none (open signup, or an older email invite
+winning), naming the claimed invite; a revoke deleting the waiting
+reservations and refusing the accept; a sweep pass releasing only the
+waiting reservations of a link expired past the grace and auditing it,
+leaving a link within the grace, a live one, and claimed or accepted
+redemptions alone, and skipping a link another transaction holds until
+the next pass). `tests/common/` holds their shared setup and the redemption
+read only tests need:
 
 ```bash
 createdb cord_schema_ready_test
@@ -457,8 +592,9 @@ with the test-only pieces swapped in: `fuz_testing`'s fast
 `TestingArgon2idHasher`, rate limiters in `DisabledForTesting`, a daemon
 token written under `CORD_DAEMON_TOKEN_DIR` (required), the
 `_testing_reset` action (wipes the auth tables and seeds a fresh keeper,
-authenticated by that daemon token, then truncates `cord_invite` and the
-cell tables so no cord or link outlives a test), cord's own
+authenticated by that daemon token, then truncates
+`cord_invite_redemption`, `cord_invite`, and the cell tables so no cord,
+link, or redemption outlives a test), cord's own
 `_testing_cord_invite_expire` (backdates a link's expiry, under the same
 daemon-token gate), and a pre-migration hook that drops
 and recreates the `public` schema when `FUZ_TESTING_RESET_DB_ON_STARTUP`
@@ -490,7 +626,17 @@ only, revoked, expired, and exhausted links, one answer for an unknown
 token, who manages links and how a demoted or removed admin loses that,
 the role, remove, and leave tiers, no self-removal, the last-owner rule,
 and `cord_not_found` from every verb to anyone outside the cord);
-`origin.cross.test.ts` and
+`cord_newcomers.cross.test.ts` covers newcomer links (the whole path
+over HTTP: anonymous preview, redeem, the stock signup, login, accept;
+a redeemed newcomer joining a used-up link; an existing account accepting
+a newcomer link as any other; only an instance admin minting one, and
+only with both bounds; redeem refusing an ordinary link, an unknown token,
+and a bad, taken, or reserved username; the anonymous preview naming the
+cord only for an active newcomer link; accept after an open signup, after
+an older email invite won the signup, and from someone already in the
+cord; a revoke leaving the stock signup refusing the reserved username; a
+demoted minter closing the link; the newcomer expiry cap; redeem with a
+session behaving as anonymous); `origin.cross.test.ts` and
 `audit_stream.cross.test.ts` run fuz_app's shared origin and SSE suites.
 The backend config is `cord_backend_config.ts`.
 
