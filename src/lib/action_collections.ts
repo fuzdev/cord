@@ -55,7 +55,16 @@ export const ActionSpecs = {
 	cord_list: cord_specs.cord_list_action_spec,
 	cord_get: cord_specs.cord_get_action_spec,
 	cord_update: cord_specs.cord_update_action_spec,
-	cord_admin_list: cord_specs.cord_admin_list_action_spec
+	cord_admin_list: cord_specs.cord_admin_list_action_spec,
+	cord_invite_create: cord_specs.cord_invite_create_action_spec,
+	cord_invite_list: cord_specs.cord_invite_list_action_spec,
+	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec,
+	cord_invite_preview: cord_specs.cord_invite_preview_action_spec,
+	cord_invite_accept: cord_specs.cord_invite_accept_action_spec,
+	cord_member_list: cord_specs.cord_member_list_action_spec,
+	cord_member_role_set: cord_specs.cord_member_role_set_action_spec,
+	cord_member_remove: cord_specs.cord_member_remove_action_spec,
+	cord_leave: cord_specs.cord_leave_action_spec
 } as const;
 export interface ActionSpecs {
 	heartbeat: typeof heartbeat_specs.heartbeat_action_spec;
@@ -95,6 +104,15 @@ export interface ActionSpecs {
 	cord_get: typeof cord_specs.cord_get_action_spec;
 	cord_update: typeof cord_specs.cord_update_action_spec;
 	cord_admin_list: typeof cord_specs.cord_admin_list_action_spec;
+	cord_invite_create: typeof cord_specs.cord_invite_create_action_spec;
+	cord_invite_list: typeof cord_specs.cord_invite_list_action_spec;
+	cord_invite_revoke: typeof cord_specs.cord_invite_revoke_action_spec;
+	cord_invite_preview: typeof cord_specs.cord_invite_preview_action_spec;
+	cord_invite_accept: typeof cord_specs.cord_invite_accept_action_spec;
+	cord_member_list: typeof cord_specs.cord_member_list_action_spec;
+	cord_member_role_set: typeof cord_specs.cord_member_role_set_action_spec;
+	cord_member_remove: typeof cord_specs.cord_member_remove_action_spec;
+	cord_leave: typeof cord_specs.cord_leave_action_spec;
 }
 
 export const action_specs: Array<ActionSpecUnion> = Object.values(ActionSpecs);
@@ -141,7 +159,16 @@ export const ActionInputs = {
 	cord_list: cord_specs.cord_list_action_spec.input,
 	cord_get: cord_specs.cord_get_action_spec.input,
 	cord_update: cord_specs.cord_update_action_spec.input,
-	cord_admin_list: cord_specs.cord_admin_list_action_spec.input
+	cord_admin_list: cord_specs.cord_admin_list_action_spec.input,
+	cord_invite_create: cord_specs.cord_invite_create_action_spec.input,
+	cord_invite_list: cord_specs.cord_invite_list_action_spec.input,
+	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec.input,
+	cord_invite_preview: cord_specs.cord_invite_preview_action_spec.input,
+	cord_invite_accept: cord_specs.cord_invite_accept_action_spec.input,
+	cord_member_list: cord_specs.cord_member_list_action_spec.input,
+	cord_member_role_set: cord_specs.cord_member_role_set_action_spec.input,
+	cord_member_remove: cord_specs.cord_member_remove_action_spec.input,
+	cord_leave: cord_specs.cord_leave_action_spec.input
 } as const;
 export interface ActionInputs {
 	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.input>;
@@ -197,6 +224,15 @@ export interface ActionInputs {
 	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.input>;
 	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.input>;
 	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.input>;
+	cord_invite_create: z.infer<typeof cord_specs.cord_invite_create_action_spec.input>;
+	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.input>;
+	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.input>;
+	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.input>;
+	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.input>;
+	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.input>;
+	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
+	cord_member_remove: z.infer<typeof cord_specs.cord_member_remove_action_spec.input>;
+	cord_leave: z.infer<typeof cord_specs.cord_leave_action_spec.input>;
 }
 
 /**
@@ -241,7 +277,16 @@ export const ActionOutputs = {
 	cord_list: cord_specs.cord_list_action_spec.output,
 	cord_get: cord_specs.cord_get_action_spec.output,
 	cord_update: cord_specs.cord_update_action_spec.output,
-	cord_admin_list: cord_specs.cord_admin_list_action_spec.output
+	cord_admin_list: cord_specs.cord_admin_list_action_spec.output,
+	cord_invite_create: cord_specs.cord_invite_create_action_spec.output,
+	cord_invite_list: cord_specs.cord_invite_list_action_spec.output,
+	cord_invite_revoke: cord_specs.cord_invite_revoke_action_spec.output,
+	cord_invite_preview: cord_specs.cord_invite_preview_action_spec.output,
+	cord_invite_accept: cord_specs.cord_invite_accept_action_spec.output,
+	cord_member_list: cord_specs.cord_member_list_action_spec.output,
+	cord_member_role_set: cord_specs.cord_member_role_set_action_spec.output,
+	cord_member_remove: cord_specs.cord_member_remove_action_spec.output,
+	cord_leave: cord_specs.cord_leave_action_spec.output
 } as const;
 export interface ActionOutputs {
 	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.output>;
@@ -297,6 +342,15 @@ export interface ActionOutputs {
 	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.output>;
 	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.output>;
 	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.output>;
+	cord_invite_create: z.infer<typeof cord_specs.cord_invite_create_action_spec.output>;
+	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.output>;
+	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.output>;
+	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.output>;
+	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.output>;
+	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.output>;
+	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.output>;
+	cord_member_remove: z.infer<typeof cord_specs.cord_member_remove_action_spec.output>;
+	cord_leave: z.infer<typeof cord_specs.cord_leave_action_spec.output>;
 }
 
 /**
@@ -485,6 +539,51 @@ export interface ActionEventDatas {
 		'cord_admin_list',
 		ActionInputs['cord_admin_list'],
 		ActionOutputs['cord_admin_list']
+	>;
+	cord_invite_create: ActionEventRequestResponseData<
+		'cord_invite_create',
+		ActionInputs['cord_invite_create'],
+		ActionOutputs['cord_invite_create']
+	>;
+	cord_invite_list: ActionEventRequestResponseData<
+		'cord_invite_list',
+		ActionInputs['cord_invite_list'],
+		ActionOutputs['cord_invite_list']
+	>;
+	cord_invite_revoke: ActionEventRequestResponseData<
+		'cord_invite_revoke',
+		ActionInputs['cord_invite_revoke'],
+		ActionOutputs['cord_invite_revoke']
+	>;
+	cord_invite_preview: ActionEventRequestResponseData<
+		'cord_invite_preview',
+		ActionInputs['cord_invite_preview'],
+		ActionOutputs['cord_invite_preview']
+	>;
+	cord_invite_accept: ActionEventRequestResponseData<
+		'cord_invite_accept',
+		ActionInputs['cord_invite_accept'],
+		ActionOutputs['cord_invite_accept']
+	>;
+	cord_member_list: ActionEventRequestResponseData<
+		'cord_member_list',
+		ActionInputs['cord_member_list'],
+		ActionOutputs['cord_member_list']
+	>;
+	cord_member_role_set: ActionEventRequestResponseData<
+		'cord_member_role_set',
+		ActionInputs['cord_member_role_set'],
+		ActionOutputs['cord_member_role_set']
+	>;
+	cord_member_remove: ActionEventRequestResponseData<
+		'cord_member_remove',
+		ActionInputs['cord_member_remove'],
+		ActionOutputs['cord_member_remove']
+	>;
+	cord_leave: ActionEventRequestResponseData<
+		'cord_leave',
+		ActionInputs['cord_leave'],
+		ActionOutputs['cord_leave']
 	>;
 }
 

@@ -21,10 +21,18 @@
 //! `FUZ_TESTING_RESET_DB_ON_STARTUP=true` it drops and recreates the
 //! database's `public` schema before migrating.
 //!
+//! Beside the spine's `_testing_reset` it registers cord's own test seams
+//! ([`cord_testing_actions`]), under the same daemon-token gate.
+//!
 //! It doesn't register `_testing_drain_effects`, the barrier that awaits
 //! in-flight audit writes: the drain needs an audit emitter built with
 //! in-flight tracking (`AuditEmitter::new_with_inflight_tracking`), which
-//! cord doesn't enable, and no cord test reads `audit_log` rows yet.
+//! cord doesn't enable. The cross tests read only audit rows written in the
+//! action's own transaction, which are visible once the response arrives;
+//! the drain is needed only for a fire-and-forget row (a signup's, or a
+//! failure audit from an RPC verb).
+
+mod cord_testing_actions;
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
@@ -57,8 +65,9 @@ async fn main() -> ExitCode {
     eprintln!("testing_cordd starting (test-mode argon2 active)");
 
     // `_testing_reset` wipes the auth tables and seeds a fresh keeper; its
-    // `reset_state` hook then empties the cell tables (cords live there) in
-    // the same transaction, so no cord outlives the accounts that were in it.
+    // `reset_state` hook then empties cord's invite links and the cell tables
+    // (cords live there) in the same transaction, so no cord or link outlives
+    // the accounts that were in it.
     let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
         #[allow(
             clippy::expect_used,
@@ -67,28 +76,36 @@ async fn main() -> ExitCode {
         let daemon_token_state = runtime
             .daemon_token_state
             .expect("testing_cordd requires CORD_DAEMON_TOKEN_DIR (main checks it before run_app)");
-        // TODO: register `create_testing_drain_effects_action_spec` once the
-        // first test asserts on `audit_log` rows; it needs `CordApp::build` to
-        // use the in-flight-tracking audit emitter
-        vec![create_testing_reset_action_spec(TestingResetOptions {
-            password_hasher: runtime.password_hasher,
-            keyring: runtime.keyring,
-            daemon_token_state,
-            session_cookie_name: runtime.session_cookie_name,
-            reset_state: Some(Arc::new(|db: fuz_actions::ActionDb<'_>| {
-                Box::pin(async move {
-                    db.execute(
-                        "TRUNCATE cell_field, cell_item, cell_grant, cell RESTART IDENTITY CASCADE",
-                        &[],
-                    )
-                    .await
-                    .map_err(|e| {
-                        fuz_http::internal_error_with_source("_testing_reset cell truncate", &e)
-                    })?;
-                    Ok(())
-                })
-            })),
-        })]
+        // TODO: register `create_testing_drain_effects_action_spec` once a
+        // test asserts on a fire-and-forget audit row (in-transaction rows
+        // need no drain); it needs `CordApp::build` to use the
+        // in-flight-tracking audit emitter
+        vec![
+            create_testing_reset_action_spec(TestingResetOptions {
+                password_hasher: runtime.password_hasher,
+                keyring: runtime.keyring,
+                daemon_token_state,
+                session_cookie_name: runtime.session_cookie_name,
+                reset_state: Some(Arc::new(|db: fuz_actions::ActionDb<'_>| {
+                    Box::pin(async move {
+                        db.execute(
+                            "TRUNCATE cord_invite, cell_field, cell_item, cell_grant, cell \
+                         RESTART IDENTITY CASCADE",
+                            &[],
+                        )
+                        .await
+                        .map_err(|e| {
+                            fuz_http::internal_error_with_source(
+                                "_testing_reset cord and cell truncate",
+                                &e,
+                            )
+                        })?;
+                        Ok(())
+                    })
+                })),
+            }),
+            cord_testing_actions::create_testing_cord_invite_expire_action_spec(),
+        ]
     });
 
     // Env-gated (`FUZ_TESTING_RESET_DB_ON_STARTUP=true`) schema wipe, so

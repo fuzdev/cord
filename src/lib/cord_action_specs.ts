@@ -1,11 +1,13 @@
 /**
  * Action specs for the cord actions `cordd` defines: creating, listing,
- * reading, and renaming cords, plus the instance admins' ops list.
+ * reading, and renaming cords, the instance admins' ops list, a cord's invite
+ * links, and its members.
  *
- * The server's handlers are in `crates/cord_server/src/cord_actions.rs`;
- * these specs are their wire contract, which the frontend RPC client and the
- * generated action types read. Authorization beyond the spec-level gates
- * (cord membership, the global admin grant) is the server's.
+ * The server's handlers are in `crates/cord_server/src/cord_actions.rs`,
+ * `cord_invite_actions.rs`, and `cord_member_actions.rs`; these specs are
+ * their wire contract, which the frontend RPC client and the generated action
+ * types read. Authorization beyond the spec-level gates (cord membership and
+ * role, the global admin grant) is the server's.
  *
  * @module
  */
@@ -29,6 +31,35 @@ export const ERROR_CORD_CREATE_FORBIDDEN = 'cord_create_forbidden';
 export const ERROR_CORD_UPDATE_FORBIDDEN = 'cord_update_forbidden';
 /** Error reason: the cord name is empty, too long, or has a forbidden or misplaced character. */
 export const ERROR_CORD_NAME_INVALID = 'cord_name_invalid';
+/** Error reason: no invite link has that token (or id, on this cord). */
+export const ERROR_CORD_INVITE_NOT_FOUND = 'cord_invite_not_found';
+/** Error reason: the invite link was revoked. */
+export const ERROR_CORD_INVITE_REVOKED = 'cord_invite_revoked';
+/** Error reason: the invite link has expired. */
+export const ERROR_CORD_INVITE_EXPIRED = 'cord_invite_expired';
+/** Error reason: the invite link has no uses left. */
+export const ERROR_CORD_INVITE_EXHAUSTED = 'cord_invite_exhausted';
+/** Error reason: only the cord's owner or admins manage its invite links. */
+export const ERROR_CORD_INVITE_FORBIDDEN = 'cord_invite_forbidden';
+/** Error reason: an invite link's expiry or use limit is out of bounds. */
+export const ERROR_CORD_INVITE_INVALID = 'cord_invite_invalid';
+/** Error reason: the target isn't a member of the cord. */
+export const ERROR_CORD_MEMBER_NOT_FOUND = 'cord_member_not_found';
+/** Error reason: the caller's cord role can't make this change. */
+export const ERROR_CORD_MEMBER_FORBIDDEN = 'cord_member_forbidden';
+/** Error reason: the change would leave the cord with no owner. */
+export const ERROR_CORD_LAST_OWNER = 'cord_last_owner';
+/** Error reason: `cord_member_remove` named the caller; a member takes themself out with `cord_leave`. */
+export const ERROR_CORD_MEMBER_REMOVE_SELF = 'cord_member_remove_self';
+
+/** The shortest expiry an invite link may be given, in seconds; the twin of the server's constant. */
+export const CORD_INVITE_EXPIRES_IN_SECONDS_MIN = 60;
+/** The longest expiry an invite link may be given, in seconds (365 days). */
+export const CORD_INVITE_EXPIRES_IN_SECONDS_MAX = 365 * 24 * 60 * 60;
+/** The most uses an invite link may be given. */
+export const CORD_INVITE_MAX_USES_MAX = 1000;
+/** The longest invite token the server looks up; the twin of the server's constant. */
+export const CORD_INVITE_TOKEN_LENGTH_MAX = 128;
 
 /** The longest cord name, in characters; the twin of the server's constant. */
 export const CORD_NAME_LENGTH_MAX = 100;
@@ -164,6 +195,61 @@ export const CordAdminJson = z.strictObject({
 });
 export type CordAdminJson = z.infer<typeof CordAdminJson>;
 
+/**
+ * An invite link's state: usable, or why not. A revoked link reports
+ * `revoked` even once expired, and an expired one `expired` even once used
+ * up.
+ */
+export const CordInviteStatus = z.enum(['active', 'revoked', 'expired', 'exhausted']);
+export type CordInviteStatus = z.infer<typeof CordInviteStatus>;
+
+/**
+ * An invite link as its cord's owner and admins see it. Never carries the
+ * token, which is shown once, when the link is created.
+ */
+export const CordInviteJson = z.strictObject({
+	id: Uuid,
+	cord_id: Uuid,
+	role: CordRole,
+	created_by: Uuid.nullable(),
+	created_at: z.string(),
+	expires_at: z.string().nullable(),
+	max_uses: z.number().int().nullable(),
+	use_count: z.number().int(),
+	revoked_at: z.string().nullable(),
+	status: CordInviteStatus
+});
+export type CordInviteJson = z.infer<typeof CordInviteJson>;
+
+/** A member of a cord as its members see them. */
+export const CordMemberJson = z.strictObject({
+	actor_id: Uuid,
+	username: z.string(),
+	/** The actor's name, or `null` when it's blank. */
+	display_name: z.string().nullable(),
+	role: CordRole
+});
+export type CordMemberJson = z.infer<typeof CordMemberJson>;
+
+/**
+ * An invite link's token, as it appears in the link.
+ *
+ * The bounds restate the server's plausibility check as a schema, so
+ * whatever validates params against this spec refuses a token the server
+ * could never find. The server's own layers split differently: its params
+ * parsing takes any string, and its handler answers an empty or over-long
+ * token with `cord_invite_not_found`, as for any wrong token, not with a
+ * params error. It counts bytes where this counts UTF-16 code units, which
+ * are never more than the bytes, so every token refused here is one the
+ * server would call unknown.
+ */
+export const CordInviteToken = z
+	.string()
+	.min(1)
+	.max(CORD_INVITE_TOKEN_LENGTH_MAX)
+	.meta({ description: "The invite link's token." });
+export type CordInviteToken = z.infer<typeof CordInviteToken>;
+
 export const CordCreateInput = z.strictObject({
 	name: CordName.meta({ description: "The new cord's name." }),
 	acting: ActingActor
@@ -203,6 +289,119 @@ export type CordAdminListInput = z.infer<typeof CordAdminListInput>;
 
 export const CordAdminListOutput = z.strictObject({ cords: z.array(CordAdminJson) });
 export type CordAdminListOutput = z.infer<typeof CordAdminListOutput>;
+
+export const CordInviteCreateInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord the link invites to.' }),
+	expires_in_seconds: z
+		.number()
+		.int()
+		.min(CORD_INVITE_EXPIRES_IN_SECONDS_MIN)
+		.max(CORD_INVITE_EXPIRES_IN_SECONDS_MAX)
+		.optional()
+		.meta({ description: 'Seconds until the link expires; absent, it never does.' }),
+	max_uses: z
+		.number()
+		.int()
+		.min(1)
+		.max(CORD_INVITE_MAX_USES_MAX)
+		.optional()
+		.meta({ description: 'How many people the link may bring in; absent, no limit.' }),
+	acting: ActingActor
+});
+export type CordInviteCreateInput = z.infer<typeof CordInviteCreateInput>;
+
+export const CordInviteCreateOutput = z.strictObject({
+	invite: CordInviteJson,
+	/** The raw token, returned only here. */
+	token: z.string()
+});
+export type CordInviteCreateOutput = z.infer<typeof CordInviteCreateOutput>;
+
+export const CordInviteListInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord whose links to list.' }),
+	acting: ActingActor
+});
+export type CordInviteListInput = z.infer<typeof CordInviteListInput>;
+
+export const CordInviteListOutput = z.strictObject({ invites: z.array(CordInviteJson) });
+export type CordInviteListOutput = z.infer<typeof CordInviteListOutput>;
+
+export const CordInviteRevokeInput = z.strictObject({
+	cord_id: Uuid.meta({ description: "The link's cord." }),
+	invite_id: Uuid.meta({ description: 'The link to revoke.' }),
+	acting: ActingActor
+});
+export type CordInviteRevokeInput = z.infer<typeof CordInviteRevokeInput>;
+
+export const CordInviteRevokeOutput = z.strictObject({ invite: CordInviteJson });
+export type CordInviteRevokeOutput = z.infer<typeof CordInviteRevokeOutput>;
+
+export const CordInvitePreviewInput = z.strictObject({
+	token: CordInviteToken,
+	acting: ActingActor
+});
+export type CordInvitePreviewInput = z.infer<typeof CordInvitePreviewInput>;
+
+export const CordInvitePreviewOutput = z.strictObject({
+	status: CordInviteStatus,
+	/** The cord, when the link is active or the caller is already in it. */
+	cord: z.strictObject({ id: Uuid, name: z.string() }).nullable(),
+	/** The caller's role in the cord, or `null` when they aren't in it. */
+	role: CordRole.nullable()
+});
+export type CordInvitePreviewOutput = z.infer<typeof CordInvitePreviewOutput>;
+
+export const CordInviteAcceptInput = z.strictObject({
+	token: CordInviteToken,
+	acting: ActingActor
+});
+export type CordInviteAcceptInput = z.infer<typeof CordInviteAcceptInput>;
+
+export const CordInviteAcceptOutput = z.strictObject({
+	cord: CordJson,
+	/** `false` when the caller was already in the cord, so nothing changed. */
+	joined: z.boolean()
+});
+export type CordInviteAcceptOutput = z.infer<typeof CordInviteAcceptOutput>;
+
+export const CordMemberListInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord whose members to list.' }),
+	acting: ActingActor
+});
+export type CordMemberListInput = z.infer<typeof CordMemberListInput>;
+
+export const CordMemberListOutput = z.strictObject({ members: z.array(CordMemberJson) });
+export type CordMemberListOutput = z.infer<typeof CordMemberListOutput>;
+
+export const CordMemberRoleSetInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord.' }),
+	actor_id: Uuid.meta({ description: 'The member whose role to set.' }),
+	role: CordRole.meta({ description: 'Their new role.' }),
+	acting: ActingActor
+});
+export type CordMemberRoleSetInput = z.infer<typeof CordMemberRoleSetInput>;
+
+export const CordMemberRoleSetOutput = z.strictObject({ member: CordMemberJson });
+export type CordMemberRoleSetOutput = z.infer<typeof CordMemberRoleSetOutput>;
+
+export const CordMemberRemoveInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord.' }),
+	actor_id: Uuid.meta({ description: 'The member to remove.' }),
+	acting: ActingActor
+});
+export type CordMemberRemoveInput = z.infer<typeof CordMemberRemoveInput>;
+
+export const CordMemberRemoveOutput = z.strictObject({ ok: z.literal(true) });
+export type CordMemberRemoveOutput = z.infer<typeof CordMemberRemoveOutput>;
+
+export const CordLeaveInput = z.strictObject({
+	cord_id: Uuid.meta({ description: 'The cord to leave.' }),
+	acting: ActingActor
+});
+export type CordLeaveInput = z.infer<typeof CordLeaveInput>;
+
+export const CordLeaveOutput = z.strictObject({ ok: z.literal(true) });
+export type CordLeaveOutput = z.infer<typeof CordLeaveOutput>;
 
 export const cord_create_action_spec = {
 	method: 'cord_create',
@@ -267,11 +466,136 @@ export const cord_admin_list_action_spec = {
 		'Every cord on the instance with its member count, for instance admins (a global `admin` grant).'
 } satisfies RequestResponseActionSpec;
 
+export const cord_invite_create_action_spec = {
+	method: 'cord_invite_create',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordInviteCreateInput,
+	output: CordInviteCreateOutput,
+	async: true,
+	rate_limit: 'account',
+	description:
+		"Create an invite link to a cord, with an optional expiry and use limit. The cord's owner or admins only. Returns the link's token, which is never shown again."
+} satisfies RequestResponseActionSpec;
+
+export const cord_invite_list_action_spec = {
+	method: 'cord_invite_list',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: false,
+	input: CordInviteListInput,
+	output: CordInviteListOutput,
+	async: true,
+	description:
+		"A cord's invite links with their status, newest first. The cord's owner or admins only."
+} satisfies RequestResponseActionSpec;
+
+export const cord_invite_revoke_action_spec = {
+	method: 'cord_invite_revoke',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordInviteRevokeInput,
+	output: CordInviteRevokeOutput,
+	async: true,
+	description:
+		"Revoke an invite link. The cord's owner or admins only. Revoking a revoked link succeeds and changes nothing."
+} satisfies RequestResponseActionSpec;
+
+export const cord_invite_preview_action_spec = {
+	method: 'cord_invite_preview',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: false,
+	input: CordInvitePreviewInput,
+	output: CordInvitePreviewOutput,
+	async: true,
+	description:
+		"An invite link's status, with its cord's name when the link is active or the caller is already in the cord."
+} satisfies RequestResponseActionSpec;
+
+export const cord_invite_accept_action_spec = {
+	method: 'cord_invite_accept',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required', credential_types: ['session'] },
+	side_effects: true,
+	input: CordInviteAcceptInput,
+	output: CordInviteAcceptOutput,
+	async: true,
+	description:
+		'Join a cord through an invite link, as a member. A cookie session only. Someone already in the cord keeps their role and spends no use of the link.'
+} satisfies RequestResponseActionSpec;
+
+export const cord_member_list_action_spec = {
+	method: 'cord_member_list',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: false,
+	input: CordMemberListInput,
+	output: CordMemberListOutput,
+	async: true,
+	description: "A cord's members with their roles, owners first. Members only."
+} satisfies RequestResponseActionSpec;
+
+export const cord_member_role_set_action_spec = {
+	method: 'cord_member_role_set',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordMemberRoleSetInput,
+	output: CordMemberRoleSetOutput,
+	async: true,
+	description:
+		"Set a member's role in a cord. The cord's owners only; a cord keeps at least one owner."
+} satisfies RequestResponseActionSpec;
+
+export const cord_member_remove_action_spec = {
+	method: 'cord_member_remove',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordMemberRemoveInput,
+	output: CordMemberRemoveOutput,
+	async: true,
+	description:
+		'Remove another member from a cord. An owner removes anyone but the last owner; an admin removes plain members. Nobody removes themself; they leave with `cord_leave`.'
+} satisfies RequestResponseActionSpec;
+
+export const cord_leave_action_spec = {
+	method: 'cord_leave',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordLeaveInput,
+	output: CordLeaveOutput,
+	async: true,
+	description: "Leave a cord. Anyone but the cord's last owner."
+} satisfies RequestResponseActionSpec;
+
 /** The cord actions, in the order the server registers them. */
 export const all_cord_domain_action_specs: Array<ActionSpecUnion> = [
 	cord_create_action_spec,
 	cord_list_action_spec,
 	cord_get_action_spec,
 	cord_update_action_spec,
-	cord_admin_list_action_spec
+	cord_admin_list_action_spec,
+	cord_invite_create_action_spec,
+	cord_invite_list_action_spec,
+	cord_invite_revoke_action_spec,
+	cord_invite_preview_action_spec,
+	cord_invite_accept_action_spec,
+	cord_member_list_action_spec,
+	cord_member_role_set_action_spec,
+	cord_member_remove_action_spec,
+	cord_leave_action_spec
 ];

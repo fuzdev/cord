@@ -13,26 +13,34 @@
 //! that confers a cord role, on a cord that didn't exist, so the rule holds.
 //! [`cord_role_in`] still resolves a pair to the higher role, as a backstop.
 //!
-//! TODO: the member and invite verbs (invite accept, role set, remove, leave)
-//! must keep the rule themselves: changing a role revokes the old grant and
-//! creates the new one within one transaction, and a grant is never added
-//! beside an existing cord role on the same cord.
+//! The member and invite verbs keep the rule themselves
+//! ([`crate::cord_member_queries`], [`crate::cord_invite_queries`]): changing
+//! a role revokes the old grant and creates the new one within one
+//! transaction, and accepting an invite never adds a grant beside an existing
+//! cord role on the same cord.
+//!
+//! The member rules are pure predicates here too: who may change roles
+//! ([`CordRole::can_set_member_roles`]), who may remove whom
+//! ([`CordRole::can_remove`]), and the last-owner rule
+//! ([`leaves_no_owner`]). The verbs apply them to membership read under the
+//! cord's row lock, not to the request's snapshot, so a concurrent change
+//! can't slip past them.
 //!
 //! Instance admins get no implicit access to cords here. They create cords
 //! and see the admin ops list, but a cord they aren't in stays hidden from
 //! them in the normal surface.
 
 use fuz_auth::RoleGrantRow;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::roles::{CORD_ADMIN, CORD_MEMBER, CORD_OWNER};
 
 /// An actor's role in one cord, highest authority first.
 ///
-/// Serializes to its `role_grant.role` string. The variant order is the
-/// authority order, so `min` picks the highest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Serializes to (and deserializes from) its `role_grant.role` string. The
+/// variant order is the authority order, so `min` picks the highest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CordRole {
     #[serde(rename = "cord_owner")]
     Owner,
@@ -65,12 +73,45 @@ impl CordRole {
         }
     }
 
-    /// Whether the role may manage the cord (rename it, and later manage its
-    /// members and spaces): the owner and admins.
+    /// Whether the role may manage the cord (rename it, manage its invite
+    /// links, remove plain members, and later manage its spaces): the owner
+    /// and admins.
     #[must_use]
     pub const fn can_manage(self) -> bool {
         matches!(self, Self::Owner | Self::Admin)
     }
+
+    /// Whether the role may set members' roles (to owner, admin, or member):
+    /// owners only.
+    #[must_use]
+    pub const fn can_set_member_roles(self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
+    /// Whether this role may remove a member holding `target`: an owner
+    /// removes anyone, an admin removes plain members only, and a member
+    /// removes no one. The last-owner rule ([`leaves_no_owner`]) applies on
+    /// top.
+    #[must_use]
+    pub const fn can_remove(self, target: Self) -> bool {
+        match self {
+            Self::Owner => true,
+            Self::Admin => matches!(target, Self::Member),
+            Self::Member => false,
+        }
+    }
+}
+
+/// Whether moving one member from `current` to `next` (`None` when they
+/// leave or are removed) would leave the cord with no owner, given
+/// `owner_count` owners before the change.
+///
+/// A cord always keeps an owner: the last one can't leave, be removed, or
+/// step down. Several owners are fine, so an owner may step down or leave
+/// while another remains.
+#[must_use]
+pub fn leaves_no_owner(owner_count: usize, current: CordRole, next: Option<CordRole>) -> bool {
+    current == CordRole::Owner && next != Some(CordRole::Owner) && owner_count <= 1
 }
 
 /// The actor's role in the cord `cord_id`, from grants scoped exactly to it.
@@ -197,6 +238,55 @@ mod tests {
         ];
         assert_eq!(cord_role_in(&grants, CORD_A), Some(CordRole::Owner));
         assert_eq!(cord_memberships(&grants), vec![(CORD_A, CordRole::Owner)]);
+    }
+
+    #[test]
+    fn roles_deserialize_from_their_strings() {
+        let role: CordRole = serde_json::from_value(serde_json::json!("cord_admin")).unwrap();
+        assert_eq!(role, CordRole::Admin);
+        assert!(serde_json::from_value::<CordRole>(serde_json::json!("admin")).is_err());
+        assert!(serde_json::from_value::<CordRole>(serde_json::json!("Owner")).is_err());
+    }
+
+    #[test]
+    fn only_owners_set_member_roles() {
+        assert!(CordRole::Owner.can_set_member_roles());
+        assert!(!CordRole::Admin.can_set_member_roles());
+        assert!(!CordRole::Member.can_set_member_roles());
+    }
+
+    #[test]
+    fn removal_follows_the_authority_order() {
+        use CordRole::{Admin, Member, Owner};
+        for target in [Owner, Admin, Member] {
+            assert!(Owner.can_remove(target), "owner removes {target:?}");
+            assert!(!Member.can_remove(target), "member removes no one");
+        }
+        assert!(Admin.can_remove(Member));
+        assert!(!Admin.can_remove(Admin));
+        assert!(!Admin.can_remove(Owner));
+    }
+
+    #[test]
+    fn the_last_owner_stays() {
+        use CordRole::{Admin, Member, Owner};
+        // the only owner can't leave, be removed, or step down
+        assert!(leaves_no_owner(1, Owner, None));
+        assert!(leaves_no_owner(1, Owner, Some(Admin)));
+        assert!(leaves_no_owner(1, Owner, Some(Member)));
+        // but keeping the role is fine
+        assert!(!leaves_no_owner(1, Owner, Some(Owner)));
+        // with another owner, any of those is fine
+        assert!(!leaves_no_owner(2, Owner, None));
+        assert!(!leaves_no_owner(2, Owner, Some(Member)));
+        // non-owners never touch the owner count
+        for current in [Admin, Member] {
+            assert!(!leaves_no_owner(1, current, None));
+            assert!(!leaves_no_owner(0, current, Some(Member)));
+        }
+        // a count of zero (every owner gone from the instance) still refuses
+        // to let an owner row go
+        assert!(leaves_no_owner(0, Owner, None));
     }
 
     #[test]

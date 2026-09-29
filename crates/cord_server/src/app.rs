@@ -109,8 +109,8 @@ impl CordApp {
         // ephemeral key would reset every session on restart.
         let keyring = Arc::new(build_keyring(env.cookie_keys.as_deref())?);
 
-        // TODO: build with `AuditEmitter::new_with_inflight_tracking` when the
-        // first cross-backend test asserts on `audit_log` rows, so
+        // TODO: build with `AuditEmitter::new_with_inflight_tracking` when a
+        // cross-backend test asserts on a fire-and-forget audit row, so
         // `testing_cordd` can register `_testing_drain_effects`
         let audit_emitter = Arc::new(AuditEmitter::new(pool.clone()));
         // Recomputed against the live DB after migrations (`build_router`).

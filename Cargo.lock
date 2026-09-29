@@ -1598,6 +1598,7 @@ dependencies = [
  "fuz_http",
  "fuz_sys",
  "fuz_testing",
+ "serde_json",
  "tokio",
 ]
 

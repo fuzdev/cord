@@ -32,8 +32,8 @@ export const CORD_ROLE_LABELS: Record<CordRole, string> = {
 };
 
 /**
- * Whether a role may manage its cord (rename it, and later manage its members
- * and spaces).
+ * Whether a role may manage its cord (rename it, manage its invite links,
+ * remove plain members, and later manage its spaces).
  */
 export const cord_role_can_manage = (role: CordRole): boolean =>
 	role === CORD_OWNER || role === CORD_ADMIN;

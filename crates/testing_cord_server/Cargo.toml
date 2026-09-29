@@ -22,6 +22,7 @@ fuz_auth.workspace = true
 fuz_db.workspace = true
 fuz_http.workspace = true
 fuz_sys = { workspace = true, features = ["logging"] }
+serde_json.workspace = true
 tokio.workspace = true
 
 [lints]

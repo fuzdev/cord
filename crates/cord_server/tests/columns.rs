@@ -2,9 +2,10 @@
 //! `cord_server` bootstraps: every live table is either a `*_COLUMNS` const
 //! naming exactly its live columns or a reasoned exemption.
 //!
-//! cord owns no tables yet, so this composes only the spine chains' exported
-//! registries (the `fuz_db` tracker, `fuz_auth`, and `fuz_cell`). The day
-//! cord grows its own table, this fails until the table is registered.
+//! Composes the spine chains' exported registries (the `fuz_db` tracker,
+//! `fuz_auth`, and `fuz_cell`) with cord's own
+//! (`cord_server::migrations::CORD_COLUMN_PROJECTIONS`), so a new cord table
+//! fails here until it's registered there.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and `CORD_SCHEMA_READY_TEST_URL` override):
@@ -15,6 +16,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use cord_server::migrations::CORD_COLUMN_PROJECTIONS;
 use cord_server::router::cord_migration_namespaces;
 use fuz_auth::AUTH_COLUMN_PROJECTIONS;
 use fuz_cell::CELL_COLUMN_PROJECTIONS;
@@ -52,6 +54,7 @@ async fn columns_match_live_schema() {
             DB_COLUMN_PROJECTIONS,
             AUTH_COLUMN_PROJECTIONS,
             CELL_COLUMN_PROJECTIONS,
+            CORD_COLUMN_PROJECTIONS,
         ],
     );
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));

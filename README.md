@@ -57,11 +57,16 @@ database.
   home page lists your cords (or, for an admin with none, offers to create
   the first), each cord has a page with its name and your role, its owner
   and admins can rename it, and the admin area lists every cord with its
-  member count. Joining a cord, its spaces, and everything inside come next
+  member count
+- cord invites and members, on the server so far: a cord's owner and
+  admins make invite links that bring in people who already have an
+  account on the instance, owners set members' roles, and members can be
+  removed or leave. The pages for joining and for the member list come
+  next, then a cord's spaces and everything inside them
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
-  sessions, invite-gated signup, first-account bootstrap, the cord
-  actions, a JSON-RPC endpoint, a WebSocket endpoint, and health and
-  readiness checks
+  sessions, invite-gated signup, first-account bootstrap, the cord,
+  invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,
+  and health and readiness checks
 
 The live room comes first, since hanging out is the point; chat, forums, and
 Bluesky feeds layer on after it.

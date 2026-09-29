@@ -17,60 +17,21 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
+use common::{fresh_db_pool, seed_actor};
 use cord_server::cord_queries::{
     CORD_CELL_KIND, CORD_STAMPED_GRANTS, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids,
 };
 use cord_server::roles::{CORD_MEMBER, CORD_OWNER, CORD_SCOPE_KIND};
-use cord_server::router::cord_migration_namespaces;
 use fuz_auth::actor_queries::query_role_grants_for_actor;
 use fuz_auth::query_create_role_grant;
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
 use fuz_cell::{CellGrantLevel, CellVisibility};
-use fuz_db::{Pool, create_pool, run_migrations};
+use fuz_db::Pool;
 use uuid::Uuid;
-
-fn test_url() -> String {
-    std::env::var("CORD_SCHEMA_READY_TEST_URL")
-        .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned())
-}
-
-async fn fresh_db_pool() -> Pool {
-    let pool = create_pool(&test_url()).expect("create_pool");
-    {
-        let client = pool.get().await.expect("pool.get");
-        client
-            .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-            .await
-            .expect("reset schema");
-    }
-    run_migrations(&pool, &cord_migration_namespaces())
-        .await
-        .expect("migrations");
-    pool
-}
-
-/// Seed an account and its actor, returning the actor id.
-async fn seed_actor(pool: &Pool, username: &str) -> Uuid {
-    let client = pool.get().await.expect("pool.get");
-    let account_id: Uuid = client
-        .query_one(
-            "INSERT INTO account (username, password_hash) VALUES ($1, 'x') RETURNING id",
-            &[&username],
-        )
-        .await
-        .expect("insert account")
-        .get(0);
-    client
-        .query_one(
-            "INSERT INTO actor (account_id, name) VALUES ($1, $2) RETURNING id",
-            &[&account_id, &username],
-        )
-        .await
-        .expect("insert actor")
-        .get(0)
-}
 
 /// Whether the spine's visibility-filtered `cell_list` shows `cord_id` to an
 /// actor holding `grants`, with no admin bypass.

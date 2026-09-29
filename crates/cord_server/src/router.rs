@@ -19,10 +19,10 @@
 //!
 //! ## Migrations
 //!
-//! cord owns no tables of its own yet; it runs the spine's
-//! `fuz_auth::AUTH_MIGRATIONS` then `fuz_cell::CELL_MIGRATIONS` (cords are
-//! cells) via `fuz_db::run_migrations`. A `cord` namespace lands here when
-//! the first cord table does.
+//! cord runs the spine's `fuz_auth::AUTH_MIGRATIONS` and
+//! `fuz_cell::CELL_MIGRATIONS` (cords are cells), then its own `cord`
+//! namespace ([`crate::migrations::CORD_MIGRATIONS`], the `cord_invite`
+//! table), via `fuz_db::run_migrations`.
 
 use std::sync::Arc;
 
@@ -59,9 +59,14 @@ pub const CORD_SESSION_COOKIE_NAME: &str = "cord_session";
 /// Shared by [`build_router`]'s migration run, the `cordd db-status`
 /// subcommand, and the schema fixture tests, so they can't drift.
 #[must_use]
-pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 2] {
-    // auth first: the cell tables reference `actor`
-    [fuz_auth::AUTH_MIGRATIONS, fuz_cell::CELL_MIGRATIONS]
+pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 3] {
+    // auth first: the cell tables reference `actor`; cord's tables reference
+    // both `actor` and `cell`
+    [
+        fuz_auth::AUTH_MIGRATIONS,
+        fuz_cell::CELL_MIGRATIONS,
+        crate::migrations::CORD_MIGRATIONS,
+    ]
 }
 
 /// Build the top-level router.
@@ -570,6 +575,7 @@ mod tests {
             "auth_session",
             "cell",
             "cell_grant",
+            "cord_invite",
         ] {
             assert!(
                 schema.contains_key(table),
@@ -591,6 +597,15 @@ mod tests {
             "cord_get",
             "cord_update",
             "cord_admin_list",
+            "cord_invite_create",
+            "cord_invite_list",
+            "cord_invite_revoke",
+            "cord_invite_preview",
+            "cord_invite_accept",
+            "cord_member_list",
+            "cord_member_role_set",
+            "cord_member_remove",
+            "cord_leave",
         ] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }

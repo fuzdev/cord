@@ -10,7 +10,24 @@ import {
 	is_forbidden_cord_name_char,
 	all_cord_domain_action_specs,
 	cord_admin_list_action_spec,
-	cord_create_action_spec
+	cord_create_action_spec,
+	CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
+	CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
+	CORD_INVITE_MAX_USES_MAX,
+	CordInviteCreateInput,
+	ERROR_CORD_INVITE_EXHAUSTED,
+	ERROR_CORD_INVITE_EXPIRED,
+	ERROR_CORD_INVITE_FORBIDDEN,
+	ERROR_CORD_INVITE_INVALID,
+	ERROR_CORD_INVITE_NOT_FOUND,
+	ERROR_CORD_INVITE_REVOKED,
+	ERROR_CORD_LAST_OWNER,
+	ERROR_CORD_MEMBER_FORBIDDEN,
+	ERROR_CORD_MEMBER_NOT_FOUND,
+	ERROR_CORD_MEMBER_REMOVE_SELF,
+	CORD_INVITE_TOKEN_LENGTH_MAX,
+	CordInviteToken,
+	cord_invite_create_action_spec
 } from '#lib/cord_action_specs.ts';
 import { all_cord_action_specs } from '#lib/action_specs.ts';
 
@@ -171,6 +188,121 @@ describe('cord action specs', () => {
 		const writes = all_cord_domain_action_specs
 			.filter((spec) => spec.side_effects)
 			.map((spec) => spec.method);
-		assert.deepEqual(writes, ['cord_create', 'cord_update']);
+		assert.deepEqual(writes, [
+			'cord_create',
+			'cord_update',
+			'cord_invite_create',
+			'cord_invite_revoke',
+			'cord_invite_accept',
+			'cord_member_role_set',
+			'cord_member_remove',
+			'cord_leave'
+		]);
+	});
+
+	test('take invite accept over a cookie session only', () => {
+		for (const spec of all_cord_domain_action_specs) {
+			const session_only = spec.method === 'cord_invite_accept';
+			assert.deepEqual(
+				spec.auth?.credential_types,
+				session_only ? ['session'] : undefined,
+				spec.method
+			);
+		}
+	});
+
+	test('rate-limit only minting, per account', () => {
+		for (const spec of all_cord_domain_action_specs) {
+			assert.strictEqual(
+				spec.rate_limit,
+				spec === cord_invite_create_action_spec ? 'account' : undefined,
+				spec.method
+			);
+		}
+	});
+});
+
+describe('CordInviteToken', () => {
+	test('is bounded as the server looks tokens up', () => {
+		assert.ok(CordInviteToken.safeParse('x').success);
+		assert.ok(CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX)).success);
+		assert.ok(!CordInviteToken.safeParse('').success);
+		assert.ok(!CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)).success);
+	});
+});
+
+describe('CordInviteCreateInput', () => {
+	const cord_id = '11111111-1111-4111-8111-111111111111';
+
+	test('takes optional, bounded limits', () => {
+		assert.ok(CordInviteCreateInput.safeParse({ cord_id }).success);
+		assert.ok(
+			CordInviteCreateInput.safeParse({
+				cord_id,
+				expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
+				max_uses: CORD_INVITE_MAX_USES_MAX
+			}).success
+		);
+		for (const limits of [
+			{ expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MIN - 1 },
+			{ expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MAX + 1 },
+			{ expires_in_seconds: 90.5 },
+			{ expires_in_seconds: null },
+			{ max_uses: 0 },
+			{ max_uses: CORD_INVITE_MAX_USES_MAX + 1 },
+			{ max_uses: null }
+		]) {
+			assert.ok(
+				!CordInviteCreateInput.safeParse({ cord_id, ...limits }).success,
+				JSON.stringify(limits)
+			);
+		}
+	});
+});
+
+describe('the invite and member twins', () => {
+	/** The value of `pub const {name}` in a server source file. */
+	const rust_const = (file: string, name: string): string => {
+		const source = readFileSync(`crates/cord_server/src/${file}`, 'utf8');
+		const match = new RegExp(`pub const ${name}: [^=]+= ([^;]+);`).exec(source);
+		assert.ok(match, `${name} in ${file}`);
+		return match[1]!.trim();
+	};
+
+	test('the limits match the server', () => {
+		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_EXPIRES_IN_SECONDS_MIN'),
+			String(CORD_INVITE_EXPIRES_IN_SECONDS_MIN)
+		);
+		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_EXPIRES_IN_SECONDS_MAX'),
+			'365 * 24 * 60 * 60'
+		);
+		assert.strictEqual(CORD_INVITE_EXPIRES_IN_SECONDS_MAX, 365 * 24 * 60 * 60);
+		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_MAX_USES_MAX'),
+			String(CORD_INVITE_MAX_USES_MAX)
+		);
+		assert.strictEqual(
+			rust_const('cord_invite_queries.rs', 'CORD_INVITE_TOKEN_LENGTH_MAX'),
+			String(CORD_INVITE_TOKEN_LENGTH_MAX)
+		);
+	});
+
+	test('the error reasons match the server', () => {
+		for (const [file, name, value] of [
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_NOT_FOUND', ERROR_CORD_INVITE_NOT_FOUND],
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_REVOKED', ERROR_CORD_INVITE_REVOKED],
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_EXPIRED', ERROR_CORD_INVITE_EXPIRED],
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_EXHAUSTED', ERROR_CORD_INVITE_EXHAUSTED],
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_FORBIDDEN', ERROR_CORD_INVITE_FORBIDDEN],
+			['cord_invite_actions.rs', 'ERROR_CORD_INVITE_INVALID', ERROR_CORD_INVITE_INVALID],
+			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_NOT_FOUND', ERROR_CORD_MEMBER_NOT_FOUND],
+			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_FORBIDDEN', ERROR_CORD_MEMBER_FORBIDDEN],
+			['cord_member_actions.rs', 'ERROR_CORD_LAST_OWNER', ERROR_CORD_LAST_OWNER],
+			['cord_member_actions.rs', 'ERROR_CORD_MEMBER_REMOVE_SELF', ERROR_CORD_MEMBER_REMOVE_SELF]
+		] as const) {
+			assert.strictEqual(rust_const(file, name), JSON.stringify(value), name);
+		}
 	});
 });

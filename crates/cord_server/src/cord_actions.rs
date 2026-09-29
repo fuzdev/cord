@@ -1,12 +1,17 @@
 //! Cord's RPC actions: creating, listing, reading, and renaming cords.
 //!
+//! This module also holds the helpers the invite and member actions share
+//! ([`crate::cord_invite_actions`], [`crate::cord_member_actions`]), and
+//! [`cord_action_specs`] returns all of them.
+//!
 //! - `cord_create`: instance admins only. Creates the cord cell, grants the
 //!   caller `cord_owner`, and stamps the cord's role-shaped `cell_grant`
 //!   rows, in the action's one transaction, then audits `cord_create`.
 //! - `cord_list`: the caller's cords with their role in each, derived from
 //!   the caller's cord-scoped role grants.
 //! - `cord_get`: one cord, for its members only.
-//! - `cord_update`: rename a cord; its owner or admins only.
+//! - `cord_update`: rename a cord; its owner or admins only, by their role
+//!   read afresh in the action's transaction, not the request's snapshot.
 //! - `cord_admin_list`: every cord with its member count, for instance
 //!   admins' operations. It's the only place an instance admin sees a cord
 //!   they aren't in.
@@ -37,6 +42,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::cord_authz::{CordRole, cord_memberships, cord_role_in};
+use crate::cord_member_queries::{CordMemberError, query_cord_manager_role};
 use crate::cord_queries::{
     CordAdminRow, CordCreated, CordRow, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids, validate_cord_name,
@@ -123,7 +129,7 @@ struct CordAdminListInput {
 // -- Wire outputs -------------------------------------------------------------
 
 /// A cord as its member sees it: `CordJson` in `cord_action_specs.ts`.
-fn to_cord_json(cord: &CordRow, role: CordRole) -> Value {
+pub(crate) fn to_cord_json(cord: &CordRow, role: CordRole) -> Value {
     json!({
         "id": cord.id,
         "name": cord.name,
@@ -151,7 +157,7 @@ macro_rules! dispatch_db {
         match &$ctx.db {
             fuz_actions::ActionDb::Pool(c) => $handler(*c, $($arg),*).await,
             fuz_actions::ActionDb::Tx(t) => $handler(*t, $($arg),*).await,
-            _ => Err(internal_error("unsupported ActionDb variant")),
+            _ => Err(fuz_http::internal_error("unsupported ActionDb variant")),
         }
     };
 }
@@ -163,16 +169,19 @@ macro_rules! dispatch_db_ctx {
         match &$ctx.db {
             fuz_actions::ActionDb::Pool(c) => $handler(*c, &$ctx, $($arg),*).await,
             fuz_actions::ActionDb::Tx(t) => $handler(*t, &$ctx, $($arg),*).await,
-            _ => Err(internal_error("unsupported ActionDb variant")),
+            _ => Err(fuz_http::internal_error("unsupported ActionDb variant")),
         }
     };
 }
 
-type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, JsonrpcError>> + Send + 'a>>;
+pub(crate) use {dispatch_db, dispatch_db_ctx};
+
+pub(crate) type HandlerFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Value, JsonrpcError>> + Send + 'a>>;
 
 /// Erase a handler closure into an [`ActionHandler`], giving the closure its
 /// higher-ranked signature so `Box::pin(async move { … })` coerces.
-fn handler<F>(f: F) -> ActionHandler
+pub(crate) fn handler<F>(f: F) -> ActionHandler
 where
     F: for<'a> Fn(Value, ActionContext<'a>) -> HandlerFuture<'a> + Send + Sync + 'static,
 {
@@ -181,7 +190,9 @@ where
 
 /// The acting actor. Every cord spec requires one, so the dispatcher has
 /// already resolved it; `None` here is a wiring bug.
-fn require_actor(auth: ResolvedAuthContext<'_>) -> Result<&RequestActorContext, JsonrpcError> {
+pub(crate) fn require_actor(
+    auth: ResolvedAuthContext<'_>,
+) -> Result<&RequestActorContext, JsonrpcError> {
     auth.actor()
         .ok_or_else(|| internal_error("unreachable: a cord action ran without an acting actor"))
 }
@@ -192,12 +203,22 @@ fn is_instance_admin(auth: &RequestActorContext) -> bool {
     auth.has_scoped_role(ROLE_ADMIN, None)
 }
 
-fn cord_not_found() -> JsonrpcError {
+pub(crate) fn cord_not_found() -> JsonrpcError {
     not_found("cord", Some(ERROR_CORD_NOT_FOUND))
 }
 
 fn name_invalid(e: impl std::fmt::Display) -> JsonrpcError {
     invalid_params(&e.to_string(), Some(ERROR_CORD_NAME_INVALID))
+}
+
+/// Deserialize an optional field that may be absent but never `null`, the
+/// twin of a TS `.optional()`. Pair it with `#[serde(default)]`.
+pub(crate) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 // -- Handlers -----------------------------------------------------------------
@@ -280,16 +301,20 @@ async fn handle_cord_update<C: GenericClient + ?Sized>(
     auth: &RequestActorContext,
     input: &CordUpdateInput,
 ) -> Result<Value, JsonrpcError> {
-    let Some(role) = cord_role_in(&auth.role_grants, input.cord_id) else {
-        return Err(cord_not_found());
+    // the role as the database has it now, not the dispatcher's snapshot,
+    // so an admin demoted or removed a moment ago can't rename; a member
+    // already knows the cord exists, so refusing them isn't a leak
+    let role = match query_cord_manager_role(client, input.cord_id, auth.actor.id).await {
+        Ok(role) => role,
+        Err(CordMemberError::CordNotFound) => return Err(cord_not_found()),
+        Err(CordMemberError::Forbidden) => {
+            return Err(forbidden(
+                "only the cord's owner or admins may change it",
+                Some(ERROR_CORD_UPDATE_FORBIDDEN),
+            ));
+        }
+        Err(e) => return Err(internal_error_with_source("cord_update", &e)),
     };
-    // a member already knows the cord exists, so refusing them isn't a leak
-    if !role.can_manage() {
-        return Err(forbidden(
-            "only the cord's owner or admins may change it",
-            Some(ERROR_CORD_UPDATE_FORBIDDEN),
-        ));
-    }
     let name = validate_cord_name(&input.name).map_err(name_invalid)?;
     let cord = query_cord_rename(client, input.cord_id, &name, auth.actor.id)
         .await
@@ -326,9 +351,18 @@ async fn handle_cord_admin_list<C: GenericClient + ?Sized>(
 
 // -- Specs --------------------------------------------------------------------
 
-/// Cord's action specs, folded into the registry beside the spine's.
+/// Cord's action specs, folded into the registry beside the spine's: the
+/// cord verbs, then the invite verbs, then the member verbs.
 #[must_use]
 pub fn cord_action_specs() -> Vec<ActionSpec> {
+    let mut specs = cord_domain_action_specs();
+    specs.extend(crate::cord_invite_actions::cord_invite_action_specs());
+    specs.extend(crate::cord_member_actions::cord_member_action_specs());
+    specs
+}
+
+/// The cord verbs themselves: create, list, get, update, and the admin list.
+fn cord_domain_action_specs() -> Vec<ActionSpec> {
     vec![
         ActionSpec::with_side_effects(
             "cord_create",
@@ -394,7 +428,7 @@ mod tests {
 
     #[test]
     fn specs_declare_their_auth_and_effects() {
-        let specs = cord_action_specs();
+        let specs = cord_domain_action_specs();
         let find = |method: &str| {
             specs
                 .iter()
