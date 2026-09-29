@@ -4,8 +4,9 @@
 > voice, video, and screenshare rooms, live chat, forums, and your Bluesky
 > feeds, in one instance you run yourself.
 
-**Status: early.** The design is settled and implementation is starting;
-nothing described below works yet.
+**Status: early.** The design is settled and implementation is starting:
+the server skeleton runs, but none of the features described below work
+yet.
 
 Think of the coiled telephone cord stretched from the kitchen wall into
 your bedroom, or everyone on the party line at once. Cord is meant to feel
@@ -48,8 +49,10 @@ database.
 ## What's here today
 
 - a SvelteKit static frontend shell (`src/routes/`)
-- a Rust workspace with one starter crate, `crates/cord`, a placeholder CLI
-  that will grow into the server
+- the server skeleton, `crates/cord_server` (the `cordd` binary): accounts
+  and sessions, invite-gated signup, first-account bootstrap, a JSON-RPC
+  endpoint, a WebSocket endpoint, and health and readiness checks, with no
+  Cord features on top yet
 
 The live room comes first, since hanging out is the point; chat, forums, and
 Bluesky feeds layer on after it.
@@ -87,14 +90,65 @@ gro check  # typecheck, test, lint, format check
 gro build  # production build of the static frontend
 ```
 
+### The server
+
+`cordd` is built on fuz's Rust server crates, which aren't published yet.
+Building it needs those crates checked out beside this repo, at the path
+named in the root `Cargo.toml`; without them, cargo can't resolve the
+workspace. The frontend builds and checks without them.
+
 The Rust side uses cargo directly:
 
 ```bash
-cargo run -p cord
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
+
+To run `cordd` locally you need Postgres. Copy `.env.development.example`
+to `.env.development`, fill in `SECRET_FUZ_COOKIE_KEYS`
+(`openssl rand -base64 32`), load it into your shell, and run the server:
+
+```bash
+createdb cord
+cp .env.development.example .env.development   # then edit it
+set -a; . ./.env.development; set +a           # load it (bash)
+cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
+```
+
+`cordd` reads only its process environment:
+
+| Variable                   | Purpose                                                                |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `DATABASE_URL`             | Postgres connection; unset runs a boot-only server with just `/health` |
+| `FUZ_ALLOWED_ORIGINS`      | required origin allowlist, comma-separated (`http://localhost:*`)      |
+| `SECRET_FUZ_COOKIE_KEYS`   | required with a database: cookie-signing keys, 32+ characters each     |
+| `FUZ_BOOTSTRAP_TOKEN_PATH` | token file that opens first-account bootstrap                          |
+| `HOST`, `PORT`             | bind address, default `127.0.0.1:4061`                                 |
+| `CORD_TRUSTED_PROXIES`     | reverse-proxy IPs or CIDRs trusted for `X-Forwarded-For`               |
+
+It runs its migrations on start. With the server up, the frontend dev
+server proxies `/api` (WebSocket included) and `/health` to port 4061, so
+the two work together on one origin; if you move `cordd` with `PORT`,
+change the proxy target in `vite.config.ts` too. On a fresh database,
+write a token to the file at `FUZ_BOOTSTRAP_TOKEN_PATH` and submit it to
+`POST /api/account/bootstrap` to create the first account; after that, new
+accounts sign up with an invite.
+
+The server's routes:
+
+- `GET /health`: liveness
+- `GET /ready`: readiness; checks the database schema against
+  `crates/cord_server/expected_schema.json`
+- `/api/account/{status,login,logout,password}`: sessions and the account
+- `POST /api/account/bootstrap`: first-account creation, token-gated
+- `POST /api/account/signup`: invite-gated signup
+- `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account and admin
+  actions
+- `/api/ws`: the WebSocket for realtime actions
+
+`cordd db-status` prints a read-only report of the database's tables and
+migrations.
 
 Built with the fuz stack: TypeScript,
 [Svelte](https://github.com/sveltejs/svelte),

@@ -6,8 +6,9 @@
 
 **Status: early.** The design is settled and implementation is starting.
 The repo is a SvelteKit static frontend shell plus a Rust workspace whose
-one crate, `crates/cord`, is a placeholder CLI that becomes the server
-crate `cord_server` (bin `cordd`). No Cord feature exists yet; treat the
+one crate, `crates/cord_server` (bin `cordd`), is the server skeleton over
+the fuz spine: accounts, sessions, bootstrap, invite-gated signup, JSON-RPC,
+WebSocket, health and readiness. No Cord feature exists yet; treat the
 current code as scaffolding, not product, and don't describe planned
 features as working.
 
@@ -51,8 +52,10 @@ For coding conventions, see Skill(fuz-stack).
   the static adapter
 - `src/test/` — vitest tests (not co-located)
 - `static/` — files copied as-is into the frontend build
-- `crates/cord/` — the Rust crate (today a starter CLI: argh args,
-  thiserror errors with `.exit_code()`/`.hint()`)
+- `crates/cord_server/` — the server crate, library plus the `cordd`
+  binary (see Rust below)
+- `.env.development.example` — the server's local env, copied to the
+  gitignored `.env.development`
 
 ## Committing
 
@@ -82,6 +85,61 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+The workspace depends on the fuz Rust spine crates (`fuz_actions`,
+`fuz_auth`, `fuz_db`, `fuz_http`, `fuz_realtime`, `fuz_sys`) as path deps
+into a sibling checkout of the fuz Rust workspace, at the paths in the
+root `Cargo.toml`; they aren't published, so cargo only resolves with that
+checkout present. For the same reason GitHub CI runs only the frontend
+check, and the Rust gates run locally.
+
+### cord_server
+
+An API-only Axum server over the spine; it serves no static files (the
+frontend is served by nginx in production and by Vite in dev, which
+proxies `/api` and `/health` to `cordd`). Modules:
+
+- `main.rs` — `cordd`: tracing init, the Argon2id hasher, `run_app`;
+  `cordd db-status` is the spine's read-only migration report
+- `runtime.rs` — `run_app` / `RunAppOptions` (hasher, default address
+  `127.0.0.1:4061`, drain timeout, rate-limiter mode), signal handling and
+  graceful drain via `fuz_http`
+- `env.rs` — `CordEnv`, read once through an injectable `from_vars`
+  (tests pass a map; no process-env mutation)
+- `app.rs` — `CordApp`, the composition root (pool, keyring, audit
+  emitter, rate limiters, the realtime connection registry)
+- `router.rs` — the route composition: `/health`, `/ready`
+  (`fuz_http::ready_router` over the committed `expected_schema.json`),
+  `/api/account/*` (status, login, logout, password, bootstrap, signup),
+  `/api/rpc` (GET + POST, protocol + account + admin actions), `/api/ws`;
+  the migration chain (`cord_migration_namespaces`, today only the spine's
+  auth migrations); the session cookie `cord_session`
+- `error.rs` — `StartupError` with `.exit_code()` (`2` config, `1`
+  otherwise) and `.hint()`
+
+Without `DATABASE_URL`, `cordd` runs boot-only (`/health` and `/`).
+With one, it requires `FUZ_ALLOWED_ORIGINS` (always) and
+`SECRET_FUZ_COOKIE_KEYS`, runs migrations, then serves. The other vars:
+`HOST`/`PORT`, `FUZ_BOOTSTRAP_TOKEN_PATH`, `CORD_TRUSTED_PROXIES`.
+Spine-wide var names stay unprefixed; cord-only ones take `CORD_`.
+
+Unit tests live in `#[cfg(test)]` modules and need no database: env
+parsing, exit codes, the keyring guard, the action registry, and router
+posture driven in-process with `tower::ServiceExt::oneshot` over a lazy
+pool. Two Postgres-backed integration tests in `crates/cord_server/tests/`
+are `#[ignore]`d; they reset the `public` schema of their database:
+
+```bash
+createdb cord_schema_ready_test
+# drift guard for expected_schema.json, and the column-projection guard
+cargo test -p cord_server -- --ignored
+# regenerate expected_schema.json after a migration change
+UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready -- --ignored
+```
+
+`CORD_SCHEMA_READY_TEST_URL` overrides their database URL. There is no
+testing sibling binary yet, so the spine's test-only seams (the fast
+hasher, `_testing_*` actions, the daemon token) aren't wired.
 
 The root `Cargo.toml` is the workspace: shared package metadata, workspace
 dependencies, the release profile, and the fuz ecosystem's lints

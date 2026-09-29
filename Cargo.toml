@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cord"]
+members = ["crates/cord_server"]
 
 [workspace.package]
 version = "0.0.1"
@@ -9,8 +9,34 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-argh = "0.1"
+# The fuz Rust spine crates, as path deps to a sibling checkout of the fuz
+# workspace (the crates aren't published yet).
+fuz_actions = { path = "../private_fuz/crates/fuz_actions" }
+fuz_auth = { path = "../private_fuz/crates/fuz_auth" }
+fuz_db = { path = "../private_fuz/crates/fuz_db" }
+fuz_http = { path = "../private_fuz/crates/fuz_http" }
+fuz_realtime = { path = "../private_fuz/crates/fuz_realtime" }
+fuz_sys = { path = "../private_fuz/crates/fuz_sys" }
+
+# Async runtime + web framework.
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "sync", "fs", "signal", "time", "process", "io-util"] }
+axum = { version = "0.8", features = ["ws"] }
+# `ServiceExt::oneshot`, for driving a composed `Router` in-process without
+# binding a socket (dev-only).
+tower = "0.5"
+
+# Logging.
+tracing = "0.1"
+
+# Serialization.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors.
 thiserror = "2"
+
+# DB.
+deadpool-postgres = "0.14"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
