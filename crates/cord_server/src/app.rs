@@ -14,7 +14,7 @@ use deadpool_postgres::Pool;
 use fuz_auth::{
     AuditEmitter, Keyring, PasswordHasher, RateLimiter, SharedDaemonTokenState, SocketRevoker,
 };
-use fuz_realtime::{ConnectionRegistry, SseRegistry};
+use fuz_realtime::{ConnectionRegistry, RealtimeRevoker, SseRegistry};
 
 use crate::env::CordEnv;
 use crate::error::StartupError;
@@ -44,8 +44,8 @@ pub struct CordApp {
     pub daemon_token_state: Option<SharedDaemonTokenState>,
 
     // spine: realtime
-    /// The WebSocket connection registry, also the socket revoker and
-    /// notification sender.
+    /// The WebSocket connection registry, also the notification sender and,
+    /// with [`Self::audit_sse`], the socket revoker.
     pub realtime: Arc<ConnectionRegistry>,
     /// The open admin audit-log SSE streams behind
     /// `GET /api/admin/audit/stream`; audit rows fan out to them and
@@ -71,12 +71,14 @@ impl std::fmt::Debug for CordApp {
 }
 
 impl CordApp {
-    /// [`Self::realtime`] as a `SocketRevoker`, so logout, password change, and
-    /// session or token revocation drop the matching live sockets.
+    /// [`Self::realtime`] and [`Self::audit_sse`] as one `SocketRevoker`, so
+    /// logout, password change, and session or token revocation drop the
+    /// matching live sockets and audit streams. The streams can't wait for the
+    /// SSE listener: it fires only on a written audit row, and the REST
+    /// `/logout` / `/password` audit write is fail-open.
     #[must_use]
     pub fn socket_revoker(&self) -> Arc<dyn SocketRevoker> {
-        let registry: Arc<ConnectionRegistry> = Arc::clone(&self.realtime);
-        registry
+        RealtimeRevoker::socket_revoker(&self.realtime, &self.audit_sse)
     }
 
     /// [`Self::realtime`] as a `NotificationSender`, the same instance the
