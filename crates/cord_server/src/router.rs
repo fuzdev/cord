@@ -141,7 +141,8 @@ pub async fn build_router(
     }
 
     // Logout, password change, and session or token revocation drop the
-    // matching live `/api/ws` connections.
+    // matching live `/api/ws` connections and admin audit streams (the
+    // `RealtimeRevoker` fan-out).
     let revoker = app.socket_revoker();
     fuz_auth::register_socket_revocation_listeners(&app.audit_emitter, &revoker);
 
