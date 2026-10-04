@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fuz_auth::AuditEmitter;
+use fuz_auth::{AuditEmitter, SocketRevoker};
 use fuz_db::Pool;
 use fuz_http::CancellationToken;
 use tokio::task::JoinHandle;
@@ -84,13 +84,19 @@ pub struct RunAppOptions {
 /// then one per interval until `shutdown` is cancelled:
 ///
 /// - the spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]): expired
-///   sessions deleted, expired role-grant offers audited once, every
+///   sessions deleted and the connections they opened closed, expired
+///   role-grant offers audited once, every
 ///   [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`]
 /// - the invite expiry sweep ([`crate::invite::sweep`]), every
 ///   [`CORD_INVITE_SWEEP_INTERVAL`]
 ///
 /// `audit` is the app's emitter, so what they audit reaches the admin audit
-/// streams. Call it once migrations have run: the startup passes read the
+/// streams. `socket_revoker` is the app's too
+/// ([`CordApp::socket_revoker`](crate::app::CordApp::socket_revoker)), over
+/// the registries its sockets and audit streams live in: the auth cleanup
+/// closes an expired session's connections through it, so a socket or stream
+/// outlives its session's expiry by at most one interval. Call it once
+/// migrations have run: the startup passes read the
 /// schema. A failed pass is logged and retried on the next interval, and
 /// cancelling `shutdown` drops a pass in progress, so the handles resolve at
 /// once.
@@ -102,6 +108,7 @@ pub struct RunAppOptions {
 pub fn spawn_upkeep(
     pool: &Pool,
     audit: &Arc<AuditEmitter>,
+    socket_revoker: &Arc<dyn SocketRevoker>,
     shutdown: &CancellationToken,
 ) -> [JoinHandle<()>; 2] {
     [
@@ -109,6 +116,7 @@ pub fn spawn_upkeep(
             fuz_auth::AuthCleanupOptions {
                 pool: pool.clone(),
                 audit: Arc::clone(audit),
+                socket_revoker: Arc::clone(socket_revoker),
             },
             fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
             shutdown.clone(),
@@ -177,7 +185,14 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         .map_err(|source| StartupError::Bind { addr, source })?;
 
     // Migrations have run, so each task's startup pass can start now.
-    let upkeep = app.map(|app| spawn_upkeep(&app.pool, &app.audit_emitter, &shutdown));
+    let upkeep = app.map(|app| {
+        spawn_upkeep(
+            &app.pool,
+            &app.audit_emitter,
+            &app.socket_revoker(),
+            &shutdown,
+        )
+    });
 
     // Unconditional human-visible sentinel, whatever the log filter.
     eprintln!("cordd listening on http://{addr}");

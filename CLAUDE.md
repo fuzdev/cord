@@ -67,7 +67,9 @@ Skill(fuz-stack).
 - `main.rs` (`cordd`, `cordd db-status`), `runtime.rs` (`run_app`,
   `RunAppOptions`, signals, drain, and `spawn_upkeep`: the spine's auth
   cleanup and the invite expiry sweep, run beside the server and joined on
-  shutdown), `env.rs` (`CordEnv`),
+  shutdown; the auth cleanup closes the sockets and audit streams of each
+  expired session it deletes, through `CordApp::socket_revoker`),
+  `env.rs` (`CordEnv`),
   `app.rs` (`CordApp`, the composition root), `error.rs` (`StartupError`),
   `transaction_isolation.rs` (the READ COMMITTED boot check)
 - `router.rs` — the routes, middleware, migration chain, action registry,

@@ -22,7 +22,9 @@
 //! (`cord_server::invite::sweep`) for links expired past the grace,
 //! skipping a link another transaction holds. Last, the upkeep tasks the
 //! server runs (`cord_server::runtime::spawn_upkeep`): their startup passes
-//! run that sweep and the spine's auth cleanup, and they end on shutdown.
+//! run that sweep and the spine's auth cleanup, which closes the expired
+//! session it deletes through the revoker they're handed, and they end on
+//! shutdown.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
@@ -58,8 +60,8 @@ use fuz_auth::invite_queries::{
     query_create_invite, query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
 };
 use fuz_auth::{
-    AuditEmitter, AuditLogEvent, CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant,
-    query_role_grant_offer_create,
+    AuditEmitter, AuditLogEvent, CreateRoleGrantOfferInput, ROLE_ADMIN, SocketCloseTarget,
+    SocketRevoker, query_create_role_grant, query_role_grant_offer_create,
 };
 use fuz_db::Pool;
 use uuid::Uuid;
@@ -1033,9 +1035,35 @@ async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
     ));
 }
 
+/// A `SocketRevoker` recording every close it is asked for, by target.
+#[derive(Default)]
+struct RecordingRevoker {
+    closed: std::sync::Mutex<Vec<SocketCloseTarget>>,
+}
+
+impl RecordingRevoker {
+    fn record(&self, target: SocketCloseTarget) -> usize {
+        self.closed.lock().expect("lock").push(target);
+        0
+    }
+}
+
+impl SocketRevoker for RecordingRevoker {
+    fn close_sockets_for_session(&self, target_hash: &str) -> usize {
+        self.record(SocketCloseTarget::Session(target_hash.to_owned()))
+    }
+    fn close_sockets_for_token(&self, target_id: &str) -> usize {
+        self.record(SocketCloseTarget::Token(target_id.to_owned()))
+    }
+    fn close_sockets_for_account(&self, target_id: Uuid) -> usize {
+        self.record(SocketCloseTarget::Account(target_id))
+    }
+}
+
 /// The upkeep tasks' startup passes run both sweeps, the invite expiry sweep
-/// and the spine's auth cleanup, through the emitter they're handed, and
-/// cancelling the token ends them.
+/// and the spine's auth cleanup, through the emitter and the revoker they're
+/// handed (the auth cleanup closes the expired session it deletes, and not
+/// the account's live one), and cancelling the token ends them.
 async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     // what the invite sweep releases: a link expired past the grace
@@ -1065,6 +1093,20 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
         .expect("create offer")
     };
 
+    // what the auth cleanup deletes and closes: a session already expired,
+    // beside a live one on the same account
+    pool.get()
+        .await
+        .expect("pool.get")
+        .execute(
+            "INSERT INTO auth_session (id, account_id, expires_at) VALUES
+               ('upkeep-expired', $1, NOW() - INTERVAL '1 hour'),
+               ('upkeep-live', $1, NOW() + INTERVAL '1 hour')",
+            &[&account_of(pool, recipient).await],
+        )
+        .await
+        .expect("seed sessions");
+
     let audit = Arc::new(AuditEmitter::new(pool.clone()));
     let (tx, mut audited) = tokio::sync::mpsc::unbounded_channel::<Arc<AuditLogEvent>>();
     audit.add_listener(Arc::new(move |event| {
@@ -1072,8 +1114,10 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
         let _ = tx.send(event);
         Box::pin(async {})
     }));
+    let recording = Arc::new(RecordingRevoker::default());
+    let socket_revoker: Arc<dyn SocketRevoker> = Arc::<RecordingRevoker>::clone(&recording);
     let shutdown = fuz_http::CancellationToken::new();
-    let tasks = spawn_upkeep(pool, &audit, &shutdown);
+    let tasks = spawn_upkeep(pool, &audit, &socket_revoker, &shutdown);
 
     // each task's startup pass audits what it swept, in either order
     let (mut invite_expired, mut offer_expired) = (None, None);
@@ -1095,6 +1139,13 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     }
     assert_eq!(invite_expired, Some(serde_json::json!(link_id)));
     assert_eq!(offer_expired, Some(serde_json::json!(offer.id)));
+    // the auth cleanup sweeps sessions before it audits offers, so its
+    // session close has run by the time the offer's audit arrives
+    assert_eq!(
+        *recording.closed.lock().expect("lock"),
+        [SocketCloseTarget::Session("upkeep-expired".to_owned())],
+        "the auth cleanup closes the expired session it deleted, and only that"
+    );
     assert!(!signup_admits(pool, "unkept").await);
     assert!(tasks.iter().all(|task| !task.is_finished()));
 
