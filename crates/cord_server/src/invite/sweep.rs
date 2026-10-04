@@ -10,9 +10,10 @@
 //! cord. The sweep deletes them, so the stock signup stops admitting their
 //! usernames on an invite-gated instance.
 //!
-//! [`crate::runtime::run_app`] runs [`run_cord_invite_sweep`] beside the
-//! server: a pass at startup, after migrations, then one every
-//! [`CORD_INVITE_SWEEP_INTERVAL`], until shutdown.
+//! [`crate::runtime::run_app`] runs [`spawn_cord_invite_sweep`] beside the
+//! server, on the spine's periodic task loop
+//! ([`fuz_http::spawn_periodic`]): a pass at startup, after migrations, then
+//! one every [`CORD_INVITE_SWEEP_INTERVAL`], until shutdown.
 //!
 //! A pass ([`cord_invite_sweep_pass`]) selects the links expired past the
 //! grace (by the database clock) that still have waiting reservations, then
@@ -36,7 +37,7 @@
 //! moves on, and a pass that can't reach the database is logged and retried
 //! on the next tick.
 
-use std::future::Future;
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,8 +45,9 @@ use deadpool_postgres::{Object, Pool};
 use fuz_actions::PostCommitEffects;
 use fuz_auth::{AuditEmitter, AuditLogInput, AuditRouting};
 use fuz_cell::CellError;
+use fuz_http::CancellationToken;
 use serde_json::json;
-use tokio::time::MissedTickBehavior;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::invite::queries::{
@@ -70,23 +72,26 @@ pub struct CordInviteExpireReleased {
     pub released_signup_invite_ids: Vec<Uuid>,
 }
 
-/// Run the expiry sweep until `shutdown` resolves: a pass now, then one
-/// every `interval`.
+/// Spawn the expiry sweep, which runs until `shutdown` is cancelled: a pass
+/// now, then one every `interval`.
 ///
 /// Shutdown drops a pass in progress, which rolls back the link it was on;
-/// the next start's pass picks it up.
-pub async fn run_cord_invite_sweep(
+/// the next start's pass picks it up. The handle resolves once the sweep has
+/// stopped.
+///
+/// # Panics
+///
+/// If `interval` is zero, or when called outside a tokio runtime.
+pub fn spawn_cord_invite_sweep(
     pool: Pool,
     audit: Arc<AuditEmitter>,
     interval: Duration,
-    shutdown: impl Future<Output = ()>,
-) {
-    let sweeping = async {
-        // the first tick completes at once: the startup pass
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        loop {
-            ticker.tick().await;
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
+    fuz_http::spawn_periodic("cord invite sweep", interval, shutdown, move || {
+        let pool = pool.clone();
+        let audit = Arc::clone(&audit);
+        async move {
             let released = cord_invite_sweep_pass(&pool, &audit).await;
             if !released.is_empty() {
                 tracing::info!(
@@ -94,12 +99,10 @@ pub async fn run_cord_invite_sweep(
                     "released the waiting reservations of expired newcomer links"
                 );
             }
+            // a pass logs its own failures and never fails the loop
+            Ok::<(), Infallible>(())
         }
-    };
-    tokio::select! {
-        () = shutdown => {}
-        _ = sweeping => {}
-    }
+    })
 }
 
 /// One sweep pass, returning what it released.
@@ -222,15 +225,16 @@ mod tests {
     async fn the_sweep_survives_an_outage_and_stops_on_shutdown() {
         let pool = unreachable_pool();
         let audit = Arc::new(AuditEmitter::new(pool.clone()));
+        let shutdown = CancellationToken::new();
+        let sweep =
+            spawn_cord_invite_sweep(pool, audit, Duration::from_millis(10), shutdown.clone());
         // several failing passes, then shutdown
-        let sweep = run_cord_invite_sweep(
-            pool,
-            audit,
-            Duration::from_millis(10),
-            tokio::time::sleep(Duration::from_millis(100)),
-        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!sweep.is_finished(), "an outage doesn't end the sweep");
+        shutdown.cancel();
         tokio::time::timeout(Duration::from_secs(10), sweep)
             .await
-            .expect("the sweep stops once shutdown resolves");
+            .expect("the sweep stops once shutdown is cancelled")
+            .expect("the sweep task ends cleanly");
     }
 }

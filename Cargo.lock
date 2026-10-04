@@ -630,6 +630,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

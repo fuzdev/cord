@@ -20,7 +20,9 @@
 //! revoke deletes the waiting reservations, so the stock signup no longer
 //! admits them, as does the expiry sweep's pass
 //! (`cord_server::invite::sweep`) for links expired past the grace,
-//! skipping a link another transaction holds.
+//! skipping a link another transaction holds. Last, the upkeep tasks the
+//! server runs (`cord_server::runtime::spawn_upkeep`): their startup passes
+//! run that sweep and the spine's auth cleanup, and they end on shutdown.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
@@ -48,11 +50,17 @@ use cord_server::invite::queries::{
 use cord_server::invite::redemption_queries::{
     CordInviteRedeemed, query_actor_holds_global_admin, query_actor_holds_global_admin_unlocked,
 };
-use cord_server::invite::sweep::{CordInviteExpireReleased, cord_invite_sweep_pass};
+use cord_server::invite::sweep::{
+    CORD_INVITE_EXPIRE_AUDIT_EVENT, CordInviteExpireReleased, cord_invite_sweep_pass,
+};
+use cord_server::runtime::spawn_upkeep;
 use fuz_auth::invite_queries::{
     query_create_invite, query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
 };
-use fuz_auth::{AuditEmitter, ROLE_ADMIN, query_create_role_grant};
+use fuz_auth::{
+    AuditEmitter, AuditLogEvent, CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant,
+    query_role_grant_offer_create,
+};
 use fuz_db::Pool;
 use uuid::Uuid;
 
@@ -189,6 +197,7 @@ async fn newcomer_links_admit_new_people() {
     scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
     scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
     scenario_the_expiry_sweep(&pool, &cord, admin).await;
+    scenario_the_upkeep_tasks(&pool, &cord, admin).await;
 }
 
 /// A redemption creates the spine invite and the row and spends one use;
@@ -1022,4 +1031,78 @@ async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
         accept(pool, &swept, gone_actor).await,
         Err(CordInviteError::Expired)
     ));
+}
+
+/// The upkeep tasks' startup passes run both sweeps, the invite expiry sweep
+/// and the spine's auth cleanup, through the emitter they're handed, and
+/// cancelling the token ends them.
+async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    // what the invite sweep releases: a link expired past the grace
+    let grace = i64::from(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS);
+    let (link, link_id) = mint(pool, cord.id, admin, Some(3600), Some(5), true).await;
+    redeem(pool, &link, "unkept").await.expect("redeem");
+    backdate(pool, link_id, grace + 1).await;
+    assert!(signup_admits(pool, "unkept").await);
+    // what the auth cleanup audits: a role-grant offer already expired
+    let recipient = seed_actor(pool, "upkeep_recipient").await;
+    let offer = {
+        let client = pool.get().await.expect("pool.get");
+        query_role_grant_offer_create(
+            &client,
+            CreateRoleGrantOfferInput {
+                from_actor_id: admin,
+                to_account_id: account_of(pool, recipient).await,
+                to_actor_id: None,
+                role: "upkeep_role".to_owned(),
+                scope_kind: None,
+                scope_id: None,
+                message: None,
+                expires_at: std::time::SystemTime::now() - std::time::Duration::from_secs(3600),
+            },
+        )
+        .await
+        .expect("create offer")
+    };
+
+    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let (tx, mut audited) = tokio::sync::mpsc::unbounded_channel::<Arc<AuditLogEvent>>();
+    audit.add_listener(Arc::new(move |event| {
+        // a send after the scenario's last `recv` has nowhere to go
+        let _ = tx.send(event);
+        Box::pin(async {})
+    }));
+    let shutdown = fuz_http::CancellationToken::new();
+    let tasks = spawn_upkeep(pool, &audit, &shutdown);
+
+    // each task's startup pass audits what it swept, in either order
+    let (mut invite_expired, mut offer_expired) = (None, None);
+    while invite_expired.is_none() || offer_expired.is_none() {
+        let event = tokio::time::timeout(TIMEOUT, audited.recv())
+            .await
+            .expect("both startup passes audit what they swept")
+            .expect("the listener is registered");
+        let metadata = event.metadata.clone().expect("metadata");
+        if event.event_type == CORD_INVITE_EXPIRE_AUDIT_EVENT
+            && metadata["invite_id"] == serde_json::json!(link_id)
+        {
+            invite_expired = Some(metadata["invite_id"].clone());
+        } else if event.event_type == "role_grant_offer_expire"
+            && metadata["offer_id"] == serde_json::json!(offer.id)
+        {
+            offer_expired = Some(metadata["offer_id"].clone());
+        }
+    }
+    assert_eq!(invite_expired, Some(serde_json::json!(link_id)));
+    assert_eq!(offer_expired, Some(serde_json::json!(offer.id)));
+    assert!(!signup_admits(pool, "unkept").await);
+    assert!(tasks.iter().all(|task| !task.is_finished()));
+
+    shutdown.cancel();
+    for task in tasks {
+        tokio::time::timeout(TIMEOUT, task)
+            .await
+            .expect("cancelling the token ends each task")
+            .expect("the task ends cleanly");
+    }
 }

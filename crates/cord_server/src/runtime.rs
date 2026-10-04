@@ -1,8 +1,8 @@
 //! The server lifecycle, owned by [`run_app`].
 //!
 //! [`run_app`] loads env, installs the signal handler, builds the router
-//! (running migrations), checks the database's transaction isolation,
-//! starts the invite expiry sweep, binds the listener, and drains on
+//! (running migrations), checks the database's transaction isolation, binds
+//! the listener, starts the upkeep tasks ([`spawn_upkeep`]), and drains on
 //! shutdown, so the binary's `main` is tracing init, hasher selection, and
 //! one call.
 
@@ -10,9 +10,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fuz_auth::AuditEmitter;
+use fuz_db::Pool;
+use fuz_http::CancellationToken;
+use tokio::task::JoinHandle;
+
 use crate::env::CordEnv;
 use crate::error::StartupError;
-use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, run_cord_invite_sweep};
+use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, spawn_cord_invite_sweep};
 use crate::router::{BuiltRouter, build_router};
 use crate::transaction_isolation::ensure_read_committed;
 
@@ -75,12 +80,53 @@ pub struct RunAppOptions {
     pub daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
 }
 
+/// The upkeep tasks [`run_app`] runs beside the server, each a pass now and
+/// then one per interval until `shutdown` is cancelled:
+///
+/// - the spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]): expired
+///   sessions deleted, expired role-grant offers audited once, every
+///   [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`]
+/// - the invite expiry sweep ([`crate::invite::sweep`]), every
+///   [`CORD_INVITE_SWEEP_INTERVAL`]
+///
+/// `audit` is the app's emitter, so what they audit reaches the admin audit
+/// streams. Call it once migrations have run: the startup passes read the
+/// schema. A failed pass is logged and retried on the next interval, and
+/// cancelling `shutdown` drops a pass in progress, so the handles resolve at
+/// once.
+///
+/// # Panics
+///
+/// When called outside a tokio runtime.
+#[must_use]
+pub fn spawn_upkeep(
+    pool: &Pool,
+    audit: &Arc<AuditEmitter>,
+    shutdown: &CancellationToken,
+) -> [JoinHandle<()>; 2] {
+    [
+        fuz_auth::spawn_auth_cleanup(
+            fuz_auth::AuthCleanupOptions {
+                pool: pool.clone(),
+                audit: Arc::clone(audit),
+            },
+            fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
+            shutdown.clone(),
+        ),
+        spawn_cord_invite_sweep(
+            pool.clone(),
+            Arc::clone(audit),
+            CORD_INVITE_SWEEP_INTERVAL,
+            shutdown.clone(),
+        ),
+    ]
+}
+
 /// Run the server to completion.
 ///
-/// With a database, the invite expiry sweep
-/// ([`crate::invite::sweep`]) runs beside the server: once migrations
-/// have run, then every [`CORD_INVITE_SWEEP_INTERVAL`]. It stops when
-/// shutdown begins.
+/// With a database, the upkeep tasks ([`spawn_upkeep`]: the spine's auth
+/// cleanup and the invite expiry sweep) run beside the server, from the
+/// bind until shutdown begins.
 ///
 /// With a database, it refuses to serve unless Postgres runs transactions at
 /// READ COMMITTED ([`crate::transaction_isolation`]).
@@ -130,16 +176,8 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
 
-    // Migrations have run, so the sweep's first pass can start now.
-    let sweep = app.map(|app| {
-        let shutdown = shutdown.clone();
-        tokio::spawn(run_cord_invite_sweep(
-            app.pool,
-            app.audit_emitter,
-            CORD_INVITE_SWEEP_INTERVAL,
-            async move { shutdown.cancelled().await },
-        ))
-    });
+    // Migrations have run, so each task's startup pass can start now.
+    let upkeep = app.map(|app| spawn_upkeep(&app.pool, &app.audit_emitter, &shutdown));
 
     // Unconditional human-visible sentinel, whatever the log filter.
     eprintln!("cordd listening on http://{addr}");
@@ -149,13 +187,13 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     let served =
         fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), drain_timeout).await;
 
-    // A serve error returns without the signal, so cancel for the sweep's
-    // sake; it stops at once either way.
+    // A serve error returns without the signal, so cancel for the upkeep
+    // tasks' sake; they stop at once either way.
     shutdown.cancel();
-    if let Some(sweep) = sweep
-        && let Err(e) = sweep.await
-    {
-        tracing::warn!(error = %e, "the invite expiry sweep task failed");
+    for task in upkeep.into_iter().flatten() {
+        if let Err(e) = task.await {
+            tracing::warn!(error = %e, "an upkeep task failed");
+        }
     }
     served.map_err(StartupError::Serve)?;
 
