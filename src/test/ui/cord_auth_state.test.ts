@@ -66,7 +66,7 @@ describe('CordAuthState', () => {
 		const auth_state = new CordAuthState();
 		const login = auth_state.login('keeper', 'correct-horse-battery');
 		await vi.waitFor(() => assert.deepEqual(calls, ['/api/account/login', '/api/account/status']));
-		// the gap: verified, but the account and roles haven't loaded
+		// the gap: verified, but the account and role grants haven't loaded
 		assert.isTrue(auth_state.verified);
 		assert.isTrue(auth_state.verifying);
 		assert.isNull(auth_state.account);
@@ -100,7 +100,17 @@ describe('CordAuthState', () => {
 			json_response(200, {
 				account: { id: 'a', username: 'keeper' },
 				actor: { id: 'b', name: 'keeper' },
-				role_grants: [{ id: 'g', role: 'admin', created_at: '2026-01-01T00:00:00Z' }]
+				role_grants: [
+					{
+						id: 'g',
+						role: 'admin',
+						scope_kind: null,
+						scope_id: null,
+						created_at: '2026-01-01T00:00:00Z',
+						expires_at: null,
+						granted_by: null
+					}
+				]
 			}),
 			json_response(401, { error: 'authentication_required' })
 		];
@@ -108,17 +118,19 @@ describe('CordAuthState', () => {
 		const auth_state = new CordAuthState();
 		await auth_state.check_session();
 		assert.isTrue(auth_state.signed_in);
-		assert.deepEqual(auth_state.roles, ['admin']);
+		assert.deepEqual([...auth_state.global_roles], ['admin']);
+		assert.isTrue(auth_state.is_admin);
 		await auth_state.check_session();
 		assert.isFalse(auth_state.verified);
 		assert.isFalse(auth_state.signed_in);
 		assert.isNull(auth_state.account);
 		assert.isNull(auth_state.actor);
 		assert.deepEqual(auth_state.role_grants, []);
-		assert.deepEqual(auth_state.roles, []);
+		assert.deepEqual([...auth_state.global_roles], []);
+		assert.isFalse(auth_state.is_admin);
 	});
 
-	test('is_instance_admin needs a global admin grant', async () => {
+	test('is_admin needs a global admin grant', async () => {
 		const status = (role_grants: Array<unknown>): Response =>
 			json_response(200, {
 				account: { id: 'a', username: 'keeper' },
@@ -142,11 +154,11 @@ describe('CordAuthState', () => {
 		vi.stubGlobal('fetch', () => Promise.resolve(responses.shift()));
 		const auth_state = new CordAuthState();
 		await auth_state.check_session();
-		assert.isTrue(auth_state.is_instance_admin);
+		assert.isTrue(auth_state.is_admin);
 		await auth_state.check_session();
-		assert.isFalse(auth_state.is_instance_admin, 'a scoped admin grant is not global');
+		assert.isFalse(auth_state.is_admin, 'a scoped admin grant is not global');
 		await auth_state.check_session();
-		assert.isFalse(auth_state.is_instance_admin);
+		assert.isFalse(auth_state.is_admin);
 	});
 
 	test('logout signs out', async () => {

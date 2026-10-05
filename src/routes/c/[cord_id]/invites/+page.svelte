@@ -31,6 +31,6 @@
 		{invites_state}
 		{cord_id}
 		members={cord_page.members_loaded ? cord_page.members_state.members : null}
-		can_admit_newcomers={auth_state.is_instance_admin}
+		can_admit_newcomers={auth_state.is_admin}
 	/>
 {/if}

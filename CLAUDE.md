@@ -165,7 +165,7 @@ The load-bearing rules. Each module named holds the full reasoning.
 - **Frontend gates**: session views wait on `session_checked`; signed-in
   views gate on `signed_in`; gates in front of fuz_app's forms never wait on
   `verifying` (true mid-submit, so the form would unmount and lose input);
-  admin UI gates on `is_instance_admin`, never `roles`, which ignores scope.
+  admin UI gates on `auth_state.is_admin`, fuz_app's global-grant check.
   (`ui/cord_auth_state.svelte.ts`)
 - **Twins and their pins**: `cord_action_specs.ts` twins the Rust specs,
   error reasons, and limits, and `src/test/cord_action_specs.test.ts` sweeps

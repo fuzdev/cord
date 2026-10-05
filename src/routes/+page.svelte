@@ -58,13 +58,13 @@
 						</li>
 					{/each}
 				</ul>
-			{:else if auth_state.is_instance_admin}
+			{:else if auth_state.is_admin}
 				<p>You're not in any cords yet. Create the first one.</p>
 			{:else}
 				<p>You're not in any cords yet. Ask someone in one for an invite.</p>
 			{/if}
 		</section>
-		{#if auth_state.is_instance_admin && cords_state.loaded}
+		{#if auth_state.is_admin && cords_state.loaded}
 			<section>
 				<h2>{cords_state.cords.length > 0 ? 'new cord' : 'create your first cord'}</h2>
 				<CordNameForm

@@ -21,9 +21,6 @@
 	const auth_state = cord_auth_state_context.get();
 	const { api } = cord_rpc_context.get();
 
-	// a global admin grant, the same rule the server's admin actions apply
-	const is_admin = $derived(auth_state.is_instance_admin);
-
 	// `check_session` can't tell a down server from a logged-out 401, so probe
 	// `/health` to show a hint instead of a login form that can't work
 	let probing = $state.raw(true);
@@ -45,7 +42,7 @@
 	provide_admin_rpc_contexts(create_admin_rpc_adapters(api));
 </script>
 
-{#if auth_state.signed_in && is_admin}
+{#if auth_state.signed_in && auth_state.is_admin}
 	<div class="admin-layout">
 		<ColumnLayout class="flex:1 overflow:hidden">
 			{#snippet aside()}

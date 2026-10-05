@@ -90,7 +90,7 @@
 		</ul>
 		<hr class="nav-separator unstyled" />
 		{@render menu_link(resolve('/account'), 'account')}
-		{#if auth_state.is_instance_admin}
+		{#if auth_state.is_admin}
 			{@render menu_link(resolve('/admin'), 'admin')}
 		{/if}
 		{@render menu_link(resolve('/about'), 'about')}

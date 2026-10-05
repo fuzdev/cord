@@ -10,11 +10,13 @@
  * `signup`, and `bootstrap` too, and unmounting a form mid-submit loses its
  * typed input when the attempt fails.
  *
+ * Admin UI gates on the inherited `is_admin`, a global `admin` grant: the
+ * rule the server applies to instance-admin actions like `cord_create`.
+ *
  * @module
  */
 
 import { AuthState } from '@fuzdev/fuz_app/ui/auth_state.svelte.ts';
-import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import { create_context } from '@fuzdev/fuz_ui/context_helpers.ts';
 
 /**
@@ -48,28 +50,19 @@ export class CordAuthState extends AuthState {
 	/**
 	 * True when the session is verified and its account has loaded. After a
 	 * successful `login`, `signup`, or `bootstrap`, `verified` turns true
-	 * before the follow-up `check_session` fills in the account and roles;
-	 * gating signed-in views on this skips that gap.
+	 * before the follow-up `check_session` fills in the account and role
+	 * grants; gating signed-in views on this skips that gap.
 	 */
 	get signed_in(): boolean {
 		return this.verified && this.account !== null;
 	}
 
 	/**
-	 * True when the account holds a global (unscoped) `admin` grant, the rule
-	 * the server applies to instance-admin actions like `cord_create`. `roles`
-	 * ignores scope, so it isn't enough on its own.
-	 */
-	get is_instance_admin(): boolean {
-		return this.active_role_grants.some((g) => g.role === ROLE_ADMIN && !g.scope_id);
-	}
-
-	/**
 	 * Check the session, then mark it checked. A check that ends unverified
 	 * also clears the account, actor, and role grants, which fuz_app's
 	 * `check_session` leaves in place; otherwise a later `login` would set
-	 * `verified` while the previous identity's account and roles still read
-	 * as `signed_in`.
+	 * `verified` while the previous identity's account and role grants still
+	 * read as `signed_in`.
 	 *
 	 * @mutates `this`
 	 */
