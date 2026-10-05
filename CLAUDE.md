@@ -373,9 +373,11 @@ disabled rate limiters, a daemon token under `CORD_DAEMON_TOKEN_DIR`
 tables and the cell tables), cord's `_testing_cord_invite_expire`, and a
 schema wipe on boot when `FUZ_TESTING_RESET_DB_ON_STARTUP` is true. It binds
 `127.0.0.1:4161`. **Every cord table goes in the `_testing_reset`
-truncate**, or rows outlive a test. Never ship it: only it links
-`fuz_testing`, and `cargo xtask check-release` fails if `cordd` reaches
-`fuz_testing` or `fuz_audit` (the `testing_` prefix exempts it by name).
+truncate**, or rows outlive a test. Never ship it: it is the only runtime
+dependent of `fuz_testing`, and `cargo xtask check-release` fails if `cordd`
+reaches `fuz_testing` or `fuz_audit` (the `testing_` prefix exempts
+`testing_cordd` by name; `cord_server` takes `fuz_testing` as a
+dev-dependency for its Postgres suites, an edge the audit ignores).
 
 ## Testing
 
@@ -389,10 +391,11 @@ dispatcher over a live connection but no schema. The Postgres suites in
 `crates/cord_server/tests/` are `#[ignore]`d and reset the `public` schema
 of their database: `schema_ready.rs` (the fixture's drift guard),
 `columns.rs` (the column projections), `cords.rs`, `cord_members.rs`,
-`cord_invites.rs`, and `cord_newcomers.rs`, sharing `tests/common/`; each
-module doc lists what it covers. `transaction_isolation.rs` resets no
-schema: it sets and resets the database's own
-`default_transaction_isolation`.
+`cord_invites.rs`, and `cord_newcomers.rs`, sharing `tests/common/` (the
+reset-and-migrate cycle, the actor seeding, and the `columns.rs` assertion
+come from the spine's `fuz_testing`); each module doc lists what it covers.
+`transaction_isolation.rs` resets no schema: it sets and resets the
+database's own `default_transaction_isolation`.
 
 ```bash
 createdb cord_schema_ready_test

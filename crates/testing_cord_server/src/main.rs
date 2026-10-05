@@ -9,9 +9,11 @@
 //!
 //! 1. The `testing_` binary-name prefix marks it unshippable, and is what
 //!    exempts it, by name, from the release audit below.
-//! 2. `cargo xtask check-release` asserts no production binary's package
-//!    reaches `fuz_testing` or `fuz_audit`; this is a separate crate, so
-//!    `cord_server` stays clean.
+//! 2. `cargo xtask check-release` asserts no production binary reaches
+//!    `fuz_testing` or `fuz_audit` through a runtime dependency; this is a
+//!    separate crate, so `cord_server` takes `fuz_testing` only as a
+//!    dev-dependency for its Postgres suites, an edge that never reaches
+//!    `cordd`.
 //! 3. `TestingArgon2idHasher::new` logs `WARN: test-mode argon2 hasher active`,
 //!    and the disabled rate limiters print their own banner.
 //!

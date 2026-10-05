@@ -247,6 +247,7 @@ dependencies = [
  "fuz_http",
  "fuz_realtime",
  "fuz_sys",
+ "fuz_testing",
  "serde",
  "serde_json",
  "thiserror",

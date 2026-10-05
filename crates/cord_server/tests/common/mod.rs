@@ -2,11 +2,12 @@
 //! migrated database, seeded actors, and the cord and invite-link steps the
 //! suites take, each run in its own transaction as the actions do.
 //!
-//! Every suite here drops and recreates the `public` schema of the one test
-//! database (`CORD_SCHEMA_READY_TEST_URL`, default
-//! `postgres://localhost/cord_schema_ready_test`), so each suite keeps its
-//! scenarios in a single test function; cargo runs the test binaries one at
-//! a time.
+//! Every suite here but `transaction_isolation` drops and recreates the
+//! `public` schema of the one test database (`CORD_SCHEMA_READY_TEST_URL`,
+//! default `postgres://localhost/cord_schema_ready_test`), so each suite keeps
+//! its scenarios in a single test function; cargo runs the test binaries one
+//! at a time. That cycle and the identity seeding are the spine's shared ones
+//! in `fuz_testing` (`fresh_db`, `seed`); the cord steps are this module's.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
 
@@ -21,8 +22,19 @@ use cord_server::invite::redemption_queries::{
     query_cord_invite_redeem,
 };
 use cord_server::router::cord_migration_namespaces;
-use fuz_db::{Pool, col, create_pool, iso8601_timestamp_expr, qualify_columns, run_migrations};
+use fuz_db::{Pool, col, iso8601_timestamp_expr, qualify_columns};
+use fuz_testing::{TestingDbOptions, fresh_test_db_pool, seed_account_actor};
 use uuid::Uuid;
+
+/// The suites' database: `CORD_SCHEMA_READY_TEST_URL` (default
+/// `postgres://localhost/cord_schema_ready_test`) over the chain
+/// `build_router` runs, no scratch DDL.
+const DB: TestingDbOptions<'static> = TestingDbOptions {
+    env_var: "CORD_SCHEMA_READY_TEST_URL",
+    default_db: "cord_schema_ready_test",
+    migrations: &cord_migration_namespaces(),
+    setup_sql: None,
+};
 
 /// Run `$body` in its own transaction bound to `$tx`, committing on `Ok`
 /// and rolling back on `Err`, as the action dispatcher does.
@@ -45,24 +57,12 @@ pub(crate) use in_tx;
 
 /// The test database's URL: `CORD_SCHEMA_READY_TEST_URL`, or the default.
 pub fn test_url() -> String {
-    std::env::var("CORD_SCHEMA_READY_TEST_URL")
-        .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned())
+    DB.url()
 }
 
 /// A pool over a freshly reset and migrated database.
 pub async fn fresh_db_pool() -> Pool {
-    let pool = create_pool(&test_url()).expect("create_pool");
-    {
-        let client = pool.get().await.expect("pool.get");
-        client
-            .batch_execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-            .await
-            .expect("reset schema");
-    }
-    run_migrations(&pool, &cord_migration_namespaces())
-        .await
-        .expect("migrations");
-    pool
+    fresh_test_db_pool(DB).await
 }
 
 /// Create a cord owned by `owner`.
@@ -139,23 +139,7 @@ pub async fn status_of(pool: &Pool, token: &str) -> CordInviteStatus {
 
 /// Seed an account and its actor, returning the actor id.
 pub async fn seed_actor(pool: &Pool, username: &str) -> Uuid {
-    let client = pool.get().await.expect("pool.get");
-    let account_id: Uuid = client
-        .query_one(
-            "INSERT INTO account (username, password_hash) VALUES ($1, 'x') RETURNING id",
-            &[&username],
-        )
-        .await
-        .expect("insert account")
-        .get(0);
-    client
-        .query_one(
-            "INSERT INTO actor (account_id, name) VALUES ($1, $2) RETURNING id",
-            &[&account_id, &username],
-        )
-        .await
-        .expect("insert actor")
-        .get(0)
+    seed_account_actor(pool, username).await.1
 }
 
 /// Every redemption of the link `cord_invite_id`, oldest first. The server

@@ -9,7 +9,9 @@ publish.workspace = true
 # Test-only binary, never shipped. The `testing_` name prefix marks it
 # unshippable and exempts it, by name, from `cargo xtask check-release`, which
 # asserts the production `cordd` graph never reaches `fuz_testing` or
-# `fuz_audit` (this crate is the only one that links `fuz_testing`).
+# `fuz_audit` (this crate is the only runtime dependent of `fuz_testing`;
+# `cord_server` takes it as a dev-dependency for its Postgres suites, an edge
+# the audit ignores).
 [[bin]]
 name = "testing_cordd"
 path = "src/main.rs"

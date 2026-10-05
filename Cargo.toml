@@ -24,9 +24,10 @@ fuz_sys = { path = "../private_fuz/crates/fuz_sys" }
 # Dev tooling: the `cargo xtask check-release` production-binary audit.
 fuz_audit = { path = "../private_fuz/crates/fuz_audit" }
 # Test-only spine fixtures (the fast hasher, the `_testing_*` action specs,
-# the daemon token). Linked only by `testing_cord_server` (bin
-# `testing_cordd`); `cargo xtask check-release` forbids it from the
-# production `cordd` graph.
+# the daemon token, the shared Postgres-suite harness). `testing_cord_server`
+# (bin `testing_cordd`) is its only runtime dependent; `cord_server` takes it
+# as a dev-dependency for its Postgres suites. `cargo xtask check-release`
+# forbids it from the production `cordd` graph.
 fuz_testing = { path = "../private_fuz/crates/fuz_testing" }
 
 # Async runtime + web framework.
