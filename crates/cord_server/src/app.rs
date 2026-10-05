@@ -72,10 +72,11 @@ impl std::fmt::Debug for CordApp {
 
 impl CordApp {
     /// [`Self::realtime`] and [`Self::audit_sse`] as one `SocketRevoker`, so
-    /// logout, password change, and session or token revocation drop the
-    /// matching live sockets and audit streams. The streams can't wait for the
-    /// SSE listener: it fires only on a written audit row, and the REST
-    /// `/logout` / `/password` audit write is fail-open.
+    /// logout, password change, session or token revocation, and the auth
+    /// cleanup's sweep of an expired session drop the matching live sockets
+    /// and audit streams. The streams can't wait for the SSE listener: it
+    /// fires only on a written audit row, and the REST `/logout` /
+    /// `/password` audit write is fail-open.
     #[must_use]
     pub fn socket_revoker(&self) -> Arc<dyn SocketRevoker> {
         RealtimeRevoker::socket_revoker(&self.realtime, &self.audit_sse)
