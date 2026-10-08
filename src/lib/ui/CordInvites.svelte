@@ -118,7 +118,7 @@
 				{@const revoke_error = invites_state.revoke.error(invite.id)}
 				<li class="py_xs">
 					<div class="row gap_sm flex-wrap:wrap">
-						<span class="chip" class:color_b={invite.status === 'active'}>
+						<span class="chip" class:palette_b={invite.status === 'active'}>
 							{STATUS_LABELS[invite.status]}
 						</span>
 						{#if invite.admits_newcomers}
@@ -139,12 +139,16 @@
 							<ConfirmButton
 								onconfirm={() => invites_state.revoke_invite(invite.id)}
 								title="revoke this link"
-								class="sm"
+								class="sized_sm"
 								label="revoke"
 								pending={invites_state.revoke.loading(invite.id)}
 							>
 								{#snippet popover_content(_popover, do_confirm)}
-									<button type="button" class="color_c bg_100" onclick={() => do_confirm()}>
+									<button
+										type="button"
+										class="palette_c background-color:var(--bg_100)"
+										onclick={() => do_confirm()}
+									>
 										<span class="py_sm">revoke this link</span>
 									</button>
 								{/snippet}

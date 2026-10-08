@@ -198,7 +198,7 @@
 								{pending}
 								disabled={false}
 								aria-disabled={pending || draft === member.role}
-								class="sm"
+								class="sized_sm"
 								title="apply the role for {name_of(member)}"
 								onclick={() => apply(member)}
 								{@attach ref(apply_els, member.actor_id)}
@@ -215,12 +215,16 @@
 							<ConfirmButton
 								onconfirm={() => void remove(member.actor_id)}
 								title="remove {name_of(member)}"
-								class="sm"
+								class="sized_sm"
 								label="remove"
 								pending={members_state.removing(member.actor_id)}
 							>
 								{#snippet popover_content(_popover, do_confirm)}
-									<button type="button" class="color_c bg_100" onclick={() => do_confirm()}>
+									<button
+										type="button"
+										class="palette_c background-color:var(--bg_100)"
+										onclick={() => do_confirm()}
+									>
 										<span class="py_sm">remove {name_of(member)} from this cord</span>
 									</button>
 								{/snippet}
@@ -236,12 +240,17 @@
 									Step down to {CORD_ROLE_LABELS[confirming.next]}? Only another owner can make you
 									an owner again.
 								</p>
-								<button type="button" class="sm" onclick={confirm} onkeydown={cancel_on_escape}>
+								<button
+									type="button"
+									class="sized_sm"
+									onclick={confirm}
+									onkeydown={cancel_on_escape}
+								>
 									step down
 								</button>
 								<button
 									type="button"
-									class="sm"
+									class="sized_sm"
 									onclick={cancel}
 									onkeydown={cancel_on_escape}
 									{@attach autofocus()}
@@ -253,12 +262,17 @@
 									Make {name_of(member)} an owner? An owner can change anyone's role and remove
 									anyone from this cord, you included, and only an owner can undo it.
 								</p>
-								<button type="button" class="sm" onclick={confirm} onkeydown={cancel_on_escape}>
+								<button
+									type="button"
+									class="sized_sm"
+									onclick={confirm}
+									onkeydown={cancel_on_escape}
+								>
 									make owner
 								</button>
 								<button
 									type="button"
-									class="sm"
+									class="sized_sm"
 									onclick={cancel}
 									onkeydown={cancel_on_escape}
 									{@attach autofocus()}
@@ -296,7 +310,11 @@
 				pending={members_state.leave.loading}
 			>
 				{#snippet popover_content(_popover, do_confirm)}
-					<button type="button" class="color_c bg_100" onclick={() => do_confirm()}>
+					<button
+						type="button"
+						class="palette_c background-color:var(--bg_100)"
+						onclick={() => do_confirm()}
+					>
 						<span class="py_sm">yes, leave</span>
 					</button>
 				{/snippet}

@@ -65,7 +65,7 @@
 	}
 
 	.tab.selected {
-		border-bottom-color: var(--color_a_50);
+		border-bottom-color: var(--palette_a_50);
 		cursor: default;
 	}
 </style>
