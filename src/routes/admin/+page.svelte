@@ -9,7 +9,7 @@
 <div class="p_lg">
 	<h1>admin</h1>
 	<p>Manage who can sign up and who's signed in, and see the instance's cords.</p>
-	<nav>
+	<nav aria-label="admin overview">
 		<ul>
 			<li><a href={resolve('/admin/invites')}>invites</a>: signup invites</li>
 			<li><a href={resolve('/admin/accounts')}>accounts</a>: accounts and role grants</li>

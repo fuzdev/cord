@@ -44,15 +44,17 @@
 
 {#if auth_state.signed_in && auth_state.is_admin}
 	<div class="admin-layout">
-		<ColumnLayout class="flex:1 overflow:hidden">
+		<ColumnLayout class="flex:1 overflow:hidden" aside_label="admin">
 			{#snippet aside()}
-				<MenuLink path="/admin" class="menuitem font_size_lg">admin</MenuLink>
-				<hr class="nav-separator unstyled" />
-				<MenuLink path="/admin/invites" class="menuitem">invites</MenuLink>
-				<MenuLink path="/admin/accounts" class="menuitem">accounts</MenuLink>
-				<MenuLink path="/admin/sessions" class="menuitem">sessions</MenuLink>
-				<MenuLink path="/admin/audit" class="menuitem">audit log</MenuLink>
-				<MenuLink path="/admin/cords" class="menuitem">cords</MenuLink>
+				<nav aria-label="admin pages">
+					<MenuLink path="/admin" class="menuitem font_size_lg">admin</MenuLink>
+					<hr class="nav-separator unstyled" />
+					<MenuLink path="/admin/invites" class="menuitem">invites</MenuLink>
+					<MenuLink path="/admin/accounts" class="menuitem">accounts</MenuLink>
+					<MenuLink path="/admin/sessions" class="menuitem">sessions</MenuLink>
+					<MenuLink path="/admin/audit" class="menuitem">audit log</MenuLink>
+					<MenuLink path="/admin/cords" class="menuitem">cords</MenuLink>
+				</nav>
 			{/snippet}
 			{@render children()}
 		</ColumnLayout>
@@ -92,7 +94,8 @@
 	/* a viewport tall, not `100%` of the shell's content column, which has
 	   only a min-height and so wouldn't bound it; with `min-height: 0` and
 	   `overflow: hidden`, the nested `ColumnLayout` columns scroll
-	   independently inside it */
+	   independently inside it, and when it's too narrow and stacks, it
+	   scrolls as one column under its sticky toggle */
 	.admin-layout {
 		display: flex;
 		flex-direction: column;
