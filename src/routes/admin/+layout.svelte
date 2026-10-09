@@ -44,9 +44,9 @@
 
 {#if auth_state.signed_in && auth_state.is_admin}
 	<div class="admin-layout">
-		<ColumnLayout class="flex:1 overflow:hidden" aside_label="admin">
+		<ColumnLayout class="flex:1 overflow:hidden" toggle_label="admin">
 			{#snippet aside()}
-				<nav aria-label="admin pages">
+				<nav aria-label="admin">
 					<MenuLink path="/admin" class="menuitem font_size_lg">admin</MenuLink>
 					<hr class="nav-separator unstyled" />
 					<MenuLink path="/admin/invites" class="menuitem">invites</MenuLink>
@@ -56,7 +56,9 @@
 					<MenuLink path="/admin/cords" class="menuitem">cords</MenuLink>
 				</nav>
 			{/snippet}
-			{@render children()}
+			<main>
+				{@render children()}
+			</main>
 		</ColumnLayout>
 	</div>
 {:else}
