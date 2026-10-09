@@ -65,7 +65,9 @@ Skill(fuz-stack).
 `cord_server`'s modules (each module doc holds the detail):
 
 - `main.rs` (`cordd`, `cordd db-status`), `runtime.rs` (`run_app`,
-  `RunAppOptions`, signals, drain, and `spawn_upkeep`: the spine's auth
+  `RunAppOptions`, signals, the shutdown close — a 1001 to every live
+  WebSocket and the end of every audit stream, through
+  `CordApp::socket_revoker` — and drain, and `spawn_upkeep`: the spine's auth
   cleanup and the invite expiry sweep, run beside the server and joined on
   shutdown; the auth cleanup closes the sockets and audit streams of each
   expired session it deletes, through `CordApp::socket_revoker`),

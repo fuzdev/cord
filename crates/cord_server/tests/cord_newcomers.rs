@@ -1060,6 +1060,15 @@ impl SocketRevoker for RecordingRevoker {
     }
 }
 
+impl fuz_http::ShutdownCloser for RecordingRevoker {
+    fn close_all_sockets(&self) -> usize {
+        0
+    }
+    fn wait_closed(&self) -> fuz_http::WaitClosedFuture<'_> {
+        Box::pin(std::future::ready(()))
+    }
+}
+
 /// The upkeep tasks' startup passes run both sweeps, the invite expiry sweep
 /// and the spine's auth cleanup, through the emitter and the revoker they're
 /// handed (the auth cleanup closes the expired session it deletes, and not

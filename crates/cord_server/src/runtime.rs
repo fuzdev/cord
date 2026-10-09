@@ -139,7 +139,9 @@ pub fn spawn_upkeep(
 /// With a database, it refuses to serve unless Postgres runs transactions at
 /// READ COMMITTED ([`crate::transaction_isolation`]).
 ///
-/// Returns once SIGINT or SIGTERM arrives and connections have drained.
+/// Returns once SIGINT or SIGTERM arrives and connections have drained: every
+/// live WebSocket is closed with 1001 (going away) and every audit stream
+/// ended, then in-flight requests drain, bounded by the drain timeout.
 ///
 /// # Errors
 ///
@@ -184,6 +186,11 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         .await
         .map_err(|source| StartupError::Bind { addr, source })?;
 
+    // The revoker reaches both live transports (the `/api/ws` registry and the
+    // audit-stream SSE registry), so shutdown closes them through it. Boot-only
+    // mode (no database) mounts neither, so it has nothing to close.
+    let socket_revoker = app.as_ref().map(crate::app::CordApp::socket_revoker);
+
     // Migrations have run, so each task's startup pass can start now.
     let upkeep = app.map(|app| {
         spawn_upkeep(
@@ -197,14 +204,19 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     // Unconditional human-visible sentinel, whatever the log filter.
     eprintln!("cordd listening on http://{addr}");
 
-    // `serve_with_shutdown` supplies `ConnectInfo<SocketAddr>` per connection
-    // and bounds the drain.
+    // `serve_with_shutdown` supplies `ConnectInfo<SocketAddr>` per connection;
+    // on the signal it gives every live WebSocket a 1001 close and ends every
+    // audit stream, then bounds the drain.
+    let closer: &dyn fuz_http::ShutdownCloser = match &socket_revoker {
+        Some(revoker) => revoker.as_ref(),
+        None => &fuz_http::NoopShutdownCloser,
+    };
     let served =
-        fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), drain_timeout).await;
+        fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), closer, drain_timeout)
+            .await;
 
-    // A serve error returns without the signal, so cancel for the upkeep
-    // tasks' sake; they stop at once either way.
-    shutdown.cancel();
+    // `serve_with_shutdown` returns with the token cancelled — on a serve
+    // error too — so the upkeep tasks are already stopping.
     for task in upkeep.into_iter().flatten() {
         if let Err(e) = task.await {
             tracing::warn!(error = %e, "an upkeep task failed");
