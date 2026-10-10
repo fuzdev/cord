@@ -685,6 +685,8 @@ dependencies = [
  "axum",
  "fuz_db",
  "fuz_sys",
+ "hyper",
+ "hyper-util",
  "serde",
  "serde_json",
  "thiserror",

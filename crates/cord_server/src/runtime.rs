@@ -215,8 +215,8 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), closer, drain_timeout)
             .await;
 
-    // `serve_with_shutdown` returns with the token cancelled — on a serve
-    // error too — so the upkeep tasks are already stopping.
+    // `serve_with_shutdown` returns only once the token has fired, so the
+    // upkeep tasks are already stopping.
     for task in upkeep.into_iter().flatten() {
         if let Err(e) = task.await {
             tracing::warn!(error = %e, "an upkeep task failed");
