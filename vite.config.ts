@@ -33,6 +33,9 @@ export default defineConfig({
 		]
 	},
 	server: {
+		// Vite watches the whole root, an inotify watch per file, and the Rust `target/`
+		// alone can exhaust the user's `max_user_watches` budget
+		watch: { ignored: ['**/target/**', '**/.gro/**'] },
 		// in dev, `cordd` (the Rust server) listens on 4061; nginx does this in production
 		proxy: {
 			// `ws: true` proxies the `/api/ws` WebSocket upgrade through Vite to
