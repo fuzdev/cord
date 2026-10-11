@@ -28,23 +28,22 @@ const ALICE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as Uuid;
 const BOB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' as Uuid;
 const DAY = 24 * 60 * 60;
 
-const invite = (overrides: Partial<CordInviteJson> = {}): CordInviteJson =>
-	({
-		id: INVITE_ID,
-		cord_id: CORD_ID,
-		role: 'cord_member',
-		admits_newcomers: false,
-		created_by: ALICE,
-		created_at: '2026-01-01T00:00:00Z',
-		expires_at: null,
-		max_uses: null,
-		use_count: 0,
-		revoked_at: null,
-		status: 'active',
-		redemption_count: 0,
-		redemption_accepted_count: 0,
-		...overrides
-	}) as CordInviteJson;
+const invite = (overrides: Partial<CordInviteJson> = {}): CordInviteJson => ({
+	id: INVITE_ID,
+	cord_id: CORD_ID,
+	role: 'cord_member',
+	admits_newcomers: false,
+	created_by: ALICE,
+	created_at: '2026-01-01T00:00:00Z',
+	expires_at: null,
+	max_uses: null,
+	use_count: 0,
+	revoked_at: null,
+	status: 'active',
+	redemption_count: 0,
+	redemption_accepted_count: 0,
+	...overrides
+});
 
 const member = (actor_id: string, role: CordMemberJson['role']): CordMemberJson =>
 	({ actor_id, username: 'alice', display_name: null, role }) as CordMemberJson;

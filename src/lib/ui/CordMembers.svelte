@@ -84,7 +84,7 @@
 
 	const focus_el = (el: HTMLElement | undefined): void => {
 		// `focusVisible` shows the focus ring on this programmatic move
-		el?.focus({ focusVisible: true } as FocusOptions);
+		el?.focus({ focusVisible: true });
 	};
 
 	const name_of = (member: CordMemberJson): string => member.display_name ?? member.username;

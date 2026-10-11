@@ -34,8 +34,7 @@
 		untrack(() => {
 			join_state.load(hash);
 			// drop the token from the address bar and this history entry
-			if (hash)
-				void goto(resolve('/join'), { replaceState: true, keepFocus: true, noScroll: true });
+			if (hash) void goto(resolve('/join'), { replace: true, reset: false });
 		});
 	});
 

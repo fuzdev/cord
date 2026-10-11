@@ -118,11 +118,13 @@
 		{@const cord_id = cord_page.cord.id}
 		<h1>{cord_page.cord.name}</h1>
 		<Tabs label="cord pages">
-			<Tab path={`/c/${cord_id}`} selected={page.route.id === '/c/[cord_id]'}>overview</Tab>
-			<Tab path={`/c/${cord_id}/members`}>members</Tab>
+			<Tab href={resolve('/c/[cord_id]', { cord_id })} selected={page.route.id === '/c/[cord_id]'}>
+				overview
+			</Tab>
+			<Tab href={resolve('/c/[cord_id]/members', { cord_id })}>members</Tab>
 			{#if cord_page.can_manage}
-				<Tab path={`/c/${cord_id}/invites`}>invites</Tab>
-				<Tab path={`/c/${cord_id}/settings`}>settings</Tab>
+				<Tab href={resolve('/c/[cord_id]/invites', { cord_id })}>invites</Tab>
+				<Tab href={resolve('/c/[cord_id]/settings', { cord_id })}>settings</Tab>
 			{/if}
 		</Tabs>
 		{@render children()}

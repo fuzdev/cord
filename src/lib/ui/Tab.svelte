@@ -16,33 +16,31 @@
 
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/state';
-	import { resolve } from '$app/paths';
-	import type { Pathname } from '$app/types';
+	import type { ResolvedPathname } from '$app/types';
 
 	const {
-		path,
+		href,
 		selected: selected_override,
 		children
 	}: {
 		/**
-		 * The pathname passed to `resolve` from `$app/paths` for the `href`.
-		 * Under a dynamic segment SvelteKit's `Pathname` ends in a `${string}`
-		 * that accepts any tail, so it doesn't catch a misspelled subroute.
+		 * The tab's link, from `resolve` in `$app/paths`; passing the route id
+		 * with its params (`resolve('/c/[cord_id]/members', {cord_id})`) checks
+		 * the subroute, which a template-literal path wouldn't.
 		 */
-		path: Pathname;
+		href: ResolvedPathname;
 		/** Overrides the selection derived from the page's path when given. */
 		selected?: boolean;
 		children: Snippet;
 	} = $props();
 
-	const href = $derived(resolve(path));
 	const is_exact = $derived(href === page.url.pathname);
 	const selected = $derived(
 		selected_override ?? (is_exact || page.url.pathname.startsWith(href + '/'))
 	);
 </script>
 
-<!-- `href` is `resolve(path)` above; the rule catches only an inline `resolve` -->
+<!-- `href` comes resolved from the caller; the rule catches only an inline `resolve` -->
 <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 <a {href} class="tab" class:selected aria-current={is_exact ? 'page' : undefined}>
 	{@render children()}

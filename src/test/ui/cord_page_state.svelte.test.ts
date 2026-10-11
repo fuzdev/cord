@@ -15,11 +15,19 @@ const PORCH_ID = '11111111-1111-4111-8111-111111111111' as Uuid;
 const YARD_ID = '22222222-2222-4222-8222-222222222222' as Uuid;
 const ALICE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as Uuid;
 
-const cord = (id: Uuid, name: string, role: CordRole): CordJson =>
-	({ id, name, role, created_at: '2026-01-01T00:00:00Z' }) as CordJson;
+const cord = (id: Uuid, name: string, role: CordRole): CordJson => ({
+	id,
+	name,
+	role,
+	created_at: '2026-01-01T00:00:00Z'
+});
 
-const member = (actor_id: Uuid, role: CordRole): CordMemberJson =>
-	({ actor_id, username: 'alice', display_name: null, role }) as CordMemberJson;
+const member = (actor_id: Uuid, role: CordRole): CordMemberJson => ({
+	actor_id,
+	username: 'alice',
+	display_name: null,
+	role
+});
 
 /** A `CordPageState` whose route and viewer the test moves, over the given API methods. */
 const create_page = (methods: Record<string, (input: any) => Promise<unknown>>) => {
