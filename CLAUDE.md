@@ -336,7 +336,7 @@ allowed in tests by `clippy.toml`. The clippy gate denies warnings, so
 `zap.ts` is the whole instance on one dedicated Debian 13 host (the nginx
 recipe's rate-limit zone name is fixed, so two zap sites can't share one);
 `DEPLOY.md` is the operator runbook. The domain, host, logins, certbot
-email, and cookie keys are `$$VAR$$` references resolved from the
+email, and cookie keys are `zap.env('NAME')` references resolved from the
 operator's gitignored `.env.production` (`.env.production.example`), so no
 instance value lives in code. zap evaluates the config under Deno, and
 `deno.json`'s import map points `@fuzdev/zap/` at a sibling zap checkout's

@@ -53,7 +53,8 @@ machine; zap generates the host's env file for `cordd` from `zap.ts`.
 ```bash
 deno task apply:bootstrap            # preview, connecting as BOOTSTRAP_USER
 deno task apply:bootstrap --wetrun
-deno task apply --wetrun             # as cord from here on; converges the rest
+deno task apply                      # as cord from here on: preview the rest
+deno task apply --wetrun             # converge it (a wetrun runs only a previewed plan)
 ```
 
 The bootstrap run installs nginx, PostgreSQL 18, certbot, fail2ban, and
