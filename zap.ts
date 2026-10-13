@@ -4,7 +4,7 @@
  * One host runs nginx, PostgreSQL, and the `cordd` systemd service. nginx
  * terminates TLS, serves the prerendered frontend from `build/`, and proxies
  * `/api`, `/health`, and `/ready` to `cordd` on loopback. The domain and the
- * rest of the operator-side values are `$$VAR$$` references resolved from the
+ * rest of the operator-side values are `zap.env('VAR')` references resolved from the
  * operator's env file at apply time; see `.env.production.example` and
  * `DEPLOY.md`.
  *
@@ -45,15 +45,15 @@ import {
 	nginx_config_verify
 } from '@fuzdev/zap/recipe_nginx.ts';
 import {
-	debian_fuz_app_nginx_site,
+	debian_nginx_spa_site,
 	debian_nginx_remove_default
 } from '@fuzdev/zap/recipe_debian_nginx.ts';
-import { debian_fuz_app_firewall } from '@fuzdev/zap/recipe_debian_firewall.ts';
+import { debian_web_firewall } from '@fuzdev/zap/recipe_debian_firewall.ts';
 import { hardened_systemd_unit } from '@fuzdev/zap/recipe_debian_systemd.ts';
 import { postgres_apt_repo } from '@fuzdev/zap/recipe_debian_postgres.ts';
 import { debian_certbot_stop_nginx } from '@fuzdev/zap/recipe_debian_certbot.ts';
 import { certbot_standalone_issue, certbot_webroot_switch } from '@fuzdev/zap/recipe_certbot.ts';
-import { fuz_app_csp } from '@fuzdev/zap/recipe_csp.ts';
+import { spa_csp } from '@fuzdev/zap/recipe_csp.ts';
 import { fuz_app_bootstrap_token } from '@fuzdev/zap/recipe_bootstrap.ts';
 import { fuz_app_env_base } from '@fuzdev/zap/recipe_env.ts';
 
@@ -107,7 +107,7 @@ NO_COLOR=1
 // Content-Security-Policy for the prerendered SPA: the locked-down fuz_app
 // baseline. The frontend loads nothing from other origins. `connect-src`
 // carries `wss://{{domain}}` for the WebSocket.
-const CSP = fuz_app_csp();
+const CSP = spa_csp();
 
 // The rate-limit zone `rate_limit_zone` defines, read back from its own output
 // rather than retyped, so the audit-stream location below can reference it and
@@ -174,9 +174,9 @@ export default (zap: ZapBuilder): void => {
 	//
 
 	zap.target({
-		host: '$$DEPLOY_HOST$$',
+		host: zap.env('DEPLOY_HOST'),
 		user: DEPLOY_USER,
-		bootstrap_user: '$$BOOTSTRAP_USER$$',
+		bootstrap_user: zap.env('BOOTSTRAP_USER'),
 		package_manager: 'apt',
 		service_manager: 'systemd'
 	});
@@ -267,7 +267,7 @@ export default (zap: ZapBuilder): void => {
 	zap.firewall({
 		id: 'ufw-firewall',
 		name: 'Configure ufw firewall',
-		...debian_fuz_app_firewall(),
+		...debian_web_firewall(),
 		depends_on: ['nginx', 'ufw']
 	});
 
@@ -370,8 +370,8 @@ export default (zap: ZapBuilder): void => {
 			template: ENV_TEMPLATE,
 			vars: {
 				port: PORT,
-				domain: '$$DEPLOY_DOMAIN$$',
-				cookie_keys: '$$SECRET_FUZ_COOKIE_KEYS$$'
+				domain: zap.env('DEPLOY_DOMAIN'),
+				cookie_keys: zap.env('SECRET_FUZ_COOKIE_KEYS')
 			}
 		},
 		mode: '600',
@@ -486,10 +486,10 @@ export default (zap: ZapBuilder): void => {
 	zap.file({
 		id: 'nginx-config',
 		name: 'nginx site config',
-		path: '/etc/nginx/sites-available/$$DEPLOY_DOMAIN$$',
+		path: `/etc/nginx/sites-available/${zap.env('DEPLOY_DOMAIN')}`,
 		content: {
 			type: 'template',
-			template: debian_fuz_app_nginx_site({
+			template: debian_nginx_spa_site({
 				root: `${CURRENT_LINK}/build`,
 				csp: CSP,
 				client_max_body_size: '1m',
@@ -498,7 +498,7 @@ export default (zap: ZapBuilder): void => {
 				extra_locations: EXTRA_LOCATIONS
 			}),
 			vars: {
-				domain: '$$DEPLOY_DOMAIN$$',
+				domain: zap.env('DEPLOY_DOMAIN'),
 				port: PORT
 			}
 		},
@@ -509,8 +509,8 @@ export default (zap: ZapBuilder): void => {
 	zap.link({
 		id: 'nginx-enabled',
 		name: 'Enable nginx site',
-		path: '/etc/nginx/sites-enabled/$$DEPLOY_DOMAIN$$',
-		target: '/etc/nginx/sites-available/$$DEPLOY_DOMAIN$$',
+		path: `/etc/nginx/sites-enabled/${zap.env('DEPLOY_DOMAIN')}`,
+		target: `/etc/nginx/sites-available/${zap.env('DEPLOY_DOMAIN')}`,
 		depends_on: ['nginx-config']
 	});
 
@@ -595,6 +595,6 @@ export default (zap: ZapBuilder): void => {
 		path: APP_DIR,
 		releases: 5,
 		service: SERVICE_NAME,
-		health: { domain: '$$DEPLOY_DOMAIN$$', path: '/ready' }
+		health: { domain: zap.env('DEPLOY_DOMAIN'), path: '/ready' }
 	});
 };
