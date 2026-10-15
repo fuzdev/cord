@@ -8,7 +8,7 @@ default-members = ["crates/cord_server"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-license = "MIT"
+license = "0BSD"
 publish = false
 
 [workspace.dependencies]

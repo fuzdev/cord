@@ -226,4 +226,4 @@ The fuz stack: TypeScript,
 
 ## License
 
-[MIT](LICENSE)
+[0BSD](LICENSE)

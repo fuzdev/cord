@@ -2,7 +2,7 @@
   "name": "@ryanatkn/cord",
   "version": "0.0.1",
   "description": "a self-hosted hangout for friend groups and small communities: voice and video rooms, chat, forums, and Bluesky feeds",
-  "license": "MIT",
+  "license": "0BSD",
   "private": true,
   "repository": "https://github.com/ryanatkn/cord",
   "scripts": {
