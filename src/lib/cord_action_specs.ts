@@ -13,10 +13,9 @@
  */
 
 import { z } from 'zod';
-import { Uuid } from '@fuzdev/fuz_util/id.ts';
+import { Username, Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import { ActingActor } from '@fuzdev/fuz_app/http/auth_shape.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
-import { Username } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import type {
 	ActionSpecUnion,
 	RequestResponseActionSpec

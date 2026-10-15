@@ -17,7 +17,7 @@
  */
 
 import { untrack } from 'svelte';
-import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import { create_context } from '@fuzdev/fuz_ui/context_helpers.ts';
 
 import { ERROR_CORD_NOT_FOUND, type CordJson } from '../cord_action_specs.ts';

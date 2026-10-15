@@ -18,7 +18,7 @@
 import { untrack } from 'svelte';
 import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { AsyncSlot } from '@fuzdev/fuz_app/ui/async_slot.svelte.ts';
-import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import { create_context } from '@fuzdev/fuz_ui/context_helpers.ts';
 
 import type { FrontendActionsApi } from '../action_metatypes.ts';

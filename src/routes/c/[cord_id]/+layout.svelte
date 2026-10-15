@@ -25,7 +25,7 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
-	import { Uuid } from '@fuzdev/fuz_util/id.ts';
+	import { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cord_rpc_context } from '#lib/ui/rpc.ts';

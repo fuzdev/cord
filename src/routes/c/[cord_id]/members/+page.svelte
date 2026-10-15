@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+	import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import { cord_page_state_context } from '#lib/ui/cord_page_state.svelte.ts';

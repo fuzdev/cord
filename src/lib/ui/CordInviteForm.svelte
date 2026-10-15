@@ -10,7 +10,7 @@
 	 */
 
 	import PendingButton from '@fuzdev/fuz_ui/PendingButton.svelte';
-	import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+	import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import { CORD_INVITE_MAX_USES_MAX } from '../cord_action_specs.ts';
 	import {

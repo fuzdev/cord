@@ -27,7 +27,7 @@
 	import PendingButton from '@fuzdev/fuz_ui/PendingButton.svelte';
 	import { autofocus } from '@fuzdev/fuz_ui/autofocus.svelte.ts';
 	import ConfirmButton from '@fuzdev/fuz_app/ui/ConfirmButton.svelte';
-	import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+	import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import type { CordMemberJson } from '../cord_action_specs.ts';
 	import {

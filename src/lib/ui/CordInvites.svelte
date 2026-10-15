@@ -13,7 +13,7 @@
 	import CopyToClipboard from '@fuzdev/fuz_ui/CopyToClipboard.svelte';
 	import ConfirmButton from '@fuzdev/fuz_app/ui/ConfirmButton.svelte';
 	import { format_datetime_local, format_relative_time } from '@fuzdev/fuz_app/ui/ui_format.ts';
-	import type { Uuid } from '@fuzdev/fuz_util/id.ts';
+	import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import type { CordInviteJson, CordInviteStatus, CordMemberJson } from '../cord_action_specs.ts';
 	import CordInviteForm from './CordInviteForm.svelte';
