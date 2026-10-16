@@ -59,7 +59,7 @@
 	}
 
 	.tab:hover {
-		background-color: var(--fg_10);
+		background-color: var(--ink_10);
 	}
 
 	.tab.selected {

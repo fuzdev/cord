@@ -108,6 +108,6 @@
 
 	.nav-separator {
 		margin: var(--space_md) 0;
-		border-top: 1px solid var(--fg_10);
+		border-top: 1px solid var(--ink_10);
 	}
 </style>

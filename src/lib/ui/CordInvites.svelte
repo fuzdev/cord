@@ -146,7 +146,7 @@
 								{#snippet popover_content(_popover, do_confirm)}
 									<button
 										type="button"
-										class="palette_c background-color:var(--bg_100)"
+										class="palette_c background-color:var(--paper_100)"
 										onclick={() => do_confirm()}
 									>
 										<span class="py_sm">revoke this link</span>
