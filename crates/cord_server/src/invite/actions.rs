@@ -259,8 +259,9 @@ struct CordInviteRevokeInput {
     _acting: Option<Uuid>,
 }
 
-/// The input of both `cord_invite_preview` and `cord_invite_accept`.
-#[derive(Debug, Deserialize)]
+/// The input of both `cord_invite_preview` and `cord_invite_accept`. `Debug`
+/// redacts the link token.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordInviteTokenInput {
     token: String,
@@ -272,12 +273,30 @@ struct CordInviteTokenInput {
     _acting: Option<Uuid>,
 }
 
+impl std::fmt::Debug for CordInviteTokenInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CordInviteTokenInput")
+            .field("token", &"<redacted>")
+            .finish_non_exhaustive()
+    }
+}
+
 /// The input of `cord_invite_redeem`: a public action, so no `acting`.
-#[derive(Debug, Deserialize)]
+/// `Debug` redacts the link token.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordInviteRedeemInput {
     token: String,
     username: String,
+}
+
+impl std::fmt::Debug for CordInviteRedeemInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CordInviteRedeemInput")
+            .field("token", &"<redacted>")
+            .field("username", &self.username)
+            .finish()
+    }
 }
 
 // -- Wire outputs -------------------------------------------------------------
@@ -817,6 +836,26 @@ pub(crate) fn cord_invite_action_specs(
 mod tests {
     use super::*;
     use fuz_auth::AuthAxis;
+
+    #[test]
+    fn invite_token_input_debug_redacts_the_token() {
+        let input: CordInviteTokenInput =
+            serde_json::from_value(json!({"token": "invite-link-Gk2wE7"})).unwrap();
+        let rendered = format!("{input:?}");
+        assert!(!rendered.contains("invite-link-Gk2wE7"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+    }
+
+    #[test]
+    fn invite_redeem_input_debug_redacts_the_token() {
+        let input: CordInviteRedeemInput =
+            serde_json::from_value(json!({"token": "invite-link-Rb9yU4", "username": "newcomer"}))
+                .unwrap();
+        let rendered = format!("{input:?}");
+        assert!(!rendered.contains("invite-link-Rb9yU4"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+        assert!(rendered.contains("newcomer"), "{rendered}");
+    }
 
     #[test]
     fn specs_declare_their_auth_and_effects() {

@@ -101,12 +101,22 @@ pub const CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS: u32 = 60 * 60;
 /// The most uses a link may be given.
 pub const CORD_INVITE_MAX_USES_MAX: u32 = 1000;
 
-/// A fresh link token and its digest, the `token_hash` to store.
-#[derive(Debug, Clone)]
+/// A fresh link token and its digest, the `token_hash` to store. `Debug`
+/// redacts the token; the digest stays visible.
+#[derive(Clone)]
 pub struct CordInviteToken {
     /// Shown once, to whoever created the link; never stored.
     pub token: String,
     pub token_hash: String,
+}
+
+impl std::fmt::Debug for CordInviteToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CordInviteToken")
+            .field("token", &"<redacted>")
+            .field("token_hash", &self.token_hash)
+            .finish()
+    }
 }
 
 /// Mint a link token: 32 random bytes from the OS, base64url-encoded (the
@@ -653,6 +663,15 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invite_token_debug_redacts_the_token() {
+        let minted = generate_cord_invite_token();
+        let rendered = format!("{minted:?}");
+        assert!(!rendered.contains(&minted.token), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+        assert!(rendered.contains(&minted.token_hash), "{rendered}");
+    }
 
     #[test]
     fn read_columns_omit_only_the_token_hash() {

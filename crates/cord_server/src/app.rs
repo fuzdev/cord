@@ -151,8 +151,8 @@ impl CordApp {
 
 /// Build a [`Keyring`] from the `SECRET_FUZ_COOKIE_KEYS` value.
 ///
-/// Validation defers to the spine's [`Keyring::validate`], so the per-key
-/// length policy stays single-sourced.
+/// [`Keyring::new`] validates, so the per-key length policy stays
+/// single-sourced in the spine.
 ///
 /// # Errors
 ///
@@ -165,15 +165,8 @@ fn build_keyring(cookie_keys: Option<&str>) -> Result<Keyring, StartupError> {
                 .to_owned(),
         )
     })?;
-    let errors = Keyring::validate(value);
-    if !errors.is_empty() {
-        return Err(StartupError::Config(format!(
-            "SECRET_FUZ_COOKIE_KEYS invalid: {}",
-            errors.join("; ")
-        )));
-    }
     Keyring::new(value)
-        .ok_or_else(|| StartupError::Config("SECRET_FUZ_COOKIE_KEYS is empty or invalid".into()))
+        .map_err(|e| StartupError::Config(format!("SECRET_FUZ_COOKIE_KEYS invalid: {e}")))
 }
 
 #[cfg(test)]
