@@ -419,7 +419,8 @@ cross-backend harness; each test fires `_testing_reset`. It's gated behind
 `FUZ_TEST_CROSS_BACKEND`, so a bare `gro test` skips it.
 `auth` covers the auth flows, `cords` the cord verbs, `cord_members`
 invite links and members, and `cord_newcomers` newcomer links end to end;
-`origin` and `audit_stream` run fuz_app's shared suites. The config is
+`origin`, `origin_scope`, `transport_composition` (the front-door table),
+and `audit_stream` run fuz_app's shared suites. The config is
 `cord_backend_config.ts`, the shared steps `cord_cross_helpers.ts`.
 
 ```bash

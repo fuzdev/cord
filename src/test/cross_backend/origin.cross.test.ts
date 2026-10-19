@@ -7,8 +7,10 @@ import { describe_origin_cross_tests } from '@fuzdev/fuz_app/testing/cross_backe
 
 import './cross_test_types.ts';
 
-// fuz_app's shared origin suite: a disallowed Origin is refused before
-// dispatch, and a request with no Origin (a non-browser caller) passes
+// fuz_app's shared origin suite: a request with no Origin (a non-browser
+// caller) passes. The refusals are `transport_composition.cross.test.ts` (a
+// foreign Origin on every `/api` transport) and `origin_scope.cross.test.ts`
+// (off `/api`)
 const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
 
 describe_origin_cross_tests({
