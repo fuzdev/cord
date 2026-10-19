@@ -74,8 +74,11 @@ Skill(fuz-stack).
   `env.rs` (`CordEnv`),
   `app.rs` (`CordApp`, the composition root), `error.rs` (`StartupError`),
   `transaction_isolation.rs` (the READ COMMITTED boot check)
-- `router.rs` — the routes, middleware, migration chain, action registry,
-  and the `cord_session` cookie
+- `router.rs` — the routes, the `fuz_http::compose_stack` groups (one
+  `api` group and the fallback, both capped at 1 MiB and origin-checked, so
+  every path refuses a foreign `Origin` and answers a declared over-cap body
+  with `413` first), migration chain, action registry, and the `cord_session`
+  cookie
 - `roles.rs`, `cord_authz.rs` — the cord roles; the exact-scope predicates
   and member rules (pure)
 - `cord_queries.rs`, `cord_actions.rs` — cords, and the helpers the other
@@ -305,7 +308,8 @@ at sensible stopping points (`fix:` / `docs:` / `test:` / `feat:` /
 
 `cordd` serves no static files: nginx serves the frontend in production,
 and Vite in dev proxies `/api` and `/health` to `cordd` on port 4061. Without
-`DATABASE_URL` it runs boot-only (`/health` and `/`). `FUZ_ALLOWED_ORIGINS`
+`DATABASE_URL` it runs boot-only (`/health` and `/`, through the same
+stack). `FUZ_ALLOWED_ORIGINS`
 is required always, boot-only included, and validated entry by entry
 (`fuz_http::AllowedOrigins::parse` — a blank value or any malformed entry
 refuses the boot, naming each); with a database, `SECRET_FUZ_COOKIE_KEYS` is required

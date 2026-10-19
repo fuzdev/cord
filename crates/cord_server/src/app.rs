@@ -74,6 +74,24 @@ impl std::fmt::Debug for CordApp {
 }
 
 impl CordApp {
+    /// The front door every credentialed route checks a request at: the
+    /// origin allowlist beside the credential walk (daemon-token, cookie,
+    /// bearer) over cord's own session cookie.
+    ///
+    /// The router builds it once and clones it into every route state, and the
+    /// stack's options read the same gate (`AuthGate::stack_options`), so the
+    /// stack's origin check and the in-handler one read one allowlist.
+    #[must_use]
+    pub fn auth_gate(&self) -> fuz_auth::AuthGate {
+        fuz_auth::AuthGate {
+            pool: self.pool.clone(),
+            keyring: Arc::clone(&self.keyring),
+            daemon_token_state: self.daemon_token_state.clone(),
+            session_cookie_name: crate::router::CORD_SESSION_COOKIE_NAME,
+            allowed_origins: self.allowed_origins.clone(),
+        }
+    }
+
     /// [`Self::realtime`] and [`Self::audit_sse`] as one `SocketRevoker`, so
     /// logout, password change, session or token revocation, and the auth
     /// cleanup's sweep of an expired session drop the matching live sockets

@@ -11,12 +11,24 @@
 //! - `fuz_realtime::audit_stream_router` → `/api/admin/audit/stream`
 //! - `fuz_http::ready_router` → `/ready`
 //!
-//! plus cord's own `/health` and `/`. Middleware applied once at the outer
-//! router: client IP resolution, the origin allowlist, and request tracing,
-//! with per-group body limits on the API routes. The client-IP layer mounts
-//! unconditionally: with no trusted proxies it resolves to the TCP peer and
-//! ignores `X-Forwarded-For`, while leaving it off would collapse every caller
-//! onto one shared bucket in the IP-keyed rate limiters.
+//! plus cord's own `/health` and `/`.
+//!
+//! ## Layers
+//!
+//! The router is `fuz_http::compose_stack`'s: one `api` route group (the
+//! probes, `/ready`, the account REST routes, RPC, the WebSocket, and the
+//! audit stream) and the fallback group for unrouted paths, each behind the
+//! stack's fixed order — request tracing around everything, then the 1 MiB
+//! body cap, the origin check, and client-IP resolution. The cap sits outside
+//! the origin check, so a declared over-cap body answers `413` ahead of a
+//! `403`. Every path is origin-checked, the probes and the fallback included;
+//! a request with no `Origin` passes, so probes and non-browser clients are
+//! unaffected. No group is carved out, and none owns its own cap. The
+//! boot-only router (no database) composes through the same stack.
+//!
+//! Client-IP resolution is in every group: with no trusted proxies it resolves
+//! to the TCP peer and ignores `X-Forwarded-For`, while leaving it off would
+//! collapse every caller onto one shared bucket in the IP-keyed rate limiters.
 //!
 //! ## Migrations
 //!
@@ -30,17 +42,16 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::http::StatusCode;
-use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use fuz_actions::{
     ActionRegistry, PROTOCOL_ACTION_SPECS, RpcRouteState, WsRouteState,
     auth_adapter::build_auth_spec_set, create_rpc_router, register_action_ws,
 };
-use fuz_auth::{AccountRouteState, RateLimiter, RateLimiterMode};
+use fuz_auth::{AccountRouteState, AuthGate, RateLimiter, RateLimiterMode};
 use fuz_http::{
-    DEFAULT_BODY_LIMIT_BYTES, ParsedProxy, body_limit_layer, client_ip_middleware, origin_layer,
-    request_tracing_layer,
+    BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, ParsedProxy, RouteGroup, StackOptions,
+    compose_stack,
 };
 use serde::Serialize;
 
@@ -74,7 +85,9 @@ pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 3] {
 /// it for the work [`crate::runtime::run_app`] runs beside the server.
 #[derive(Debug)]
 pub struct BuiltRouter {
-    pub router: Router,
+    /// The composed router, served by `fuz_http::serve_with_shutdown`, the
+    /// only thing that takes it.
+    pub router: GatedRouter,
     /// `None` in boot-only mode, with no database.
     pub app: Option<CordApp>,
 }
@@ -104,7 +117,7 @@ pub async fn build_router(
     if env.database_url.is_none() {
         tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
         return Ok(BuiltRouter {
-            router: boot_only_router(),
+            router: boot_only_router(env),
             app: None,
         });
     }
@@ -180,12 +193,36 @@ fn expected_ready_schema() -> Result<fuz_db::ExpectedSchema, StartupError> {
         .map_err(|e| StartupError::Internal(format!("expected_schema.json failed to parse: {e}")))
 }
 
-/// The router when no database is configured.
-fn boot_only_router() -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/", get(root))
-        .fallback(not_found)
+/// The router when no database is configured: the probes and the fallback,
+/// through the same stack as the full router (1 MiB cap, origin-checked).
+///
+/// There is no `AuthGate` without a database, so the stack options come
+/// straight from the env's allowlist and trusted proxies.
+fn boot_only_router(env: &CordEnv) -> GatedRouter {
+    compose_stack(
+        [RouteGroup::new(
+            "api",
+            Router::new()
+                .route("/health", get(health))
+                .route("/", get(root)),
+            BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
+        )],
+        fallback_group(),
+        &StackOptions::new(
+            env.allowed_origins.clone(),
+            Arc::new(env.trusted_proxies.clone()),
+        ),
+    )
+}
+
+/// The fallback group: the `404` for every unrouted path, behind the same cap
+/// and origin check as the routed group.
+fn fallback_group() -> RouteGroup {
+    RouteGroup::new(
+        "fallback",
+        Router::new().fallback(not_found),
+        BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
+    )
 }
 
 /// Health-check response body, the spine's canonical `{"status":"ok"}`.
@@ -213,7 +250,13 @@ fn compose_full_router(
     ready: Router,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
     rate_limiters: RateLimiterMode,
-) -> Result<Router, StartupError> {
+) -> Result<GatedRouter, StartupError> {
+    // One gate for the whole server: every route state that resolves a
+    // credential takes a clone of it, and the stack's options read its
+    // allowlist, so the stack's origin check and each handler's in-handler one
+    // cannot drift apart.
+    let gate = app.auth_gate();
+    let stack_options = gate.stack_options(Arc::new(trusted_proxies));
     // One set of per-action limiters shared by the RPC and WebSocket
     // transports and the spine's auth spec set, so a caller gets one budget
     // across them, not one per surface.
@@ -227,43 +270,52 @@ fn compose_full_router(
     )?;
 
     // Account REST, bootstrap, and signup nest under `/api/account`.
-    let api_account = fuz_auth::account_router(build_account_state(app))
+    let api_account = fuz_auth::account_router(build_account_state(app, gate.clone()))
         .merge(fuz_auth::bootstrap_routes::bootstrap_router(
-            build_bootstrap_state(app),
+            build_bootstrap_state(app, gate.clone()),
         ))
         .merge(fuz_auth::signup_routes::signup_router(build_signup_state(
             app,
+            gate.clone(),
             rate_limiters,
-        )))
-        .layer(body_limit_layer(DEFAULT_BODY_LIMIT_BYTES));
+        )));
 
     // RPC and WebSocket nest under `/api`.
     let api = Router::new()
         .merge(create_rpc_router(build_rpc_state(
             app,
+            gate.clone(),
             Arc::clone(&registry),
             action_account_rl.clone(),
             action_ip_rl.clone(),
         )))
         .merge(register_action_ws(build_ws_state(
             app,
+            gate.clone(),
             registry,
             action_account_rl,
             action_ip_rl,
-        )))
-        .layer(body_limit_layer(DEFAULT_BODY_LIMIT_BYTES));
+        )));
 
     // The admin audit-log SSE stream, mounted at its absolute path.
-    let audit_stream = fuz_realtime::audit_stream_router(build_audit_stream_state(app));
+    let audit_stream = fuz_realtime::audit_stream_router(build_audit_stream_state(app, gate));
 
-    let router = Router::new()
-        .route("/health", get(health))
-        .route("/", get(root))
-        .merge(ready)
-        .nest("/api/account", api_account)
-        .nest("/api", api)
-        .merge(audit_stream);
+    // Every route sits in the one `api` group, capped at 1 MiB and
+    // origin-checked; the body-less routes (the probes, `/ready`, the audit
+    // stream) are capped too, since the cap inspects only the request body.
+    let api_group = RouteGroup::new(
+        "api",
+        Router::new()
+            .route("/health", get(health))
+            .route("/", get(root))
+            .merge(ready)
+            .nest("/api/account", api_account)
+            .nest("/api", api)
+            .merge(audit_stream),
+        BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
+    );
 
+    let trusted_proxies = &stack_options.trusted_proxies;
     if trusted_proxies.is_empty() {
         tracing::info!("no trusted proxies configured; XFF ignored, client IP is the TCP peer");
     } else {
@@ -273,36 +325,22 @@ fn compose_full_router(
         );
     }
 
-    Ok(router
-        .layer(from_fn_with_state(
-            Arc::new(trusted_proxies),
-            client_ip_middleware,
-        ))
-        .layer(from_fn_with_state(
-            app.allowed_origins.clone(),
-            origin_layer,
-        ))
-        .layer(request_tracing_layer())
-        .fallback(not_found))
+    Ok(compose_stack([api_group], fallback_group(), &stack_options))
 }
 
-fn build_account_state(app: &CordApp) -> AccountRouteState {
+fn build_account_state(app: &CordApp, gate: AuthGate) -> AccountRouteState {
     AccountRouteState {
-        pool: app.pool.clone(),
-        keyring: Arc::clone(&app.keyring),
+        gate,
         password_hasher: Arc::clone(&app.password_hasher),
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),
-        allowed_origins: app.allowed_origins.clone(),
         bootstrap_available: Arc::clone(&app.bootstrap_available),
         login_ip_rate_limiter: app.login_ip_rate_limiter.clone(),
         login_account_rate_limiter: app.login_account_rate_limiter.clone(),
-        daemon_token_state: app.daemon_token_state.clone(),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
     }
 }
 
-fn build_bootstrap_state(app: &CordApp) -> fuz_auth::BootstrapRouteState {
+fn build_bootstrap_state(app: &CordApp, gate: AuthGate) -> fuz_auth::BootstrapRouteState {
     let options = Arc::new(fuz_auth::BootstrapOptions {
         pool: app.pool.clone(),
         password_hasher: Arc::clone(&app.password_hasher),
@@ -321,18 +359,17 @@ fn build_bootstrap_state(app: &CordApp) -> fuz_auth::BootstrapRouteState {
             resolved
         }),
     });
-    fuz_auth::BootstrapRouteState {
-        options,
-        keyring: Arc::clone(&app.keyring),
-        allowed_origins: app.allowed_origins.clone(),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
-    }
+    fuz_auth::BootstrapRouteState { options, gate }
 }
 
 /// Signup is invite-gated by default (`app_settings.open_signup = false`) and
 /// rate-limited on both axes anyway, so the limiters already stand if an
 /// admin opens signup.
-fn build_signup_state(app: &CordApp, rate_limiters: RateLimiterMode) -> fuz_auth::SignupRouteState {
+fn build_signup_state(
+    app: &CordApp,
+    gate: AuthGate,
+    rate_limiters: RateLimiterMode,
+) -> fuz_auth::SignupRouteState {
     fuz_auth::SignupRouteState {
         options: Arc::new(fuz_auth::SignupOptions {
             pool: app.pool.clone(),
@@ -346,9 +383,7 @@ fn build_signup_state(app: &CordApp, rate_limiters: RateLimiterMode) -> fuz_auth
             signup_fail_floor_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_FLOOR_MS,
             signup_fail_jitter_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_JITTER_MS,
         }),
-        keyring: Arc::clone(&app.keyring),
-        allowed_origins: app.allowed_origins.clone(),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
+        gate,
     }
 }
 
@@ -398,13 +433,10 @@ fn build_action_registry(
 /// State for `GET /api/admin/audit/stream`: admins only, over a cookie
 /// session only, since the stream is a browser feed and close-on-revoke keys
 /// on the session.
-fn build_audit_stream_state(app: &CordApp) -> fuz_realtime::AuditStreamRouteState {
+fn build_audit_stream_state(app: &CordApp, gate: AuthGate) -> fuz_realtime::AuditStreamRouteState {
     fuz_realtime::AuditStreamRouteState {
-        pool: app.pool.clone(),
-        keyring: Arc::clone(&app.keyring),
-        daemon_token_state: app.daemon_token_state.clone(),
+        gate,
         audit_sse: Arc::clone(&app.audit_sse),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
         required_role: fuz_auth::ROLE_ADMIN,
         credential_gate: fuz_auth::CredentialGate::SESSION_ONLY,
     }
@@ -412,20 +444,17 @@ fn build_audit_stream_state(app: &CordApp) -> fuz_realtime::AuditStreamRouteStat
 
 fn build_rpc_state(
     app: &CordApp,
+    gate: AuthGate,
     registry: Arc<ActionRegistry>,
     account_rate_limiter: Option<Arc<RateLimiter>>,
     ip_rate_limiter: Option<Arc<RateLimiter>>,
 ) -> RpcRouteState {
     RpcRouteState {
-        pool: app.pool.clone(),
-        keyring: Arc::clone(&app.keyring),
-        daemon_token_state: app.daemon_token_state.clone(),
-        allowed_origins: app.allowed_origins.clone(),
+        gate,
         registry,
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),
         notification_sender: app.notification_sender(),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
         account_rate_limiter,
         ip_rate_limiter,
     }
@@ -433,21 +462,18 @@ fn build_rpc_state(
 
 fn build_ws_state(
     app: &CordApp,
+    gate: AuthGate,
     registry: Arc<ActionRegistry>,
     account_rate_limiter: Option<Arc<RateLimiter>>,
     ip_rate_limiter: Option<Arc<RateLimiter>>,
 ) -> WsRouteState {
     WsRouteState {
-        pool: app.pool.clone(),
-        keyring: Arc::clone(&app.keyring),
-        daemon_token_state: app.daemon_token_state.clone(),
-        allowed_origins: app.allowed_origins.clone(),
+        gate,
         registry,
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),
         notification_sender: app.notification_sender(),
         connection_registry: Arc::clone(&app.realtime),
-        session_cookie_name: CORD_SESSION_COOKIE_NAME,
         account_rate_limiter,
         ip_rate_limiter,
         // No role gate: the socket is a member surface, and the only
@@ -465,17 +491,34 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    const FOREIGN_ORIGIN: &str = "https://elsewhere.example";
+
     /// Send one request, with the TCP peer `serve_with_shutdown` would supply,
     /// and return the status and body.
     async fn send(
-        router: Router,
+        router: GatedRouter,
         method: &str,
         uri: &str,
         origin: Option<&str>,
     ) -> (StatusCode, String) {
+        send_with(router, method, uri, origin, None).await
+    }
+
+    /// [`send`], optionally declaring a `Content-Length` (with no body behind
+    /// it — the cap reads only the header).
+    async fn send_with(
+        router: GatedRouter,
+        method: &str,
+        uri: &str,
+        origin: Option<&str>,
+        content_length: Option<usize>,
+    ) -> (StatusCode, String) {
         let mut builder = Request::builder().method(method).uri(uri);
         if let Some(origin) = origin {
             builder = builder.header("origin", origin);
+        }
+        if let Some(length) = content_length {
+            builder = builder.header("content-length", length.to_string());
         }
         let mut req = builder.body(Body::empty()).expect("request builds");
         req.extensions_mut().insert(axum::extract::ConnectInfo(
@@ -483,7 +526,11 @@ mod tests {
                 .parse::<std::net::SocketAddr>()
                 .expect("peer parses"),
         ));
-        let res = router.oneshot(req).await.expect("router responds");
+        let res = router
+            .into_router_for_testing()
+            .oneshot(req)
+            .await
+            .expect("router responds");
         let status = res.status();
         let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
             .await
@@ -503,16 +550,25 @@ mod tests {
         )
     }
 
-    fn lazy_app_over(database_url: &str, rate_limiters: RateLimiterMode) -> CordApp {
-        let env = CordEnv::from_vars(|k| match k {
-            "DATABASE_URL" => Some(database_url.to_owned()),
+    /// The env a test router runs on; `database_url` `None` is boot-only.
+    fn test_env(database_url: Option<&str>) -> CordEnv {
+        CordEnv::from_vars(|k| match k {
+            "DATABASE_URL" => database_url.map(str::to_owned),
             "FUZ_ALLOWED_ORIGINS" => Some("http://localhost:*".to_owned()),
             "SECRET_FUZ_COOKIE_KEYS" => {
                 Some("a-cookie-signing-key-that-is-long-enough-to-pass".to_owned())
             }
             _ => None,
         })
-        .expect("env parses");
+        .expect("env parses")
+    }
+
+    fn boot_router() -> GatedRouter {
+        boot_only_router(&test_env(None))
+    }
+
+    fn lazy_app_over(database_url: &str, rate_limiters: RateLimiterMode) -> CordApp {
+        let env = test_env(Some(database_url));
         CordApp::build(
             &env,
             Arc::new(fuz_auth::Argon2idHasher::new()),
@@ -522,11 +578,11 @@ mod tests {
         .expect("app builds without touching the DB")
     }
 
-    fn full_router() -> Router {
+    fn full_router() -> GatedRouter {
         full_router_over(&lazy_app())
     }
 
-    fn full_router_over(app: &CordApp) -> Router {
+    fn full_router_over(app: &CordApp) -> GatedRouter {
         let ready = fuz_http::ready_router(fuz_http::ReadyRouteState {
             pool: app.pool.clone(),
             expected: Arc::new(expected_ready_schema().expect("fixture parses")),
@@ -537,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn boot_only_router_serves_health() {
-        let (status, body) = send(boot_only_router(), "GET", "/health", None).await;
+        let (status, body) = send(boot_router(), "GET", "/health", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, r#"{"status":"ok"}"#);
     }
@@ -545,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn boot_only_router_mounts_no_api_or_ready() {
         for uri in ["/api/rpc", "/api/account/status", "/ready"] {
-            let (status, _) = send(boot_only_router(), "GET", uri, None).await;
+            let (status, _) = send(boot_router(), "GET", uri, None).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri} must not be mounted");
         }
     }
@@ -571,14 +627,58 @@ mod tests {
             ("GET", "/api/ws"),
             ("GET", "/api/admin/audit/stream"),
         ] {
-            let (status, _) = send(
-                full_router(),
-                method,
-                uri,
-                Some("https://elsewhere.example"),
-            )
-            .await;
+            let (status, _) = send(full_router(), method, uri, Some(FOREIGN_ORIGIN)).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+    }
+
+    /// Both routers, full and boot-only, labelled for the assertion messages.
+    fn both_routers() -> [(&'static str, GatedRouter); 2] {
+        [("full", full_router()), ("boot-only", boot_router())]
+    }
+
+    #[tokio::test]
+    async fn a_foreign_origin_is_refused_on_the_probes_and_unrouted_paths() {
+        for (label, router) in both_routers() {
+            for uri in ["/health", "/", "/nope", "/api/nope"] {
+                let (status, body) = send(router.clone(), "GET", uri, Some(FOREIGN_ORIGIN)).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{label} {uri}: {body}");
+                assert_eq!(body, r#"{"error":"forbidden_origin"}"#, "{label} {uri}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_absent_or_allowed_origin_passes_the_check() {
+        for (label, router) in both_routers() {
+            for origin in [None, Some("http://localhost:5173")] {
+                let (status, _) = send(router.clone(), "GET", "/health", origin).await;
+                assert_eq!(status, StatusCode::OK, "{label} {origin:?}");
+                let (status, _) = send(router.clone(), "GET", "/nope", origin).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{label} {origin:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_over_cap_body_is_413_ahead_of_the_origin_check() {
+        let over_cap = Some(DEFAULT_BODY_LIMIT_BYTES + 1);
+        for (label, router) in both_routers() {
+            for uri in ["/health", "/nope", "/api/nope"] {
+                let (status, body) =
+                    send_with(router.clone(), "POST", uri, Some(FOREIGN_ORIGIN), over_cap).await;
+                assert_eq!(
+                    status,
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "{label} {uri}: {body}"
+                );
+            }
+        }
+        // and on the API itself
+        for uri in ["/api/rpc", "/api/account/login"] {
+            let (status, body) =
+                send_with(full_router(), "POST", uri, Some(FOREIGN_ORIGIN), over_cap).await;
+            assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{uri}: {body}");
         }
     }
 
@@ -608,7 +708,7 @@ mod tests {
     /// POST one JSON-RPC request from `peer` and return the HTTP status and
     /// the response body.
     async fn post_rpc(
-        router: Router,
+        router: GatedRouter,
         peer: &str,
         body: &serde_json::Value,
     ) -> (StatusCode, serde_json::Value) {
@@ -621,7 +721,11 @@ mod tests {
         req.extensions_mut().insert(axum::extract::ConnectInfo(
             peer.parse::<std::net::SocketAddr>().expect("peer parses"),
         ));
-        let res = router.oneshot(req).await.expect("router responds");
+        let res = router
+            .into_router_for_testing()
+            .oneshot(req)
+            .await
+            .expect("router responds");
         let status = res.status();
         let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
             .await
