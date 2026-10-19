@@ -1058,6 +1058,12 @@ impl SocketRevoker for RecordingRevoker {
     fn close_sockets_for_account(&self, target_id: Uuid) -> usize {
         self.record(SocketCloseTarget::Account(target_id))
     }
+    fn close_sockets_for_role(&self, account_id: Uuid, role: &str) -> usize {
+        self.record(SocketCloseTarget::Role {
+            account_id,
+            role: role.to_owned(),
+        })
+    }
 }
 
 impl fuz_http::ShutdownCloser for RecordingRevoker {
