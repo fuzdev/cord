@@ -53,14 +53,17 @@ pub struct CordApp {
     pub audit_sse: Arc<SseRegistry>,
 
     // shared config
-    pub allowed_origins: Arc<Vec<String>>,
+    pub allowed_origins: fuz_http::AllowedOrigins,
     pub bootstrap_token_path: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for CordApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CordApp")
-            .field("allowed_origins_count", &self.allowed_origins.len())
+            .field(
+                "allowed_origins_count",
+                &self.allowed_origins.patterns().len(),
+            )
             .field(
                 "has_bootstrap_token_path",
                 &self.bootstrap_token_path.is_some(),
@@ -143,7 +146,7 @@ impl CordApp {
             daemon_token_state,
             realtime: Arc::new(ConnectionRegistry::new()),
             audit_sse: Arc::new(SseRegistry::new()),
-            allowed_origins: Arc::new(env.allowed_origins.clone()),
+            allowed_origins: env.allowed_origins.clone(),
             bootstrap_token_path: env.bootstrap_token_path.clone(),
         })
     }

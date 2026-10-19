@@ -279,7 +279,7 @@ fn compose_full_router(
             client_ip_middleware,
         ))
         .layer(from_fn_with_state(
-            Arc::clone(&app.allowed_origins),
+            app.allowed_origins.clone(),
             origin_layer,
         ))
         .layer(request_tracing_layer())
@@ -293,7 +293,7 @@ fn build_account_state(app: &CordApp) -> AccountRouteState {
         password_hasher: Arc::clone(&app.password_hasher),
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),
-        allowed_origins: Arc::clone(&app.allowed_origins),
+        allowed_origins: app.allowed_origins.clone(),
         bootstrap_available: Arc::clone(&app.bootstrap_available),
         login_ip_rate_limiter: app.login_ip_rate_limiter.clone(),
         login_account_rate_limiter: app.login_account_rate_limiter.clone(),
@@ -324,7 +324,7 @@ fn build_bootstrap_state(app: &CordApp) -> fuz_auth::BootstrapRouteState {
     fuz_auth::BootstrapRouteState {
         options,
         keyring: Arc::clone(&app.keyring),
-        allowed_origins: Arc::clone(&app.allowed_origins),
+        allowed_origins: app.allowed_origins.clone(),
         session_cookie_name: CORD_SESSION_COOKIE_NAME,
     }
 }
@@ -347,7 +347,7 @@ fn build_signup_state(app: &CordApp, rate_limiters: RateLimiterMode) -> fuz_auth
             signup_fail_jitter_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_JITTER_MS,
         }),
         keyring: Arc::clone(&app.keyring),
-        allowed_origins: Arc::clone(&app.allowed_origins),
+        allowed_origins: app.allowed_origins.clone(),
         session_cookie_name: CORD_SESSION_COOKIE_NAME,
     }
 }
@@ -420,7 +420,7 @@ fn build_rpc_state(
         pool: app.pool.clone(),
         keyring: Arc::clone(&app.keyring),
         daemon_token_state: app.daemon_token_state.clone(),
-        allowed_origins: Arc::clone(&app.allowed_origins),
+        allowed_origins: app.allowed_origins.clone(),
         registry,
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),
@@ -441,7 +441,7 @@ fn build_ws_state(
         pool: app.pool.clone(),
         keyring: Arc::clone(&app.keyring),
         daemon_token_state: app.daemon_token_state.clone(),
-        allowed_origins: Arc::clone(&app.allowed_origins),
+        allowed_origins: app.allowed_origins.clone(),
         registry,
         audit: Arc::clone(&app.audit_emitter),
         socket_revoker: app.socket_revoker(),

@@ -306,8 +306,9 @@ at sensible stopping points (`fix:` / `docs:` / `test:` / `feat:` /
 `cordd` serves no static files: nginx serves the frontend in production,
 and Vite in dev proxies `/api` and `/health` to `cordd` on port 4061. Without
 `DATABASE_URL` it runs boot-only (`/health` and `/`). `FUZ_ALLOWED_ORIGINS`
-is required always, boot-only included, since an empty allowlist would
-admit every origin; with a database, `SECRET_FUZ_COOKIE_KEYS` is required
+is required always, boot-only included, and validated entry by entry
+(`fuz_http::AllowedOrigins::parse` — a blank value or any malformed entry
+refuses the boot, naming each); with a database, `SECRET_FUZ_COOKIE_KEYS` is required
 too, migrations run before serving, and `cordd` refuses to serve unless
 Postgres's `default_transaction_isolation` is `read committed`. The
 README's table lists every variable; spine-wide names stay unprefixed and

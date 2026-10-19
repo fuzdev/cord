@@ -28,10 +28,10 @@ pub struct CordEnv {
     /// caller's default address when both are unset.
     pub bind_addr: Option<SocketAddr>,
 
-    /// Origin allowlist patterns from `FUZ_ALLOWED_ORIGINS`, comma-separated.
-    /// Required and non-empty: `fuz_http::check_origin` treats an empty list
-    /// as allow-all, so parsing refuses to boot without one.
-    pub allowed_origins: Vec<String>,
+    /// Origin allowlist from `FUZ_ALLOWED_ORIGINS`, comma-separated. Required:
+    /// [`fuz_http::AllowedOrigins::parse`] refuses a blank value and every
+    /// malformed entry, so the boot fails naming each.
+    pub allowed_origins: fuz_http::AllowedOrigins,
 
     /// Trusted reverse-proxy hops for `X-Forwarded-For` resolution, from
     /// `CORD_TRUSTED_PROXIES` (comma-separated IPs or CIDRs); empty when
@@ -81,19 +81,12 @@ impl CordEnv {
         let database_url = get("DATABASE_URL").filter(|s| !s.trim().is_empty());
         let bind_addr = resolve_bind_addr(&get)?;
 
-        let allowed_origins: Vec<String> = get("FUZ_ALLOWED_ORIGINS")
-            .map(|s| fuz_http::parse_allowed_origins(&s))
-            .unwrap_or_default();
-        // Fail loud: an empty allowlist would make `fuz_http::check_origin`
-        // allow every origin, silently disabling the origin gate on the
-        // account routes, `/api/rpc`, and the WebSocket upgrade.
-        if allowed_origins.is_empty() {
-            return Err(StartupError::Config(
-                "FUZ_ALLOWED_ORIGINS is required and must list at least one origin \
-                 (an empty allowlist would disable origin checks)"
-                    .to_owned(),
-            ));
-        }
+        // Fail loud: a missing or malformed allowlist refuses the boot, naming
+        // every refused entry, rather than leaving the origin gate on the
+        // account routes, `/api/rpc`, and the WebSocket upgrade unusable.
+        let allowed_origins =
+            fuz_http::AllowedOrigins::parse(&get("FUZ_ALLOWED_ORIGINS").unwrap_or_default())
+                .map_err(|e| StartupError::Config(format!("FUZ_ALLOWED_ORIGINS: {e}")))?;
 
         let trusted_proxies = get("CORD_TRUSTED_PROXIES")
             .filter(|s| !s.trim().is_empty())
@@ -194,10 +187,13 @@ mod tests {
             Some("postgres://localhost/cord")
         );
         assert_eq!(env.bind_addr, Some("127.0.0.1:14061".parse().unwrap()));
-        assert_eq!(
-            env.allowed_origins,
-            vec!["http://a.example".to_owned(), "http://b.example".to_owned()]
-        );
+        let origins: Vec<&str> = env
+            .allowed_origins
+            .patterns()
+            .iter()
+            .map(fuz_http::OriginPattern::as_str)
+            .collect();
+        assert_eq!(origins, ["http://a.example", "http://b.example"]);
         assert_eq!(env.bootstrap_token_path, Some(PathBuf::from("/tmp/bt")));
         assert_eq!(env.cookie_keys.as_deref(), Some("k"));
     }
@@ -271,6 +267,18 @@ mod tests {
             empty.to_string().contains("FUZ_ALLOWED_ORIGINS"),
             "whitespace-only allowlist must hard-fail, got: {empty}"
         );
+    }
+
+    #[test]
+    fn a_malformed_allowed_origin_hard_fails_naming_the_entry() {
+        let err = CordEnv::from_vars(|k| {
+            (k == "FUZ_ALLOWED_ORIGINS")
+                .then(|| "https://cord.example,https://cord.example/".to_owned())
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("FUZ_ALLOWED_ORIGINS: "), "{err}");
+        assert!(err.contains("entry 2"), "{err}");
     }
 
     #[test]
