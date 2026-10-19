@@ -94,10 +94,10 @@ pub struct RunAppOptions {
 /// streams. `socket_revoker` is the app's too
 /// ([`CordApp::socket_revoker`](crate::app::CordApp::socket_revoker)), over
 /// the registries its sockets and audit streams live in: the auth cleanup
-/// closes an expired session's connections through it, so a socket or stream
-/// outlives its session's expiry by at most one interval. Call it once
-/// migrations have run: the startup passes read the
-/// schema. A failed pass is logged and retried on the next interval, and
+/// closes an expired session's connections through it — a repeat, since a
+/// socket or stream already closes at its own credential's deadline
+/// ([`fuz_auth::ResolvedAuth::credential_deadline`]). Call it once migrations
+/// have run: the startup passes read the schema. A failed pass is logged and retried on the next interval, and
 /// cancelling `shutdown` drops a pass in progress, so the handles resolve at
 /// once.
 ///
