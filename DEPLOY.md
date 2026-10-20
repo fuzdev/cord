@@ -8,17 +8,17 @@ serves the static frontend and proxies `/api`, `/health`, and `/ready` to
 zap is dry-run by default: each command below previews its plan, and
 `--wetrun` carries it out. The `deno task` names come from
 [`deno.json`](deno.json) and pass `--env-file .env.production zap.ts`.
-They run from the repo root, which matters if you call `zap` directly:
-its Deno evaluation finds `deno.json`, and with it the zap recipes, from
-the working directory.
+The zap recipes resolve through `node_modules/@fuzdev/zap`, the link
+`npm install` makes to the zap checkout, so `zap` finds them from any
+working directory.
 
 ## What you need
 
 - `zap` and `deno` on your `PATH` (zap evaluates `zap.ts` under Deno)
 - this repo checked out beside fuz's Rust server crates (the `cordd` build,
-  see the README) and beside zap, whose recipes `deno.json` maps
-  `@fuzdev/zap/` to; keep the installed `zap` binary built from that
-  checkout
+  see the README) and beside zap, which `package.json` names as the
+  `@fuzdev/zap` dev dependency (run `npm install` to link it); keep the
+  installed `zap` binary built from that checkout
 - the Rust toolchain and `gro`, for the build zap runs locally; `cordd` is
   built on your machine and shipped as-is, so build on Linux x86_64 with a
   glibc no newer than the host's (Debian 13 building for Debian 13 is fine;

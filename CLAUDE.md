@@ -343,10 +343,11 @@ recipe's rate-limit zone name is fixed, so two zap sites can't share one);
 `DEPLOY.md` is the operator runbook. The domain, host, logins, certbot
 email, and cookie keys are `zap.env('NAME')` references resolved from the
 operator's gitignored `.env.production` (`.env.production.example`), so no
-instance value lives in code. zap evaluates the config under Deno, and
-`deno.json`'s import map points `@fuzdev/zap/` at a sibling zap checkout's
-recipe sources, so npm and GitHub CI never see zap; `tsconfig.json`
-excludes `zap.ts`. Check it offline with `deno task check:zap` (types) and
+instance value lives in code. zap evaluates the config under Deno with no
+`deno.json` read, so the recipes resolve through `node_modules`: the
+`@fuzdev/zap` dev dependency is a path to a sibling zap checkout, which
+`npm install` links in; `tsconfig.json` excludes `zap.ts`. Check it offline
+with `deno task check:zap` (types) and
 `zap config validate --env-file <file> zap.ts` (eval and schema, no host).
 
 What's cord-specific, beyond the stock fuz_app recipes:

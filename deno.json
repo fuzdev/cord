@@ -1,7 +1,4 @@
 {
-	"imports": {
-		"@fuzdev/zap/": "../private_zap/src/lib/"
-	},
 	"tasks": {
 		"check:zap": "deno check zap.ts",
 		"validate": "zap config validate --env-file .env.production zap.ts",
