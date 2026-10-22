@@ -58,7 +58,7 @@ use crate::invite::redemption_queries::{
 };
 
 /// How often the expiry sweep runs after its startup pass (10 minutes).
-pub const CORD_INVITE_SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+pub const CORD_INVITE_SWEEP_INTERVAL: Duration = Duration::from_mins(10);
 
 /// The audit event a sweep writes for each link it releases.
 pub const CORD_INVITE_EXPIRE_AUDIT_EVENT: &str = "cord_invite_expire";
