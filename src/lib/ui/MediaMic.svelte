@@ -277,14 +277,14 @@
 <table class="font_size_sm">
 	<tbody>
 		<tr>
-			<th>room noise</th>
+			<th scope="row">room noise</th>
 			<td>
 				<span class="font_family_mono">{format_db(noise_db)} dBFS</span>
 				<span class="text_50">(the quietest moment of the last ten seconds)</span>
 			</td>
 		</tr>
 		<tr>
-			<th>loudest</th>
+			<th scope="row">loudest</th>
 			<td>
 				<span class="font_family_mono">{format_db(loudest_db)} dBFS</span>
 				{#if Number.isFinite(speech_gap_db)}
@@ -295,21 +295,21 @@
 			</td>
 		</tr>
 		<tr>
-			<th>clips</th>
+			<th scope="row">clips</th>
 			<td>
 				{clips}
 				<span class="text_50">(times the signal hit full scale; should stay 0)</span>
 			</td>
 		</tr>
 		<tr>
-			<th>dropouts</th>
+			<th scope="row">dropouts</th>
 			<td>
 				{dropouts}
 				<span class="text_50">(gaps of silence cut into the input; should stay 0)</span>
 			</td>
 		</tr>
 		<tr>
-			<th>page stalls</th>
+			<th scope="row">page stalls</th>
 			<td>
 				{stalls}
 				<span class="text_50">(the page froze over {STALL_MS} ms; a busy machine shows here)</span>
@@ -317,7 +317,7 @@
 		</tr>
 		{#each context_info as [key, value] (key)}
 			<tr>
-				<th>{key}</th>
+				<th scope="row">{key}</th>
 				<td class="font_family_mono">{value}</td>
 			</tr>
 		{/each}
@@ -337,6 +337,10 @@
 {/if}
 
 <style>
+	/* row labels sit against their values; browsers center a `th` by default */
+	th[scope='row'] {
+		text-align: right;
+	}
 	.meter {
 		position: relative;
 		height: var(--space_xl2);

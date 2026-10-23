@@ -634,40 +634,40 @@
 					<table class="font_size_sm">
 						<tbody>
 							<tr>
-								<th>secure page</th>
+								<th scope="row">secure page</th>
 								<td>{secure ? 'yes' : 'no'}</td>
 							</tr>
 							<tr>
-								<th>mic permission</th>
+								<th scope="row">mic permission</th>
 								<td>{mic_permission}</td>
 							</tr>
 							<tr>
-								<th>camera permission</th>
+								<th scope="row">camera permission</th>
 								<td>{camera_permission}</td>
 							</tr>
 							<tr>
-								<th>screen share</th>
+								<th scope="row">screen share</th>
 								<td>{has_display_media ? 'yes' : 'no'}</td>
 							</tr>
 							<tr>
-								<th>WebRTC</th>
+								<th scope="row">WebRTC</th>
 								<td>{has_webrtc ? 'yes' : 'no'}</td>
 							</tr>
 							{#each browser_rows as [key, value] (key)}
 								<tr>
-									<th>{key}</th>
+									<th scope="row">{key}</th>
 									<td>{value}</td>
 								</tr>
 							{/each}
 							{#if stream && audio_input_id}
 								<tr>
-									<th>using mic</th>
+									<th scope="row">using mic</th>
 									<td>{selected_label(audio_inputs, audio_input_id)}</td>
 								</tr>
 							{/if}
 							{#if stream && video_input_id}
 								<tr>
-									<th>using camera</th>
+									<th scope="row">using camera</th>
 									<td>{selected_label(video_inputs, video_input_id)}</td>
 								</tr>
 							{/if}
@@ -701,12 +701,12 @@
 			<caption class="text-align:left">{info.label}</caption>
 			<tbody>
 				<tr>
-					<th>state</th>
+					<th scope="row">state</th>
 					<td>{info.state}{info.muted ? ' (muted by the source)' : ''}</td>
 				</tr>
 				{#each info.settings as [key, value] (key)}
 					<tr>
-						<th>{key}</th>
+						<th scope="row">{key}</th>
 						<td class="font_family_mono">{value}</td>
 					</tr>
 				{/each}
@@ -719,7 +719,7 @@
 					<tbody>
 						{#each info.capabilities as [key, value] (key)}
 							<tr>
-								<th>{key}</th>
+								<th scope="row">{key}</th>
 								<td class="font_family_mono">{value}</td>
 							</tr>
 						{/each}
@@ -731,6 +731,10 @@
 {/snippet}
 
 <style>
+	/* browsers center a `th` by default and fuz_css doesn't set this by default */
+	th[scope='row'] {
+		text-align: left;
+	}
 	/* two columns once the page is wide enough, one below; the page scrolls */
 	.av-layout {
 		container-type: inline-size;

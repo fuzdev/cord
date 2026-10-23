@@ -319,7 +319,7 @@
 		<tbody>
 			{#each rows as [label, value, note] (label)}
 				<tr>
-					<th>{label}</th>
+					<th scope="row">{label}</th>
 					<td class="font_family_mono">{value}</td>
 					<td class="text_50">{note ?? ''}</td>
 				</tr>
@@ -329,6 +329,10 @@
 {/snippet}
 
 <style>
+	/* row labels sit against their values; browsers center a `th` by default */
+	th[scope='row'] {
+		text-align: right;
+	}
 	.sparklines {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
