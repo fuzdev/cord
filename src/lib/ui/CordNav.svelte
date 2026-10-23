@@ -1,8 +1,8 @@
 <script lang="ts">
 	/**
 	 * The rail on every page: home, the signed-in account's cords, and the
-	 * account, admin, about, and log-out links, or for someone signed out,
-	 * log in, sign up, and about.
+	 * account, admin, a/v check, about, and log-out links, or for someone
+	 * signed out, log in, sign up, a/v check, and about.
 	 *
 	 * Pages prerender signed out, so until the first session check settles,
 	 * and between a login's `verified` and its account loading, the rail
@@ -93,6 +93,7 @@
 		{#if auth_state.is_admin}
 			{@render menu_link(resolve('/admin'), 'admin')}
 		{/if}
+		{@render menu_link(resolve('/av'), 'a/v check')}
 		{@render menu_link(resolve('/about'), 'about')}
 		<button
 			type="button"
@@ -109,8 +110,10 @@
 		{@render menu_link(resolve('/login'), 'log in')}
 		{@render menu_link(resolve('/signup'), 'sign up')}
 		<hr class="nav-separator unstyled" />
+		{@render menu_link(resolve('/av'), 'a/v check')}
 		{@render menu_link(resolve('/about'), 'about')}
 	{:else}
+		{@render menu_link(resolve('/av'), 'a/v check')}
 		{@render menu_link(resolve('/about'), 'about')}
 	{/if}
 </nav>

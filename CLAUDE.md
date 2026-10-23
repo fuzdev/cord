@@ -51,7 +51,8 @@ Skill(fuz-stack).
   (refusal reasons to words), the `*_state.svelte.ts` classes, and the
   components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs;
   `CordNameForm`, `CordMembers`, `CordInvites`, `CordInviteForm`,
-  `CordNewcomerForm`)
+  `CordNewcomerForm`; `MediaCheck` and its `Media*` parts, the a/v check,
+  with `media_output.ts` routing sound to a chosen output)
 - `src/test/` — vitest tests; `cross_backend/` holds the end-to-end suites
 - `crates/cord_server/` — the server library and `cordd`, plus the
   `expected_schema.json` fixture; `tests/` holds the Postgres suites
@@ -217,8 +218,9 @@ signs out), and checks the session on mount.
 
 Every page sits in fuz_app's `AppShell`, with `CordNav` as its left rail:
 home, your cords (each selected on its page and any page under it), then
-account, admin for instance admins, about, and log out; signed out, log in,
-sign up, about, and the claim link while the instance has no accounts.
+account, admin for instance admins, a/v check, about, and log out; signed
+out, log in, sign up, a/v check, about, and the claim link while the
+instance has no accounts.
 Until the first session check settles, and while a login's account loads,
 the rail shows only the links both shapes share. Its log out goes through
 `auth_state.logout` and then home. The rail and the home page read the one
@@ -266,6 +268,9 @@ Routes, prerendered anonymous and filled in client-side:
 
 - `/` — the intro; signed in, your cords, and a create form for admins
 - `/about` — about the project, with the fuz ecosystem links
+- `/av` — the a/v check, for anyone: camera, mic level and spectrum, output
+  and test tone, a recording, a WebRTC call to itself with its stats, and
+  what the browser offers; all local, no server
 - `/c/[cord_id]` — a cord's pages, as tabs: the overview (your role, and
   where spaces will go), `members` (the members, and leaving), and for
   owners and admins `invites` (invite links) and `settings` (rename); the
