@@ -337,6 +337,8 @@ fn build_account_state(app: &CordApp, gate: AuthGate) -> AccountRouteState {
         bootstrap_available: Arc::clone(&app.bootstrap_available),
         login_ip_rate_limiter: app.login_ip_rate_limiter.clone(),
         login_account_rate_limiter: app.login_account_rate_limiter.clone(),
+        login_fail_floor_ms: fuz_auth::DEFAULT_LOGIN_FAIL_FLOOR_MS,
+        login_fail_jitter_ms: fuz_auth::DEFAULT_LOGIN_FAIL_JITTER_MS,
     }
 }
 
