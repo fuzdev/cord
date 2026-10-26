@@ -407,7 +407,8 @@ export type CordInvitePreviewOutput = z.infer<typeof CordInvitePreviewOutput>;
 export const CordInviteRedeemInput = z.strictObject({
 	token: CordInviteToken,
 	username: Username.meta({
-		description: 'The username to reserve for the newcomer, who then signs up with it.'
+		description: 'The username to reserve for the newcomer, who then signs up with it.',
+		invalid_reason: ERROR_CORD_INVITE_USERNAME_INVALID
 	})
 });
 export type CordInviteRedeemInput = z.infer<typeof CordInviteRedeemInput>;

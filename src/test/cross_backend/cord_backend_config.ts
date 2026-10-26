@@ -80,7 +80,10 @@ export const rust_backend_config = (): BackendConfig => ({
 			// the account actions
 			ws_account_actions: true,
 			// no role-gated WS endpoint beside `/api/ws`
-			ws_role_gated: false
+			ws_role_gated: false,
+			// the spine backdoors `testing_cordd` mounts; cord's own
+			// `_testing_cord_invite_expire` is the spine suites' `extra_methods`
+			testing_backdoors: ['_testing_reset', '_testing_drain_effects']
 		},
 		start_command: [resolve_cargo_binary_path(CORD_CARGO_BINARY)],
 		database_url: process.env.CORD_CROSS_BACKEND_TEST_URL || CORD_CROSS_BACKEND_DEFAULT_URL,

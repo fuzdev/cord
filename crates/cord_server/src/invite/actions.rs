@@ -51,9 +51,10 @@
 //! with the same generic `invalid params` and no reason: the limits before
 //! the manager gate and its `cord_not_found` mask (the bounds are public, so
 //! refusing them first tells an outsider nothing), and a token before any
-//! lookup. Redeem's username rule stays the handler's, refused with
-//! `cord_invite_username_invalid` (the join page reads it), where the
-//! schema's `Username` refuses the same strings with no reason.
+//! lookup. Redeem's username is refused there too, after the token, and every
+//! refusal of it carries `cord_invite_username_invalid` (the join page reads
+//! it), the reason the TS field declares: missing, `null`, not a string, or
+//! off the spine's creation grammar.
 //!
 //! Redeem takes no session: it grants its caller nothing, only reserves a
 //! username for an account that doesn't exist yet, so who calls it doesn't
@@ -139,6 +140,7 @@ use fuz_auth::primitive_schemas::{USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN};
 use fuz_auth::{
     AuditEventType, AuthSpec, CredentialGate, DEFAULT_RATE_LIMITER_MAX_KEYS, RateLimitClass,
     RateLimiter, RateLimiterOptions, RequestActorContext, is_valid_username_for_creation,
+    parse_str_param, reject_unknown_keys,
 };
 use fuz_http::{
     JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_input_params,
@@ -296,9 +298,8 @@ impl std::fmt::Debug for CordInviteTokenInput {
 }
 
 /// The input of `cord_invite_redeem`: a public action, so no `acting`.
-/// `Debug` redacts the link token.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+/// Decoded by hand ([`parse_cord_invite_redeem_params`]), so every refusal of
+/// `username` can carry its reason. `Debug` redacts the link token.
 struct CordInviteRedeemInput {
     token: String,
     username: String,
@@ -503,10 +504,37 @@ fn parse_cord_invite_token_params(params: Value) -> Result<CordInviteTokenInput,
     Ok(input)
 }
 
-fn parse_cord_invite_redeem_params(params: Value) -> Result<CordInviteRedeemInput, JsonrpcError> {
-    let input: CordInviteRedeemInput = parse_strict_params(params)?;
-    validate_cord_invite_token(&input.token)?;
-    Ok(input)
+/// The keys of `CordInviteRedeemInput`'s TS twin.
+const CORD_INVITE_REDEEM_KEYS: &[&str] = &["token", "username"];
+
+/// Parse redeem's params in the twin's issue order: an unknown key, then the
+/// token, both with no reason, then the username. Every refusal of `username`
+/// carries [`ERROR_CORD_INVITE_USERNAME_INVALID`], the reason the twin's field
+/// declares (the join page reads it): missing, `null`, not a string, or off
+/// the spine's creation grammar (`is_valid_username_for_creation`, which also
+/// bounds its length).
+fn parse_cord_invite_redeem_params(params: &Value) -> Result<CordInviteRedeemInput, JsonrpcError> {
+    reject_unknown_keys(params, CORD_INVITE_REDEEM_KEYS)?;
+    let token = parse_str_param(params, "token")?;
+    validate_cord_invite_token(token)?;
+    let username = params
+        .get("username")
+        .and_then(Value::as_str)
+        .filter(|username| is_valid_username_for_creation(username))
+        .ok_or_else(|| {
+            invalid_input_params(
+                &format!(
+                    "username must be {USERNAME_LENGTH_MIN} to {USERNAME_LENGTH_MAX} ASCII \
+                     letters, digits, '_' or '-', starting with a letter and ending with a \
+                     letter or digit"
+                ),
+                Some(ERROR_CORD_INVITE_USERNAME_INVALID),
+            )
+        })?;
+    Ok(CordInviteRedeemInput {
+        token: token.to_owned(),
+        username: username.to_owned(),
+    })
 }
 
 // -- Handlers -----------------------------------------------------------------
@@ -696,17 +724,8 @@ async fn handle_cord_invite_redeem<C: GenericClient + ?Sized>(
     ctx: &ActionContext<'_>,
     input: &CordInviteRedeemInput,
 ) -> Result<Value, JsonrpcError> {
-    // the spine's creation rule, then its canonical (lowercase) form, as its
-    // own `invite_create` does
-    if !is_valid_username_for_creation(&input.username) {
-        return Err(invalid_params(
-            &format!(
-                "username must be {USERNAME_LENGTH_MIN} to {USERNAME_LENGTH_MAX} ASCII letters, \
-                 digits, '_' or '-', starting with a letter and ending with a letter or digit"
-            ),
-            Some(ERROR_CORD_INVITE_USERNAME_INVALID),
-        ));
-    }
+    // the spine's creation rule held at params parse; its canonical
+    // (lowercase) form, as the spine's own `invite_create` stores it
     let username = input.username.to_lowercase();
     let token_hash = hash_cord_invite_token(&input.token);
     let redeemed = query_cord_invite_redeem(client, &token_hash, &username)
@@ -855,7 +874,7 @@ pub(crate) fn cord_invite_action_specs(
                 );
                 Box::pin(async move {
                     throttled?;
-                    let input = parse_cord_invite_redeem_params(params)?;
+                    let input = parse_cord_invite_redeem_params(&params)?;
                     dispatch_db_ctx!(ctx, handle_cord_invite_redeem(&input))
                 })
             }),
@@ -891,9 +910,10 @@ mod tests {
 
     #[test]
     fn invite_redeem_input_debug_redacts_the_token() {
-        let input: CordInviteRedeemInput =
-            serde_json::from_value(json!({"token": "invite-link-Rb9yU4", "username": "newcomer"}))
-                .unwrap();
+        let input = parse_cord_invite_redeem_params(
+            &json!({"token": "invite-link-Rb9yU4", "username": "newcomer"}),
+        )
+        .unwrap();
         let rendered = format!("{input:?}");
         assert!(!rendered.contains("invite-link-Rb9yU4"), "{rendered}");
         assert!(rendered.contains("<redacted>"), "{rendered}");
@@ -998,21 +1018,76 @@ mod tests {
 
     #[test]
     fn redeem_takes_a_token_and_a_username_only() {
-        let parsed: CordInviteRedeemInput =
-            parse_strict_params(json!({ "token": "t", "username": "newcomer" })).expect("parses");
+        let parsed =
+            parse_cord_invite_redeem_params(&json!({ "token": "t", "username": "Newcomer" }))
+                .expect("parses");
+        // the handler lowercases; the parse keeps what was sent
         assert_eq!(
             (parsed.token.as_str(), parsed.username.as_str()),
-            ("t", "newcomer")
+            ("t", "Newcomer")
         );
+        // an unknown key or a bad token is refused first, with no reason,
+        // whatever the username: the twin answers no reason for an issue on
+        // the input itself or on `token`, its first field
         for params in [
-            json!({ "token": "t" }),
-            json!({ "username": "newcomer" }),
             json!({ "token": "t", "username": "newcomer", "acting": Uuid::nil() }),
+            json!({ "token": "t", "username": 42, "acting": Uuid::nil() }),
+            json!({ "username": "newcomer" }),
+            json!({ "token": null, "username": "newcomer" }),
+            json!({ "token": 42, "username": "newcomer" }),
+            json!({ "token": "", "username": "newcomer" }),
+            json!({ "username": 42 }),
+            json!({ "token": "", "username": "" }),
         ] {
-            assert!(
-                parse_strict_params::<CordInviteRedeemInput>(params.clone()).is_err(),
-                "{params}"
+            assert_spec_params_refusal(
+                parse_cord_invite_redeem_params(&params),
+                &params.to_string(),
             );
+        }
+        // no params at all is the empty object: the token is missing
+        assert_spec_params_refusal(parse_cord_invite_redeem_params(&Value::Null), "null params");
+    }
+
+    #[test]
+    fn every_username_refusal_carries_its_reason() {
+        use fuz_http::{INVALID_PARAMS_MESSAGE, JsonrpcErrorCode};
+        let too_long = "a".repeat(USERNAME_LENGTH_MAX + 1);
+        let too_short = "a".repeat(USERNAME_LENGTH_MIN - 1);
+        let cases = [
+            ("missing", json!({ "token": "t" })),
+            ("null", json!({ "token": "t", "username": null })),
+            ("a number", json!({ "token": "t", "username": 42 })),
+            ("an object", json!({ "token": "t", "username": {} })),
+            ("empty", json!({ "token": "t", "username": "" })),
+            ("too short", json!({ "token": "t", "username": too_short })),
+            ("too long", json!({ "token": "t", "username": too_long })),
+            (
+                "a leading digit",
+                json!({ "token": "t", "username": "9lives" }),
+            ),
+            (
+                "a trailing '_'",
+                json!({ "token": "t", "username": "trailing_" }),
+            ),
+            ("a space", json!({ "token": "t", "username": "new comer" })),
+            ("non-ASCII", json!({ "token": "t", "username": "newcomér" })),
+        ];
+        for (case, params) in cases {
+            let err = parse_cord_invite_redeem_params(&params).expect_err(case);
+            assert_eq!(err.code, JsonrpcErrorCode::InvalidParams, "{case}");
+            assert_eq!(err.message, INVALID_PARAMS_MESSAGE, "{case}");
+            assert_eq!(
+                err.data,
+                Some(json!({ "reason": ERROR_CORD_INVITE_USERNAME_INVALID })),
+                "{case}"
+            );
+        }
+        // the grammar's bounds themselves are in
+        let at_min = "a".repeat(USERNAME_LENGTH_MIN);
+        let at_max = "a".repeat(USERNAME_LENGTH_MAX);
+        for username in [at_min.as_str(), at_max.as_str(), "new-comer_2"] {
+            parse_cord_invite_redeem_params(&json!({ "token": "t", "username": username }))
+                .expect(username);
         }
     }
 
@@ -1170,7 +1245,7 @@ mod tests {
                 &case,
             );
             assert_spec_params_refusal(
-                parse_cord_invite_redeem_params(json!({ "token": token, "username": "newcomer" })),
+                parse_cord_invite_redeem_params(&json!({ "token": token, "username": "newcomer" })),
                 &case,
             );
         }
@@ -1178,7 +1253,7 @@ mod tests {
         let at_max = "x".repeat(CORD_INVITE_TOKEN_LENGTH_MAX);
         for token in ["nope", at_max.as_str()] {
             parse_cord_invite_token_params(json!({ "token": token })).expect("in bounds");
-            parse_cord_invite_redeem_params(json!({ "token": token, "username": "newcomer" }))
+            parse_cord_invite_redeem_params(&json!({ "token": token, "username": "newcomer" }))
                 .expect("in bounds");
         }
     }

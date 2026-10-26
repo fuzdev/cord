@@ -26,17 +26,14 @@ import {
 
 const handle = inject_backend_handle();
 
-// `testing_cordd` folds in `_testing_reset` and cord's own test seams only
-const NO_BACKDOOR = (method: string): string => `testing_cordd mounts no ${method}`;
-
 const overrides: SuiteOverrides = {
-	rpc_adversarial: {
-		xfail_params: [
+	// cord's own daemon-token seam, held to the spine backdoors' credential gate;
+	// the gate refuses before the handler, so any well-formed id serves
+	testing_backdoor: {
+		extra_methods: [
 			{
-				method: 'account_token_create',
-				labels: ['missing: scope', 'null: scope', 'missing: lifetime', 'null: lifetime'],
-				tracking_id: 'rust-token-create-schema-reason',
-				reason: 'Rust adds invalid_token_scope / invalid_token_lifetime to schema refusals'
+				method: '_testing_cord_invite_expire',
+				params: { invite_id: '00000000-0000-4000-8000-000000000000' }
 			}
 		]
 	},
@@ -63,13 +60,7 @@ describe_spine_cross_suites(handle, {
 	// grants (a suite that skips here, with no cell verbs), admin for the conferral
 	suite_roles: { cell_grant: ROLE_KEEPER, conferral: ROLE_ADMIN },
 	exclude: {
-		actor_lookup: 'testing_cordd mounts no actor_lookup resolver',
-		credential_deadline: NO_BACKDOOR('_testing_shorten_credential_expiry'),
-		origin_conformance: NO_BACKDOOR('_testing_origin_check'),
-		ws_outbound_overflow: NO_BACKDOOR('_testing_flood_notifications'),
-		testing_backdoor:
-			'the suite fires every spine backdoor, and testing_cordd mounts only _testing_reset ' +
-			"and cord's own seams"
+		actor_lookup: 'testing_cordd mounts no actor_lookup resolver'
 	},
 	overrides
 });
