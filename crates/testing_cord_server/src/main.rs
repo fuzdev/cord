@@ -68,10 +68,10 @@ async fn main() -> ExitCode {
     // Always-visible sentinel, whatever the log filter.
     eprintln!("testing_cordd starting (test-mode argon2 active)");
 
-    // `_testing_reset` wipes the auth tables and seeds a fresh keeper; its
-    // `reset_state` hook then empties cord's invite links and their
-    // redemptions and the cell tables (cords live there) in the same
-    // transaction, so no cord or link outlives the accounts that were in it.
+    // `_testing_reset`'s `reset_state` hook first empties cord's invite links
+    // and their redemptions and the cell tables (cords live there), then the
+    // auth tables are wiped and a fresh keeper seeded, all in one transaction,
+    // so no cord or link outlives the accounts that were in it.
     let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|app, runtime| {
         #[allow(
             clippy::expect_used,
