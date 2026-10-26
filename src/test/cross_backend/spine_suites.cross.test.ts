@@ -4,8 +4,8 @@
  * capabilities `cord_backend_config.ts` states, so a mount cord gains or drops
  * changes what runs here, and a suite fuz_app adds reaches cord without a new
  * file. The suites cord can't run are excluded with their reasons; the
- * overrides are the Rust spine's tracked divergences, as on fuz_app's own
- * `testing_spine_stub`.
+ * override adds cord's own testing backdoor to the backdoor suite's
+ * credential-gate rows.
  *
  * @module
  */
@@ -36,19 +36,7 @@ const overrides: SuiteOverrides = {
 				params: { invite_id: '00000000-0000-4000-8000-000000000000' }
 			}
 		]
-	},
-	// on the derived multi-actor setup, so its seeding stays the one call's
-	transport_composition: (derived) => ({
-		multi_actor: derived.multi_actor && {
-			...derived.multi_actor,
-			xfail: {
-				tracking_id: 'rust-ws-upgrade-acting-fail-open',
-				reason:
-					'the Rust upgrade resolves an account, not an actor, so it admits a multi-actor ' +
-					'upgrade that names no actor; per-frame dispatch still resolves each frame'
-			}
-		}
-	})
+	}
 };
 
 describe_spine_cross_suites(handle, {
