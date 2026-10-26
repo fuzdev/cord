@@ -115,6 +115,11 @@ impl CordApp {
     /// Build the app from a validated env, an injected password hasher, and
     /// the daemon-token credential (production passes `None`).
     ///
+    /// `audit_inflight_tracking` selects
+    /// [`AuditEmitter::new_with_inflight_tracking`] over [`AuditEmitter::new`],
+    /// so `testing_cordd`'s `_testing_drain_effects` is a real barrier;
+    /// production passes `false`.
+    ///
     /// # Errors
     ///
     /// [`StartupError::Config`] when `DATABASE_URL` is absent or the cookie
@@ -125,6 +130,7 @@ impl CordApp {
         password_hasher: Arc<dyn PasswordHasher>,
         rate_limiters: fuz_auth::RateLimiterMode,
         daemon_token_state: Option<SharedDaemonTokenState>,
+        audit_inflight_tracking: bool,
     ) -> Result<Self, StartupError> {
         let database_url = env
             .database_url
@@ -137,10 +143,15 @@ impl CordApp {
         // ephemeral key would reset every session on restart.
         let keyring = Arc::new(build_keyring(env.cookie_keys.as_deref())?);
 
-        // TODO: build with `AuditEmitter::new_with_inflight_tracking` when a
-        // cross-backend test asserts on a fire-and-forget audit row, so
-        // `testing_cordd` can register `_testing_drain_effects`
-        let audit_emitter = Arc::new(AuditEmitter::new(pool.clone()));
+        // `emit` spawns a detached write; the in-flight counter is what lets
+        // `_testing_drain_effects` await it, so without it the drain returns
+        // before the row lands. Pure overhead in production, which never
+        // drains, so only `testing_cordd` turns it on.
+        let audit_emitter = Arc::new(if audit_inflight_tracking {
+            AuditEmitter::new_with_inflight_tracking(pool.clone())
+        } else {
+            AuditEmitter::new(pool.clone())
+        });
         // Recomputed against the live DB after migrations (`build_router`).
         let bootstrap_available = Arc::new(AtomicBool::new(false));
 

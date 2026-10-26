@@ -98,9 +98,10 @@ pub struct BuiltRouter {
 /// `env.database_url` is absent, so the binary can be smoke-tested without a
 /// live Postgres.
 ///
-/// `daemon_token_state`, `extra_action_specs_factory`, and
-/// `pre_migration_hook` are the `testing_cordd` seams; production passes
-/// `None` for each.
+/// `daemon_token_state`, `audit_inflight_tracking`,
+/// `extra_action_specs_factory`, and `pre_migration_hook` are the
+/// `testing_cordd` seams; production passes `false` for the tracking and
+/// `None` for the rest.
 ///
 /// # Errors
 ///
@@ -111,6 +112,7 @@ pub async fn build_router(
     password_hasher: Arc<dyn fuz_auth::PasswordHasher>,
     rate_limiters: RateLimiterMode,
     daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
+    audit_inflight_tracking: bool,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
     pre_migration_hook: Option<PreMigrationHook>,
 ) -> Result<BuiltRouter, StartupError> {
@@ -122,7 +124,13 @@ pub async fn build_router(
         });
     }
 
-    let app = CordApp::build(env, password_hasher, rate_limiters, daemon_token_state)?;
+    let app = CordApp::build(
+        env,
+        password_hasher,
+        rate_limiters,
+        daemon_token_state,
+        audit_inflight_tracking,
+    )?;
 
     // `testing_cordd`'s env-gated schema reset runs once the pool exists and
     // before migrations.
@@ -576,6 +584,7 @@ mod tests {
             Arc::new(fuz_auth::Argon2idHasher::new()),
             rate_limiters,
             None,
+            false,
         )
         .expect("app builds without touching the DB")
     }
@@ -740,8 +749,8 @@ mod tests {
 
     /// Redeem through the whole router and the spine's dispatcher, which
     /// needs a live connection (it opens redeem's transaction before the
-    /// handler runs) but no schema: an empty token is refused before any
-    /// query.
+    /// handler runs) but no schema: an empty token is refused at params
+    /// validation, after the limiter charges and before any query.
     #[tokio::test]
     #[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
     async fn redeem_refuses_past_its_budget_per_ip() {
@@ -758,11 +767,9 @@ mod tests {
         });
         for attempt in 0..CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS {
             let (status, body) = post_rpc(router.clone(), "203.0.113.7:50000", &redeem).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "attempt {attempt}: {body}");
-            assert_eq!(
-                body["error"]["data"]["reason"], "cord_invite_not_found",
-                "{body}"
-            );
+            assert_eq!(status, StatusCode::BAD_REQUEST, "attempt {attempt}: {body}");
+            assert_eq!(body["error"]["code"], -32602, "{body}");
+            assert!(body["error"].get("data").is_none(), "no reason: {body}");
         }
         let (status, body) = post_rpc(router.clone(), "203.0.113.7:50000", &redeem).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
@@ -773,7 +780,7 @@ mod tests {
         );
         // another IP keeps its own budget
         let (status, body) = post_rpc(router, "198.51.100.9:50000", &redeem).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 
     #[test]
@@ -831,6 +838,69 @@ mod tests {
 
         let without = build_action_registry(&app, None, None, None).expect("registry compiles");
         assert!(without.get("_testing_seam_probe").is_none());
+    }
+
+    /// `testing_cordd`'s `_testing_drain_effects` is a barrier only over the
+    /// tracked emitter: a fire-and-forget write still in flight (here, stuck
+    /// dialing a server that accepts the connection and never answers) holds
+    /// the drain, and the untracked production emitter's drain returns at
+    /// once.
+    #[tokio::test]
+    async fn audit_inflight_tracking_makes_the_drain_wait_for_a_write() {
+        use std::time::Duration;
+
+        use fuz_auth::{AuditEventType, AuditLogInput};
+
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("binds");
+        let url = format!(
+            "postgres://cord:cord@{}/cord_unused",
+            silent.local_addr().expect("has an address")
+        );
+        let build = |tracking| {
+            CordApp::build(
+                &test_env(Some(&url)),
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                RateLimiterMode::Enforced,
+                None,
+                tracking,
+            )
+            .expect("app builds without touching the DB")
+        };
+        let emit = |app: &CordApp| {
+            app.audit_emitter
+                .emit(AuditLogInput::for_event(AuditEventType::Logout))
+        };
+
+        let tracked = build(true);
+        let write = emit(&tracked);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(200),
+                tracked.audit_emitter.drain_inflight()
+            )
+            .await
+            .is_err(),
+            "the drain waits while the write is in flight"
+        );
+        write.abort();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tracked.audit_emitter.drain_inflight(),
+        )
+        .await
+        .expect("the drain resolves once the write ends");
+
+        let untracked = build(false);
+        let write = emit(&untracked);
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            untracked.audit_emitter.drain_inflight(),
+        )
+        .await
+        .expect("untracked, the drain returns at once");
+        write.abort();
     }
 }
 

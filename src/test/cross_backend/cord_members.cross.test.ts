@@ -1,14 +1,12 @@
 import { assert, describe, test } from 'vitest';
-import type { TestAccountFixture } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
-import {
-	cross_rpc_call,
-	expect_output
-} from '@fuzdev/fuz_app/testing/cross_backend/cell_cross_helpers.ts';
+import type { TestAccount } from '@fuzdev/fuz_app/testing/app_server.ts';
+import { cross_rpc_call, expect_output } from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import { ERROR_CREDENTIAL_TYPE_REQUIRED } from '@fuzdev/fuz_app/http/error_schemas.ts';
 
 import {
+	assert_invalid_params,
 	assert_refused,
 	audit_events,
 	call,
@@ -20,6 +18,7 @@ import {
 	type Fixture
 } from './cord_cross_helpers.ts';
 import {
+	CORD_INVITE_TOKEN_LENGTH_MAX,
 	CordGetOutput,
 	CordInviteAcceptOutput,
 	CordInviteListOutput,
@@ -33,7 +32,6 @@ import {
 	ERROR_CORD_INVITE_EXHAUSTED,
 	ERROR_CORD_INVITE_EXPIRED,
 	ERROR_CORD_INVITE_FORBIDDEN,
-	ERROR_CORD_INVITE_INVALID,
 	ERROR_CORD_INVITE_NOT_FOUND,
 	ERROR_CORD_INVITE_REVOKED,
 	ERROR_CORD_LAST_OWNER,
@@ -57,7 +55,7 @@ import { CORD_ADMIN, CORD_MEMBER, CORD_OWNER, type CordRole } from '#lib/cord_ro
 const join_as = async (
 	fixture: Fixture,
 	cord_id: string,
-	account: TestAccountFixture,
+	account: TestAccount,
 	role: CordRole = CORD_MEMBER
 ): Promise<void> => {
 	const { token } = await mint(fixture, fixture, cord_id);
@@ -360,12 +358,22 @@ describe('invite links', () => {
 		const cord = await create_cord(fixture);
 		const guest = await fixture.create_account({ username: 'guest' });
 		const { token } = await mint(fixture, fixture, cord.id);
-		for (const unknown of ['', 'nope', token.slice(0, -1), 'x'.repeat(500)]) {
+		const in_bounds = ['nope', token.slice(0, -1), 'x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX)];
+		for (const unknown of in_bounds) {
 			for (const method of ['cord_invite_preview', 'cord_invite_accept']) {
 				assert_refused(
 					await call(fixture, guest, method, { token: unknown }),
 					ERROR_CORD_INVITE_NOT_FOUND,
 					JSONRPC_ERROR_CODES.not_found
+				);
+			}
+		}
+		// out of the schema's bounds: refused as params, as the spec refuses them
+		for (const malformed of ['', 'x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)]) {
+			for (const method of ['cord_invite_preview', 'cord_invite_accept']) {
+				assert_invalid_params(
+					await call(fixture, guest, method, { token: malformed }),
+					`${method} with a ${malformed.length}-char token`
 				);
 			}
 		}
@@ -452,18 +460,31 @@ describe('invite links', () => {
 	test('limits are bounded', async () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture);
+		const outsider = await fixture.create_account({ username: 'outsider' });
 		for (const limits of [
 			{ expires_in_seconds: 59 },
 			{ expires_in_seconds: 365 * 24 * 60 * 60 + 1 },
 			{ max_uses: 0 },
 			{ max_uses: 1001 }
 		]) {
-			assert_refused(
-				await call(fixture, fixture, 'cord_invite_create', { cord_id: cord.id, ...limits }),
-				ERROR_CORD_INVITE_INVALID,
-				JSONRPC_ERROR_CODES.invalid_params
-			);
+			// refused as params, as the spec refuses them, ahead of the manager
+			// gate, so an outsider gets the same answer and not `cord_not_found`
+			for (const [label, caller] of [
+				['owner', fixture],
+				['outsider', outsider]
+			] as const) {
+				assert_invalid_params(
+					await call(fixture, caller, 'cord_invite_create', { cord_id: cord.id, ...limits }),
+					`${label} ${JSON.stringify(limits)}`
+				);
+			}
 		}
+		// in bounds, the outsider still gets the IDOR mask
+		assert_refused(
+			await call(fixture, outsider, 'cord_invite_create', { cord_id: cord.id, max_uses: 1 }),
+			ERROR_CORD_NOT_FOUND,
+			JSONRPC_ERROR_CODES.not_found
+		);
 		for (const limits of [{ expires_in_seconds: null }, { max_uses: -1 }, { max_uses: 1.5 }]) {
 			const res = await call(fixture, fixture, 'cord_invite_create', {
 				cord_id: cord.id,

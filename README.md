@@ -191,9 +191,9 @@ and each wipes the `public` schema of its database, so give them throwaway
 ones:
 
 ```bash
-# end-to-end tests of auth, cords, members, invites, and newcomer links:
-# spawn testing_cordd and drive it over HTTP
-createdb cord_test_rust
+# end-to-end tests of auth, cords, members, invites, and newcomer links,
+# plus fuz_app's shared spine suites: build testing_cordd, create its
+# database (cord_test_rust) when missing, and drive it over HTTP
 npm run test:cross
 
 # the schema fixture, column guards, and the cord, member, invite, and

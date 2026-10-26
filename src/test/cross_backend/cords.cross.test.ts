@@ -1,14 +1,12 @@
-import { assert, describe, inject, test } from 'vitest';
-import {
-	default_cross_process_setup,
-	reconstruct_bootstrapped_handle,
-	type TestAccountFixture
-} from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
+import { assert, describe, test } from 'vitest';
+import type { TestAccount } from '@fuzdev/fuz_app/testing/app_server.ts';
+import { inject_backend_handle } from '@fuzdev/fuz_app/testing/cross_backend/provided_context.ts';
+import { default_cross_process_setup } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
 import {
 	cross_rpc_call,
 	error_reason,
 	expect_output
-} from '@fuzdev/fuz_app/testing/cross_backend/cell_cross_helpers.ts';
+} from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 import {
 	ERROR_INSUFFICIENT_PERMISSIONS,
@@ -23,7 +21,6 @@ import {
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import { AuditLogListOutput } from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 
-import './cross_test_types.ts';
 import {
 	CordAdminListOutput,
 	CordCreateOutput,
@@ -44,7 +41,7 @@ import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
  * production invite.
  */
 
-const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
+const handle = inject_backend_handle();
 const setup_test = default_cross_process_setup(handle);
 const { rpc_path } = handle.config;
 
@@ -65,7 +62,7 @@ const read_role_grants = async (
 /** Call `method` as `account` on a clean cookie jar. */
 const call_as = (
 	fixture: Fixture,
-	account: TestAccountFixture,
+	account: TestAccount,
 	method: string,
 	params: unknown
 ): ReturnType<typeof cross_rpc_call> =>

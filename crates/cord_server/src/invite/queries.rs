@@ -80,7 +80,8 @@ pub const CORD_INVITE_READ_COLUMNS: [&str; 10] = [
 
 const CORD_INVITE_TIMESTAMP_COLUMNS: [&str; 3] = ["created_at", "expires_at", "revoked_at"];
 
-/// The longest token, in bytes, that a lookup hashes.
+/// The longest token a lookup hashes, in UTF-16 code units, as the
+/// frontend's `CordInviteToken` schema counts it.
 ///
 /// Anything longer is no token Cord minted; generated tokens are 43 ASCII
 /// characters. The frontend's `CordInviteToken` schema twins it.
@@ -134,14 +135,18 @@ pub fn hash_cord_invite_token(token: &str) -> String {
     hash_session_token(token).into_inner()
 }
 
-/// Whether `token` is shaped like something Cord could have minted.
+/// Whether `token` is within the TS `CordInviteToken` schema's bounds.
 ///
-/// That is, not empty and at most [`CORD_INVITE_TOKEN_LENGTH_MAX`] bytes.
-/// Anything else is answered as an unknown link without a lookup, not as a
-/// params error, so a malformed token gets the same answer as a wrong one.
+/// That is, not empty and at most [`CORD_INVITE_TOKEN_LENGTH_MAX`] UTF-16
+/// code units, counted as the schema counts them, so the two refuse exactly
+/// the same strings.
+///
+/// The verbs refuse a token out of bounds at params validation, with the
+/// generic `invalid params` the declared spec answers; a token in bounds
+/// that Cord never minted gets `cord_invite_not_found`.
 #[must_use]
-pub const fn is_plausible_cord_invite_token(token: &str) -> bool {
-    !token.is_empty() && token.len() <= CORD_INVITE_TOKEN_LENGTH_MAX
+pub fn is_cord_invite_token_in_bounds(token: &str) -> bool {
+    !token.is_empty() && token.encode_utf16().count() <= CORD_INVITE_TOKEN_LENGTH_MAX
 }
 
 /// A link's state.
@@ -707,20 +712,31 @@ mod tests {
         let b = generate_cord_invite_token();
         assert_ne!(a.token, b.token);
         assert_eq!(a.token.len(), 43, "32 bytes, base64url, unpadded");
-        assert!(is_plausible_cord_invite_token(&a.token));
+        assert!(is_cord_invite_token_in_bounds(&a.token));
         assert_eq!(hash_cord_invite_token(&a.token), a.token_hash);
         assert_eq!(a.token_hash.len(), 64);
         assert_ne!(a.token_hash, a.token, "the digest is not the token");
     }
 
     #[test]
-    fn implausible_tokens_are_refused_before_a_lookup() {
-        assert!(!is_plausible_cord_invite_token(""));
-        assert!(!is_plausible_cord_invite_token(
+    fn token_bounds_count_utf16_code_units_like_the_ts_schema() {
+        assert!(!is_cord_invite_token_in_bounds(""));
+        assert!(!is_cord_invite_token_in_bounds(
             &"a".repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)
         ));
-        assert!(is_plausible_cord_invite_token(
+        assert!(is_cord_invite_token_in_bounds(
             &"a".repeat(CORD_INVITE_TOKEN_LENGTH_MAX)
+        ));
+        // two bytes, one code unit each: in bounds though over the max in bytes
+        assert!(is_cord_invite_token_in_bounds(
+            &"é".repeat(CORD_INVITE_TOKEN_LENGTH_MAX)
+        ));
+        // four bytes, two code units (a surrogate pair) each
+        assert!(is_cord_invite_token_in_bounds(
+            &"😀".repeat(CORD_INVITE_TOKEN_LENGTH_MAX / 2)
+        ));
+        assert!(!is_cord_invite_token_in_bounds(
+            &"😀".repeat(CORD_INVITE_TOKEN_LENGTH_MAX / 2 + 1)
         ));
     }
 }

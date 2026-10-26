@@ -24,16 +24,14 @@
 //! `FUZ_TESTING_RESET_DB_ON_STARTUP=true` it drops and recreates the
 //! database's `public` schema before migrating.
 //!
-//! Beside the spine's `_testing_reset` it registers cord's own test seams
-//! ([`cord_testing_actions`]), under the same daemon-token gate.
-//!
-//! It doesn't register `_testing_drain_effects`, the barrier that awaits
-//! in-flight audit writes: the drain needs an audit emitter built with
-//! in-flight tracking (`AuditEmitter::new_with_inflight_tracking`), which
-//! cord doesn't enable. The cross tests read only audit rows written in the
-//! action's own transaction, which are visible once the response arrives;
-//! the drain is needed only for a fire-and-forget row (a signup's, or a
-//! failure audit from an RPC verb).
+//! Beside the spine's `_testing_reset` it registers `_testing_drain_effects`,
+//! the barrier that awaits in-flight fire-and-forget audit writes (a
+//! signup's, or a failure audit from an RPC verb), and cord's own test seams
+//! ([`cord_testing_actions`]), all under the same daemon-token gate. The
+//! drain is a real barrier because this binary builds the app's audit
+//! emitter with in-flight tracking (`RunAppOptions::audit_inflight_tracking`,
+//! `AuditEmitter::new_with_inflight_tracking`); over an untracked emitter it
+//! would return at once.
 
 mod cord_testing_actions;
 
@@ -46,7 +44,10 @@ use cord_server::runtime::{
     DEFAULT_DRAIN_TIMEOUT, ExtraActionSpecsFactory, PreMigrationHook, RunAppOptions, run_app,
 };
 use fuz_auth::PasswordHasher;
-use fuz_testing::{TestingArgon2idHasher, TestingResetOptions, create_testing_reset_action_spec};
+use fuz_testing::{
+    TestingArgon2idHasher, TestingResetOptions, create_testing_drain_effects_action_spec,
+    create_testing_reset_action_spec,
+};
 
 /// The env var naming the directory the daemon token is written under
 /// (`{dir}/run/daemon_token`).
@@ -71,7 +72,7 @@ async fn main() -> ExitCode {
     // `reset_state` hook then empties cord's invite links and their
     // redemptions and the cell tables (cords live there) in the same
     // transaction, so no cord or link outlives the accounts that were in it.
-    let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
+    let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(|app, runtime| {
         #[allow(
             clippy::expect_used,
             reason = "fail loud at startup if the test binary is misconfigured"
@@ -79,10 +80,6 @@ async fn main() -> ExitCode {
         let daemon_token_state = runtime
             .daemon_token_state
             .expect("testing_cordd requires CORD_DAEMON_TOKEN_DIR (main checks it before run_app)");
-        // TODO: register `create_testing_drain_effects_action_spec` once a
-        // test asserts on a fire-and-forget audit row (in-transaction rows
-        // need no drain); it needs `CordApp::build` to use the
-        // in-flight-tracking audit emitter
         vec![
             create_testing_reset_action_spec(TestingResetOptions {
                 password_hasher: runtime.password_hasher,
@@ -107,6 +104,9 @@ async fn main() -> ExitCode {
                     })
                 })),
             }),
+            // awaits the emitter's detached writes; tracked because
+            // `audit_inflight_tracking` is on below
+            create_testing_drain_effects_action_spec(Arc::clone(&app.audit_emitter)),
             cord_testing_actions::create_testing_cord_invite_expire_action_spec(),
         ]
     });
@@ -155,6 +155,8 @@ async fn main() -> ExitCode {
         extra_action_specs_factory: Some(extra_action_specs_factory),
         pre_migration_hook: Some(pre_migration_hook),
         daemon_token_state: Some(daemon_token_state),
+        // makes `_testing_drain_effects` a real barrier
+        audit_inflight_tracking: true,
     })
     .await
     else {

@@ -8,23 +8,21 @@
  * @module
  */
 
-import { assert, inject } from 'vitest';
-import {
-	default_cross_process_setup,
-	reconstruct_bootstrapped_handle,
-	type TestAccountFixture
-} from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
+import { assert } from 'vitest';
+import type { TestAccount } from '@fuzdev/fuz_app/testing/app_server.ts';
+import { inject_backend_handle } from '@fuzdev/fuz_app/testing/cross_backend/provided_context.ts';
+import { default_cross_process_setup } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
 import {
 	cross_rpc_call,
 	error_reason,
 	expect_output
-} from '@fuzdev/fuz_app/testing/cross_backend/cell_cross_helpers.ts';
+} from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
 import { AuditLogListOutput } from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
+import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
-import './cross_test_types.ts';
 import { CordCreateOutput, CordInviteCreateOutput, type CordJson } from '#lib/cord_action_specs.ts';
 
-const handle = reconstruct_bootstrapped_handle(inject('backend_handle'));
+const handle = inject_backend_handle();
 
 /** Fire `_testing_reset` for a fresh keeper (an instance admin) and no cords. */
 export const setup_test = default_cross_process_setup(handle);
@@ -35,7 +33,7 @@ export const { rpc_path } = handle.config;
 export type Fixture = Awaited<ReturnType<typeof setup_test>>;
 
 /** Whoever makes a call: the keeper's fixture or another account. */
-export type Caller = Fixture | TestAccountFixture;
+export type Caller = Fixture | TestAccount;
 
 /** Call `method` as `caller` on a clean cookie jar. */
 export const call = (
@@ -61,6 +59,19 @@ export const assert_refused = (
 	assert.ok(!res.ok, `expected ${reason}, got ${JSON.stringify(res.result)}`);
 	assert.strictEqual(error_reason(res), reason);
 	if (code !== undefined) assert.strictEqual(res.error?.code, code);
+};
+
+/**
+ * Assert `res` is the refusal a spec's input schema answers: `invalid params`
+ * with no reason.
+ */
+export const assert_invalid_params = (
+	res: Awaited<ReturnType<typeof cross_rpc_call>>,
+	label: string
+): void => {
+	assert.ok(!res.ok, `${label}: expected invalid params, got ${JSON.stringify(res.result)}`);
+	assert.strictEqual(res.error?.code, JSONRPC_ERROR_CODES.invalid_params, label);
+	assert.strictEqual(error_reason(res), undefined, `${label}: no reason`);
 };
 
 /** A JSON `POST` request, with any extra `headers`. */

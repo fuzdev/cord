@@ -49,7 +49,8 @@ pub const DEFAULT_DRAIN_TIMEOUT: Duration = fuz_http::DEFAULT_DRAIN_TIMEOUT;
 ///
 /// Named fields so swap points land additively. Production passes `None`
 /// for each test-only seam (extra action specs, the pre-migration hook, the
-/// daemon-token credential); only the `testing_cordd` binary fills them.
+/// daemon-token credential) and `false` for audit in-flight tracking; only
+/// the `testing_cordd` binary fills them.
 #[allow(
     missing_debug_implementations,
     reason = "holds an `Arc<dyn PasswordHasher>`"
@@ -78,6 +79,11 @@ pub struct RunAppOptions {
     /// `cargo xtask check-release` keeps out of production binaries), so
     /// `_testing_reset` can authenticate as the keeper.
     pub daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
+    /// Whether the audit emitter counts its detached writes, so
+    /// `testing_cordd`'s `_testing_drain_effects` can await them (twin of the
+    /// TS testing server's `track_inflight: true`). Production passes
+    /// `false`.
+    pub audit_inflight_tracking: bool,
 }
 
 /// The upkeep tasks [`run_app`] runs beside the server, each a pass now and
@@ -157,6 +163,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         extra_action_specs_factory,
         pre_migration_hook,
         daemon_token_state,
+        audit_inflight_tracking,
     } = options;
 
     let env = CordEnv::from_process()?;
@@ -171,6 +178,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         password_hasher,
         rate_limiters,
         daemon_token_state,
+        audit_inflight_tracking,
         extra_action_specs_factory,
         pre_migration_hook,
     )

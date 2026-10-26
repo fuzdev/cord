@@ -144,8 +144,10 @@ The load-bearing rules. Each module named holds the full reasoning.
   place that tombstone filter lives; every role read goes through them.
 - **Tokens** are stored only as a blake3 digest, returned once at mint,
   never listed or audited. A real token's refusals name their reason; any
-  other string gets `cord_invite_not_found`. (`invite/actions.rs` holds
-  what a token tells its holder.)
+  other token gets `cord_invite_not_found`, unless it's out of
+  `CordInviteToken`'s bounds, which the verbs refuse at params validation
+  as the spec does. (`invite/actions.rs` holds what a token tells its
+  holder.)
 - **Newcomer links**: an instance admin who manages the cord mints one,
   bounded in uses and expiry. The newcomer redeems it signed out for a
   username (a spine username invite in the minter's name, spending a
@@ -204,7 +206,8 @@ that has shipped); give it a `*_COLUMNS` const and register it in
 `expected_schema.json` with `UPDATE_SCHEMA_READY=1`; add the table to the
 `_testing_reset` truncate in `testing_cord_server`'s `main.rs`.
 
-**A test seam**: a `RunAppOptions` field, which `cordd` passes as `None`.
+**A test seam**: a `RunAppOptions` field, which `cordd` passes as `None`
+(or `false`).
 
 ## Frontend
 
@@ -383,10 +386,11 @@ What's cord-specific, beyond the stock fuz_app recipes:
 The same `run_app` with the test-only pieces: `fuz_testing`'s fast hasher,
 disabled rate limiters, a daemon token under `CORD_DAEMON_TOKEN_DIR`
 (required), `_testing_reset` (a fresh keeper, then a truncate of cord's
-tables and the cell tables), cord's `_testing_cord_invite_expire`, and a
-schema wipe on boot when `FUZ_TESTING_RESET_DB_ON_STARTUP` is true. It binds
-`127.0.0.1:4161`. **Every cord table goes in the `_testing_reset`
-truncate**, or rows outlive a test. Never ship it: it is the only runtime
+tables and the cell tables), `_testing_drain_effects` (a real barrier, since
+it builds the audit emitter with in-flight tracking), cord's
+`_testing_cord_invite_expire`, and a schema wipe on boot when
+`FUZ_TESTING_RESET_DB_ON_STARTUP` is true. It binds `127.0.0.1:4161`. **Every
+cord table goes in the `_testing_reset` truncate**, or rows outlive a test. Never ship it: it is the only runtime
 dependent of `fuz_testing`, and `cargo xtask check-release` fails if `cordd`
 reaches `fuz_testing` or `fuz_audit` (the `testing_` prefix exempts
 `testing_cordd` by name; `cord_server` takes `fuz_testing` as a
@@ -419,18 +423,22 @@ UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready -- --ignored
 
 The `cross_backend_rust` vitest project runs
 `src/test/cross_backend/*.cross.test.ts` over real HTTP against a spawned
-`testing_cordd` (`cargo run -p testing_cord_server --bin testing_cordd`,
-hence `-p`, since `default-members` excludes it) through fuz_app's
-cross-backend harness; each test fires `_testing_reset`. It's gated behind
-`FUZ_TEST_CROSS_BACKEND`, so a bare `gro test` skips it.
-`auth` covers the auth flows, `cords` the cord verbs, `cord_members`
-invite links and members, and `cord_newcomers` newcomer links end to end;
-`origin`, `origin_scope`, `transport_composition` (the front-door table),
-and `audit_stream` run fuz_app's shared suites. The config is
-`cord_backend_config.ts`, the shared steps `cord_cross_helpers.ts`.
+`testing_cordd` through fuz_app's cross-backend harness; each test fires
+`_testing_reset`. Its global setup builds the binary first
+(`prepare_cargo_binary`, with `-p` since `default-members` excludes it;
+`FUZ_TESTING_NO_REBUILD=1` skips the build) and creates the database when it's
+missing. It's gated behind `FUZ_TEST_CROSS_BACKEND`, so a bare `gro test`
+skips it. `spine_suites` runs fuz_app's shipped spine suites in one
+`describe_spine_cross_suites` call, gated on the mount flags
+`cord_backend_config.ts` states, with the suites cord can't run excluded with
+their reasons; `auth` covers what those leave out (the one-shot bootstrap, the
+admin RPC and audit stream gates for a member and a bearer token), `cords` the
+cord verbs, `cord_members` invite links and members, and `cord_newcomers`
+newcomer links end to end. The config is `cord_backend_config.ts`, the
+declared surface `cord_surface_spec.ts`, the shared steps
+`cord_cross_helpers.ts`.
 
 ```bash
-createdb cord_test_rust
 npm run test:cross   # FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust
 ```
 

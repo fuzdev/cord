@@ -1,8 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import {
-	cross_rpc_call,
-	expect_output
-} from '@fuzdev/fuz_app/testing/cross_backend/cell_cross_helpers.ts';
+import { cross_rpc_call, expect_output } from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
 import { DEFAULT_TEST_PASSWORD } from '@fuzdev/fuz_app/testing/test_credentials.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';

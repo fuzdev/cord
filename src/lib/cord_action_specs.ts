@@ -41,7 +41,11 @@ export const ERROR_CORD_INVITE_EXPIRED = 'cord_invite_expired';
 export const ERROR_CORD_INVITE_EXHAUSTED = 'cord_invite_exhausted';
 /** Error reason: only the cord's owner or admins manage its invite links. */
 export const ERROR_CORD_INVITE_FORBIDDEN = 'cord_invite_forbidden';
-/** Error reason: an invite link's expiry or use limit is out of bounds. */
+/**
+ * Error reason: a link that admits newcomers has an expiry past
+ * `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`. The bounds every link keeps
+ * are the schema's, refused at params validation with no reason.
+ */
 export const ERROR_CORD_INVITE_INVALID = 'cord_invite_invalid';
 /** Error reason: only instance admins mint links that admit newcomers. */
 export const ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN = 'cord_invite_newcomer_forbidden';
@@ -268,14 +272,10 @@ export type CordMemberJson = z.infer<typeof CordMemberJson>;
 /**
  * An invite link's token, as it appears in the link.
  *
- * The bounds restate the server's plausibility check as a schema, so
- * whatever validates params against this spec refuses a token the server
- * could never find. The server's own layers split differently: its params
- * parsing takes any string, and its handler answers an empty or over-long
- * token with `cord_invite_not_found`, as for any wrong token, not with a
- * params error. It counts bytes where this counts UTF-16 code units, which
- * are never more than the bytes, so every token refused here is one the
- * server would call unknown.
+ * The Rust server refuses a token out of these bounds at params validation
+ * too, counting UTF-16 code units as this does, with the same reasonless
+ * `invalid params`; a token in bounds that it never minted gets
+ * `cord_invite_not_found`.
  */
 export const CordInviteToken = z
 	.string()

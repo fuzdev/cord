@@ -45,6 +45,16 @@
 //! `cord_get` does; what a token's holder learns is below. No audit event
 //! carries a token or its digest.
 //!
+//! The bounds the declared TS spec's schema puts on create's expiry and use
+//! limit and on a token (`CordInviteToken`) are refused here at params
+//! validation too, ahead of the handler and so ahead of every gate in it,
+//! with the same generic `invalid params` and no reason: the limits before
+//! the manager gate and its `cord_not_found` mask (the bounds are public, so
+//! refusing them first tells an outsider nothing), and a token before any
+//! lookup. Redeem's username rule stays the handler's, refused with
+//! `cord_invite_username_invalid` (the join page reads it), where the
+//! schema's `Username` refuses the same strings with no reason.
+//!
 //! Redeem takes no session: it grants its caller nothing, only reserves a
 //! username for an account that doesn't exist yet, so who calls it doesn't
 //! matter, and a signed-in caller is treated like anyone else. Refusing
@@ -85,9 +95,11 @@
 //! The token is the secret, so a real token's refusals name their reason
 //! (`cord_invite_revoked`, `cord_invite_expired`, `cord_invite_exhausted`,
 //! and for redeem `cord_invite_not_for_newcomers` and
-//! `cord_invite_newcomers_closed`, all `conflict`), while any other string
-//! gets `cord_invite_not_found`. A member who can't manage links gets
-//! `cord_invite_forbidden`.
+//! `cord_invite_newcomers_closed`, all `conflict`), while any other token in
+//! bounds gets `cord_invite_not_found`. A token out of bounds (empty, or
+//! over [`CORD_INVITE_TOKEN_LENGTH_MAX`] UTF-16 code units) is no secret, so
+//! it gets the spec's params refusal instead. A member who can't manage
+//! links gets `cord_invite_forbidden`.
 //!
 //! Past what an anonymous preview shows, redeem on a live newcomer link
 //! also tells its caller whether a username is free (no account has it and
@@ -129,8 +141,8 @@ use fuz_auth::{
     RateLimiter, RateLimiterOptions, RequestActorContext, is_valid_username_for_creation,
 };
 use fuz_http::{
-    JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params, not_found,
-    parse_strict_params,
+    JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_input_params,
+    invalid_params, not_found, parse_strict_params,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -144,11 +156,11 @@ use crate::cord_authz::{CordRole, cord_role_in};
 use crate::cord_queries::query_cord_get;
 use crate::invite::queries::{
     CORD_INVITE_EXPIRES_IN_SECONDS_MAX, CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
-    CORD_INVITE_MAX_USES_MAX, CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX, CordInviteError,
-    CordInviteRevoked, CordInviteRow, CordInviteStatus, CordInviteWithCounts,
-    generate_cord_invite_token, hash_cord_invite_token, is_plausible_cord_invite_token,
-    query_cord_invite_accept, query_cord_invite_by_token_hash, query_cord_invite_create,
-    query_cord_invite_list, query_cord_invite_revoke,
+    CORD_INVITE_MAX_USES_MAX, CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX,
+    CORD_INVITE_TOKEN_LENGTH_MAX, CordInviteError, CordInviteRevoked, CordInviteRow,
+    CordInviteStatus, CordInviteWithCounts, generate_cord_invite_token, hash_cord_invite_token,
+    is_cord_invite_token_in_bounds, query_cord_invite_accept, query_cord_invite_by_token_hash,
+    query_cord_invite_create, query_cord_invite_list, query_cord_invite_revoke,
 };
 use crate::invite::redemption_queries::{
     query_actor_holds_global_admin, query_actor_holds_global_admin_unlocked,
@@ -165,9 +177,11 @@ pub const ERROR_CORD_INVITE_EXPIRED: &str = "cord_invite_expired";
 pub const ERROR_CORD_INVITE_EXHAUSTED: &str = "cord_invite_exhausted";
 /// Error reason: only the cord's owner or admins manage its links.
 pub const ERROR_CORD_INVITE_FORBIDDEN: &str = "cord_invite_forbidden";
-/// Error reason: the expiry or use limit is out of bounds (for a link that
-/// admits newcomers, an expiry past
-/// [`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`]).
+/// Error reason: a newcomer link's expiry is past its cap.
+///
+/// The cap is [`CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`]. The bounds
+/// every link keeps are refused at params validation, with no reason, as the
+/// declared spec refuses them.
 pub const ERROR_CORD_INVITE_INVALID: &str = "cord_invite_invalid";
 /// Error reason: only instance admins mint links that admit newcomers.
 pub const ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN: &str = "cord_invite_newcomer_forbidden";
@@ -432,28 +446,67 @@ fn validate_newcomer_bounds(input: &CordInviteCreateInput) -> Result<(), Jsonrpc
     Ok(())
 }
 
+/// Refuse an expiry or use limit out of the bounds every link keeps, with the
+/// generic `invalid params` the TS spec's schema answers (no reason).
 fn validate_invite_limits(input: &CordInviteCreateInput) -> Result<(), JsonrpcError> {
     if let Some(seconds) = input.expires_in_seconds
         && !(CORD_INVITE_EXPIRES_IN_SECONDS_MIN..=CORD_INVITE_EXPIRES_IN_SECONDS_MAX)
             .contains(&seconds)
     {
-        return Err(invalid_params(
+        return Err(invalid_input_params(
             &format!(
                 "expires_in_seconds must be from {CORD_INVITE_EXPIRES_IN_SECONDS_MIN} to \
                  {CORD_INVITE_EXPIRES_IN_SECONDS_MAX}"
             ),
-            Some(ERROR_CORD_INVITE_INVALID),
+            None,
         ));
     }
     if let Some(max_uses) = input.max_uses
         && !(1..=CORD_INVITE_MAX_USES_MAX).contains(&max_uses)
     {
-        return Err(invalid_params(
+        return Err(invalid_input_params(
             &format!("max_uses must be from 1 to {CORD_INVITE_MAX_USES_MAX}"),
-            Some(ERROR_CORD_INVITE_INVALID),
+            None,
         ));
     }
     Ok(())
+}
+
+/// Refuse a token out of `CordInviteToken`'s bounds
+/// ([`is_cord_invite_token_in_bounds`]), with the generic `invalid params`
+/// the TS spec's schema answers (no reason).
+fn validate_cord_invite_token(token: &str) -> Result<(), JsonrpcError> {
+    if is_cord_invite_token_in_bounds(token) {
+        return Ok(());
+    }
+    Err(invalid_input_params(
+        &format!("token must be 1 to {CORD_INVITE_TOKEN_LENGTH_MAX} UTF-16 code units"),
+        None,
+    ))
+}
+
+// -- Params validation --------------------------------------------------------
+//
+// Each verb's params are parsed and checked against what the declared TS
+// spec's schema refuses before its handler runs, so the refusal precedes
+// every gate in the handler, as the spine's order has it.
+
+fn parse_cord_invite_create_params(params: Value) -> Result<CordInviteCreateInput, JsonrpcError> {
+    let input: CordInviteCreateInput = parse_strict_params(params)?;
+    validate_invite_limits(&input)?;
+    Ok(input)
+}
+
+fn parse_cord_invite_token_params(params: Value) -> Result<CordInviteTokenInput, JsonrpcError> {
+    let input: CordInviteTokenInput = parse_strict_params(params)?;
+    validate_cord_invite_token(&input.token)?;
+    Ok(input)
+}
+
+fn parse_cord_invite_redeem_params(params: Value) -> Result<CordInviteRedeemInput, JsonrpcError> {
+    let input: CordInviteRedeemInput = parse_strict_params(params)?;
+    validate_cord_invite_token(&input.token)?;
+    Ok(input)
 }
 
 // -- Handlers -----------------------------------------------------------------
@@ -472,7 +525,6 @@ async fn handle_cord_invite_create<C: GenericClient + ?Sized>(
         invite_forbidden,
     )
     .await?;
-    validate_invite_limits(input)?;
     require_newcomer_minter_fresh(client, auth, input).await?;
     // a grant can outlive its cell only in a race with deletion; answer as
     // for any missing cord
@@ -577,9 +629,6 @@ async fn handle_cord_invite_preview<C: GenericClient + ?Sized>(
     auth: Option<&RequestActorContext>,
     input: &CordInviteTokenInput,
 ) -> Result<Value, JsonrpcError> {
-    if !is_plausible_cord_invite_token(&input.token) {
-        return Err(invite_not_found());
-    }
     let Some(invite) =
         query_cord_invite_by_token_hash(client, &hash_cord_invite_token(&input.token))
             .await
@@ -647,9 +696,6 @@ async fn handle_cord_invite_redeem<C: GenericClient + ?Sized>(
     ctx: &ActionContext<'_>,
     input: &CordInviteRedeemInput,
 ) -> Result<Value, JsonrpcError> {
-    if !is_plausible_cord_invite_token(&input.token) {
-        return Err(invite_not_found());
-    }
     // the spine's creation rule, then its canonical (lowercase) form, as its
     // own `invite_create` does
     if !is_valid_username_for_creation(&input.username) {
@@ -696,9 +742,6 @@ async fn handle_cord_invite_accept<C: GenericClient + ?Sized>(
     auth: &RequestActorContext,
     input: &CordInviteTokenInput,
 ) -> Result<Value, JsonrpcError> {
-    if !is_plausible_cord_invite_token(&input.token) {
-        return Err(invite_not_found());
-    }
     let token_hash = hash_cord_invite_token(&input.token);
     let accepted = query_cord_invite_accept(client, &token_hash, auth.actor.id)
         .await
@@ -760,7 +803,7 @@ pub(crate) fn cord_invite_action_specs(
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
-                    let input: CordInviteCreateInput = parse_strict_params(params)?;
+                    let input = parse_cord_invite_create_params(params)?;
                     dispatch_db_ctx!(ctx, handle_cord_invite_create(auth, &input))
                 })
             }),
@@ -794,7 +837,7 @@ pub(crate) fn cord_invite_action_specs(
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = ctx.auth.actor();
-                    let input: CordInviteTokenInput = parse_strict_params(params)?;
+                    let input = parse_cord_invite_token_params(params)?;
                     dispatch_db!(ctx, handle_cord_invite_preview(auth, &input))
                 })
             }),
@@ -812,7 +855,7 @@ pub(crate) fn cord_invite_action_specs(
                 );
                 Box::pin(async move {
                     throttled?;
-                    let input: CordInviteRedeemInput = parse_strict_params(params)?;
+                    let input = parse_cord_invite_redeem_params(params)?;
                     dispatch_db_ctx!(ctx, handle_cord_invite_redeem(&input))
                 })
             }),
@@ -824,7 +867,7 @@ pub(crate) fn cord_invite_action_specs(
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
-                    let input: CordInviteTokenInput = parse_strict_params(params)?;
+                    let input = parse_cord_invite_token_params(params)?;
                     dispatch_db_ctx!(ctx, handle_cord_invite_accept(auth, &input))
                 })
             }),
@@ -1069,10 +1112,74 @@ mod tests {
             (None, Some(0)),
             (None, Some(CORD_INVITE_MAX_USES_MAX + 1)),
         ] {
-            assert!(
-                validate_invite_limits(&input(expires, uses)).is_err(),
-                "{expires:?} {uses:?}"
+            assert_spec_params_refusal(
+                validate_invite_limits(&input(expires, uses)),
+                &format!("{expires:?} {uses:?}"),
             );
+        }
+    }
+
+    /// The refusal the declared spec's schema answers on the spine: `400`
+    /// `invalid params`, with no reason.
+    fn assert_spec_params_refusal(result: Result<impl std::fmt::Debug, JsonrpcError>, case: &str) {
+        use fuz_http::{INVALID_PARAMS_MESSAGE, JsonrpcErrorCode};
+        let err = result.expect_err(case);
+        assert_eq!(err.code, JsonrpcErrorCode::InvalidParams, "{case}");
+        assert_eq!(err.message, INVALID_PARAMS_MESSAGE, "{case}");
+        assert_eq!(err.data, None, "{case}: no reason");
+    }
+
+    #[test]
+    fn out_of_bounds_limits_are_refused_at_params_validation() {
+        // a cord the caller isn't in: the refusal comes before the handler's
+        // manager gate could answer `cord_not_found`
+        let cord_id = Uuid::nil();
+        for limits in [
+            json!({ "expires_in_seconds": CORD_INVITE_EXPIRES_IN_SECONDS_MIN - 1 }),
+            json!({ "expires_in_seconds": CORD_INVITE_EXPIRES_IN_SECONDS_MAX + 1 }),
+            json!({ "expires_in_seconds": 0 }),
+            json!({ "max_uses": 0 }),
+            json!({ "max_uses": CORD_INVITE_MAX_USES_MAX + 1 }),
+        ] {
+            let mut params = json!({ "cord_id": cord_id });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(limits.as_object().unwrap().clone());
+            assert_spec_params_refusal(
+                parse_cord_invite_create_params(params),
+                &limits.to_string(),
+            );
+        }
+        let parsed = parse_cord_invite_create_params(json!({
+            "cord_id": cord_id,
+            "expires_in_seconds": CORD_INVITE_EXPIRES_IN_SECONDS_MIN,
+            "max_uses": CORD_INVITE_MAX_USES_MAX,
+        }))
+        .expect("in bounds reaches the handler");
+        assert_eq!(parsed.cord_id, cord_id);
+    }
+
+    #[test]
+    fn out_of_bounds_tokens_are_refused_at_params_validation() {
+        let too_long = "x".repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1);
+        for token in ["", too_long.as_str()] {
+            let case = format!("token of {} chars", token.len());
+            assert_spec_params_refusal(
+                parse_cord_invite_token_params(json!({ "token": token })),
+                &case,
+            );
+            assert_spec_params_refusal(
+                parse_cord_invite_redeem_params(json!({ "token": token, "username": "newcomer" })),
+                &case,
+            );
+        }
+        // a wrong token in bounds reaches the handler, and its masked 404
+        let at_max = "x".repeat(CORD_INVITE_TOKEN_LENGTH_MAX);
+        for token in ["nope", at_max.as_str()] {
+            parse_cord_invite_token_params(json!({ "token": token })).expect("in bounds");
+            parse_cord_invite_redeem_params(json!({ "token": token, "username": "newcomer" }))
+                .expect("in bounds");
         }
     }
 

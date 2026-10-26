@@ -60,7 +60,7 @@ export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_MEMBER_NOT_FOUND]: "They're not in this cord anymore.",
 	[ERROR_CORD_MEMBER_REMOVE_SELF]: 'To take yourself out, leave the cord instead.',
 	[ERROR_CORD_INVITE_FORBIDDEN]: "Only the cord's owners and admins manage its links.",
-	[ERROR_CORD_INVITE_INVALID]: 'That expiry or use limit is out of range.',
+	[ERROR_CORD_INVITE_INVALID]: 'That expiry is too long for a link that brings someone new.',
 	[ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN]:
 		'Only instance admins make links that bring someone new onto the instance.',
 	[ERROR_CORD_INVITE_NEWCOMER_UNBOUNDED]:

@@ -51,6 +51,7 @@ async fn main() -> ExitCode {
         extra_action_specs_factory: None,
         pre_migration_hook: None,
         daemon_token_state: None,
+        audit_inflight_tracking: false,
     })
     .await
     else {
