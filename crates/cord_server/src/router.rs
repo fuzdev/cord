@@ -172,7 +172,7 @@ fn compose_full_router(
     // transports and the spine's auth spec set, so a caller gets one budget
     // across them, not one per surface.
     let limits = ActionRateLimits::defaults(backend.rate_limiters);
-    let registry = build_action_registry(app, extra_action_specs_factory, &limits)?;
+    let registry = build_action_registry(app, extra_action_specs_factory)?;
 
     // Account REST, bootstrap, and signup nest under `/api/account`. Signup
     // is invite-gated by default (`app_settings.open_signup = false`) and
@@ -248,11 +248,9 @@ fn compose_full_router(
 fn build_action_registry(
     app: &CordApp,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
-    limits: &ActionRateLimits,
 ) -> Result<Arc<ActionRegistry>, StartupError> {
     let mut specs: Vec<fuz_actions::ActionSpec> = PROTOCOL_ACTION_SPECS();
     specs.extend(app.backend.auth_spec_set(
-        limits,
         // a global admin offers; the spine refuses a scoped builtin role
         // before this gate runs
         Arc::new(fuz_auth::AdminOfferAuthorize),
@@ -605,8 +603,7 @@ mod tests {
 
     #[test]
     fn action_registry_compiles_with_the_spine_surface() {
-        let registry =
-            build_action_registry(&lazy_app(), None, &limits()).expect("registry compiles");
+        let registry = build_action_registry(&lazy_app(), None).expect("registry compiles");
         for method in ["heartbeat", "account_verify", "admin_account_list"] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
@@ -630,18 +627,13 @@ mod tests {
             )]
         });
         let app = lazy_app();
-        let registry =
-            build_action_registry(&app, Some(factory), &limits()).expect("registry compiles");
+        let registry = build_action_registry(&app, Some(factory)).expect("registry compiles");
         assert!(registry.get("_testing_seam_probe").is_some());
         // the spine surface is still there alongside the extra spec
         assert!(registry.get("account_verify").is_some());
 
-        let without = build_action_registry(&app, None, &limits()).expect("registry compiles");
+        let without = build_action_registry(&app, None).expect("registry compiles");
         assert!(without.get("_testing_seam_probe").is_none());
-    }
-
-    fn limits() -> ActionRateLimits {
-        ActionRateLimits::defaults(RateLimiterMode::DisabledForTesting)
     }
 
     /// The probes are the spine's, named for `cordd`.
