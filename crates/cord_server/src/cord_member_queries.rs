@@ -33,8 +33,8 @@
 //! ends.
 
 use deadpool_postgres::GenericClient;
-use fuz_auth::query_create_role_grant;
 use fuz_auth::role_grant_offer_queries::query_revoke_role_grant;
+use fuz_auth::{query_create_role_grant, role_grant_active_sql};
 use fuz_cell::CellError;
 use fuz_db::iso8601_timestamp_column;
 use uuid::Uuid;
@@ -68,9 +68,9 @@ pub(crate) fn live_role_grant_sql(select: &str, conditions: &str) -> String {
          FROM role_grant rg
          JOIN actor ac ON ac.id = rg.actor_id AND ac.deleted_at IS NULL
          JOIN account a ON a.id = ac.account_id AND a.deleted_at IS NULL
-         WHERE rg.revoked_at IS NULL
-           AND (rg.expires_at IS NULL OR rg.expires_at > NOW())
-           AND {conditions}"
+         WHERE {rg_active}
+           AND {conditions}",
+        rg_active = role_grant_active_sql("rg"),
     )
 }
 
