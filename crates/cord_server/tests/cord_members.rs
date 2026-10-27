@@ -567,7 +567,7 @@ async fn scenario_the_unlocked_verbs_read_the_role_afresh(
     add_member(pool, shed.id, deputy, CordRole::Admin).await;
     let snapshot = || async {
         let client = pool.get().await.expect("pool.get");
-        fuz_auth::actor_queries::query_role_grants_for_actor(&client, &deputy)
+        fuz_auth::actor_queries::query_role_grant_find_active_for_actor(&client, &deputy)
             .await
             .expect("grants")
     };

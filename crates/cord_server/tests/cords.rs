@@ -25,7 +25,7 @@ use cord_server::cord_queries::{
     query_cord_rename, query_cords_by_ids,
 };
 use cord_server::roles::{CORD_MEMBER, CORD_OWNER, CORD_SCOPE_KIND};
-use fuz_auth::actor_queries::query_role_grants_for_actor;
+use fuz_auth::actor_queries::query_role_grant_find_active_for_actor;
 use fuz_auth::query_create_role_grant;
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
@@ -37,7 +37,7 @@ use uuid::Uuid;
 /// actor holding `grants`, with no admin bypass.
 async fn cell_list_shows(pool: &Pool, actor_id: Uuid, cord_id: Uuid) -> bool {
     let client = pool.get().await.expect("pool.get");
-    let grants = query_role_grants_for_actor(&client, &actor_id)
+    let grants = query_role_grant_find_active_for_actor(&client, &actor_id)
         .await
         .expect("grants");
     let roles: Vec<&str> = grants.iter().map(|g| g.role.as_str()).collect();
