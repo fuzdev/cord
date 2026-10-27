@@ -89,7 +89,6 @@ Skill(fuz-stack).
 - `invite/` — `queries.rs` (links), `redemption_queries.rs` (newcomer
   redemptions), `sweep.rs` (the expiry sweep), `actions.rs` (the verbs)
 - `migrations.rs` — the `cord` namespace and its column projections
-- `offer_authorize.rs` — `CordOfferAuthorize`
 
 ## Invariants
 
@@ -122,9 +121,9 @@ The load-bearing rules. Each module named holds the full reasoning.
   access. Every verb that names a cord answers `cord_not_found` to anyone
   outside it, the same as a missing cord (the IDOR mask).
 - **No scoped builtin roles.** `admin` and `keeper` are only granted
-  globally; the spine refuses a scoped one on every grant path, and
-  `CordOfferAuthorize` (in place of the spine's `AdminOfferAuthorize`)
-  restates it as defense in depth. (`offer_authorize.rs`)
+  globally; the spine refuses a scoped one on every grant path, ahead of
+  the offer gate (the spine's `AdminOfferAuthorize`, which requires a
+  global admin).
 - **Serialization.** Every membership change (role set, remove, leave,
   accept) locks the cord's cell row, then re-reads membership and applies
   the rules to that read, never the request's snapshot; this relies on

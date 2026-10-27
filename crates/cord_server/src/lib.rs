@@ -24,8 +24,7 @@
 //! the `cord_*` verbs. Membership changes live in [`cord_member_queries`]
 //! and [`cord_member_actions`]; invite links, in [`invite`], over cord's own
 //! `cord_invite` and `cord_invite_redemption` tables ([`migrations`]).
-//! [`offer_authorize`] restates, as defense in depth, the spine's refusal to
-//! offer a scoped builtin role. [`transaction_isolation`] is the boot check
+//! [`transaction_isolation`] is the boot check
 //! that Postgres runs transactions at READ COMMITTED, which the membership
 //! serialization relies on.
 
@@ -39,7 +38,6 @@ pub mod env;
 pub mod error;
 pub mod invite;
 pub mod migrations;
-pub mod offer_authorize;
 pub mod roles;
 pub mod router;
 pub mod runtime;
