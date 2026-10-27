@@ -149,11 +149,7 @@ fn to_cord_admin_json(row: &CordAdminRow) -> Value {
 /// pooled client for reads, the transaction for side-effecting actions.
 macro_rules! dispatch_db {
     ($ctx:expr, $handler:ident ( $($arg:expr),* $(,)? )) => {
-        match &$ctx.db {
-            fuz_actions::ActionDb::Pool(c) => $handler(*c, $($arg),*).await,
-            fuz_actions::ActionDb::Tx(t) => $handler(*t, $($arg),*).await,
-            _ => Err(fuz_http::internal_error("unsupported ActionDb variant")),
-        }
+        fuz_db::action_db_dispatch!($ctx.db, client => $handler(client, $($arg),*).await)
     };
 }
 
@@ -161,11 +157,7 @@ macro_rules! dispatch_db {
 /// same transaction.
 macro_rules! dispatch_db_ctx {
     ($ctx:expr, $handler:ident ( $($arg:expr),* $(,)? )) => {
-        match &$ctx.db {
-            fuz_actions::ActionDb::Pool(c) => $handler(*c, &$ctx, $($arg),*).await,
-            fuz_actions::ActionDb::Tx(t) => $handler(*t, &$ctx, $($arg),*).await,
-            _ => Err(fuz_http::internal_error("unsupported ActionDb variant")),
-        }
+        fuz_db::action_db_dispatch!($ctx.db, client => $handler(client, &$ctx, $($arg),*).await)
     };
 }
 

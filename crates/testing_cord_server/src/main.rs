@@ -86,7 +86,7 @@ async fn main() -> ExitCode {
                 keyring: runtime.keyring,
                 daemon_token_state,
                 session_cookie_name: runtime.session_cookie_name,
-                reset_state: Some(Arc::new(|db: fuz_actions::ActionDb<'_>| {
+                reset_state: Some(Arc::new(|db: fuz_db::ActionDb<'_>| {
                     Box::pin(async move {
                         db.execute(
                             "TRUNCATE cord_invite_redemption, cord_invite, cell_field, cell_item, \
