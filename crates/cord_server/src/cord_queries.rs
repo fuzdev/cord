@@ -265,6 +265,7 @@ pub async fn query_cord_create<C: GenericClient + ?Sized>(
         None,
         None,
         None,
+        None,
     )
     .await?;
     let owner_role_grant_id = query_cord_role_grant_create(
@@ -556,6 +557,7 @@ mod tests {
             parent_id: None,
             root_id: None,
             moderation: None,
+            policy: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
             updated_at: None,
             deleted_at: None,
