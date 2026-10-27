@@ -2,7 +2,8 @@
 //! migrated database, seeded actors, and the cord and invite-link steps the
 //! suites take, each run in its own transaction as the actions do.
 //!
-//! Every suite here but `transaction_isolation` drops and recreates the
+//! Every suite here but `transaction_isolation` (which boots on its own
+//! scratch database) drops and recreates the
 //! `public` schema of the one test database (`CORD_SCHEMA_READY_TEST_URL`,
 //! default `postgres://localhost/cord_schema_ready_test`), so each suite keeps
 //! its scenarios in a single test function; cargo runs the test binaries one
@@ -29,7 +30,7 @@ use uuid::Uuid;
 /// The suites' database: `CORD_SCHEMA_READY_TEST_URL` (default
 /// `postgres://localhost/cord_schema_ready_test`) over the chain
 /// `build_router` runs, no scratch DDL.
-const DB: TestingDbOptions<'static> = TestingDbOptions {
+pub const DB: TestingDbOptions<'static> = TestingDbOptions {
     env_var: "CORD_SCHEMA_READY_TEST_URL",
     default_db: "cord_schema_ready_test",
     migrations: &cord_migration_namespaces(),

@@ -197,7 +197,7 @@ pub(crate) fn cord_owner_count(members: &[CordMember]) -> usize {
 /// would be stale, and two owners could both pass the last-owner check.
 /// `cordd` enforces it at boot: it refuses to serve unless the database's
 /// `default_transaction_isolation` is `read committed`
-/// ([`crate::transaction_isolation`]).
+/// (the spine's `fuz_actions::server::ensure_read_committed`).
 ///
 /// # Errors
 ///

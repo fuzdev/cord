@@ -11,7 +11,9 @@
 //! - `fuz_realtime::audit_stream_router` → `/api/admin/audit/stream`
 //! - `fuz_http::ready_router` → `/ready`
 //!
-//! plus cord's own `/health` and `/`.
+//! plus the spine's `/health` and `/` (`fuz_actions::server::probe_router`).
+//! The spine core behind them is booted by
+//! `fuz_actions::server::create_app_backend`.
 //!
 //! ## Layers
 //!
@@ -39,26 +41,19 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::Router;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use fuz_actions::{
-    ActionRegistry, PROTOCOL_ACTION_SPECS, RpcRouteState, WsRouteState,
-    auth_adapter::build_auth_spec_set, create_rpc_router, register_action_ws,
+use fuz_actions::server::{
+    ActionRateLimits, AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError,
+    boot_only_router, compile_action_registry, create_app_backend, fallback_group, probe_router,
 };
-use fuz_auth::{AccountRouteState, AuthGate, RateLimiter, RateLimiterMode};
+use fuz_actions::{ActionRegistry, PROTOCOL_ACTION_SPECS, create_rpc_router, register_action_ws};
 use fuz_http::{
-    BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, ParsedProxy, RouteGroup, StackOptions,
+    BaseServerEnv, BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup, StackOptions,
     compose_stack,
 };
-use serde::Serialize;
 
 use crate::app::CordApp;
-use crate::env::CordEnv;
-use crate::error::StartupError;
-use crate::runtime::{ExtraActionSpecsFactory, PreMigrationHook};
+use crate::runtime::{ExtraActionSpecsFactory, SERVER_NAME};
 
 /// Session cookie name for cord.
 ///
@@ -81,6 +76,18 @@ pub const fn cord_migration_namespaces() -> [fuz_db::MigrationNamespace; 3] {
     ]
 }
 
+/// What cord's server is.
+///
+/// Its cookie, its chain, the committed `expected_schema.json` (the column
+/// map of cord's full chain, regenerated and drift-guarded by
+/// `tests/schema_ready.rs`) `/ready` embeds, and the admin audit stream.
+pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
+    session_cookie_name: CORD_SESSION_COOKIE_NAME,
+    migration_namespaces: &cord_migration_namespaces(),
+    expected_schema_json: Some(include_str!("../expected_schema.json")),
+    audit_sse: true,
+};
+
 /// What [`build_router`] builds: the router, and the composition root behind
 /// it for the work [`crate::runtime::run_app`] runs beside the server.
 #[derive(Debug)]
@@ -94,228 +101,125 @@ pub struct BuiltRouter {
 
 /// Build the top-level router.
 ///
-/// Falls back to a boot-only router (`/health` and `/` only) when
-/// `env.database_url` is absent, so the binary can be smoke-tested without a
-/// live Postgres.
+/// Boots the spine core through `fuz_actions::server::create_app_backend` —
+/// the READ COMMITTED check (the membership serialization relies on it, and
+/// it runs before anything writes), the pre-migration hook (`testing_cordd`'s
+/// env-gated schema reset), the migration chain, the keeper resolved into the
+/// daemon-token state `testing_cordd` injects, bootstrap availability, the
+/// revocation listeners (sockets and admin audit streams), the audit-row
+/// fan-out to those streams, and `/ready` — then composes cord over it.
 ///
-/// `daemon_token_state`, `audit_inflight_tracking`,
-/// `extra_action_specs_factory`, and `pre_migration_hook` are the
-/// `testing_cordd` seams; production passes `false` for the tracking and
-/// `None` for the rest.
+/// Falls back to a boot-only router (`/health` and `/` only) when
+/// `DATABASE_URL` is absent, so the binary can be smoke-tested without a live
+/// Postgres.
 ///
 /// # Errors
 ///
-/// [`StartupError`] when the composition root can't be built (pool, cookie
-/// keys), migrations fail, or the action registry doesn't compile.
+/// [`StartupError`] when the spine core can't boot (pool, cookie keys,
+/// isolation, migrations) or the action registry doesn't compile.
 pub async fn build_router(
-    env: &CordEnv,
-    password_hasher: Arc<dyn fuz_auth::PasswordHasher>,
-    rate_limiters: RateLimiterMode,
-    daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
-    audit_inflight_tracking: bool,
+    env: &BaseServerEnv,
+    backend: SpineBackendOptions,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
-    pre_migration_hook: Option<PreMigrationHook>,
 ) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
         tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
         return Ok(BuiltRouter {
-            router: boot_only_router(env),
+            router: boot_only_router(
+                SERVER_NAME,
+                &StackOptions::new(
+                    env.allowed_origins.clone(),
+                    Arc::new(env.trusted_proxies.clone()),
+                ),
+            ),
             app: None,
         });
     }
 
-    let app = CordApp::build(
-        env,
-        password_hasher,
-        rate_limiters,
-        daemon_token_state,
-        audit_inflight_tracking,
-    )?;
-
-    // `testing_cordd`'s env-gated schema reset runs once the pool exists and
-    // before migrations.
-    if let Some(hook) = pre_migration_hook {
-        hook(&app.pool).await?;
-    }
-
-    // Migrations land before any handler runs.
-    fuz_db::run_migrations(&app.pool, &cord_migration_namespaces()).await?;
-
-    // Only `testing_cordd` supplies a daemon token; point it at the keeper
-    // now that the schema exists. The token is static for the process
-    // lifetime.
-    if let Some(state) = app.daemon_token_state.clone() {
-        fuz_auth::resolve_keeper_into(&state, &app.pool).await;
-    }
-
-    // Bootstrap opens only while a token file exists and no account does;
-    // recompute now that the schema exists.
-    let bootstrap_available = fuz_auth::is_bootstrap_available(
-        &app.pool,
-        app.bootstrap_token_path.as_deref().and_then(|p| p.to_str()),
-    )
-    .await;
-    app.bootstrap_available
-        .store(bootstrap_available, std::sync::atomic::Ordering::SeqCst);
-    if bootstrap_available {
+    let BootedAppBackend { backend, ready } =
+        create_app_backend(env, &CORD_BACKEND_SPEC, backend).await?;
+    // the spec embeds a fixture, so the boot built `/ready`
+    let ready = ready.unwrap_or_default();
+    if backend
+        .bootstrap_available
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
         tracing::info!("bootstrap is open: POST /api/account/bootstrap creates the first account");
     }
+    let app = CordApp::new(backend);
 
-    // Logout, password change, and session or token revocation drop the
-    // matching live `/api/ws` connections and admin audit streams (the
-    // `RealtimeRevoker` fan-out).
-    let revoker = app.socket_revoker();
-    fuz_auth::register_socket_revocation_listeners(&app.audit_emitter, &revoker);
-
-    // Audit rows fan out to the open admin audit streams, which close on
-    // logout, password change, session revocation, or loss of the admin role.
-    fuz_realtime::register_audit_sse_listener(&app.audit_emitter, &app.audit_sse);
-
-    // `/ready`: the schema-drift readiness probe over the committed
-    // `expected_schema.json`, embedded at compile time so the binary is
-    // self-contained. Parsed here so a malformed fixture fails the boot.
-    let ready = fuz_http::ready_router(fuz_http::ReadyRouteState {
-        pool: app.pool.clone(),
-        expected: Arc::new(expected_ready_schema()?),
-    });
-
-    let router = compose_full_router(
-        &app,
-        env.trusted_proxies.clone(),
-        ready,
-        extra_action_specs_factory,
-        rate_limiters,
-    )?;
+    let router = compose_full_router(&app, ready, extra_action_specs_factory)?;
     Ok(BuiltRouter {
         router,
         app: Some(app),
     })
 }
 
-/// The committed `expected_schema.json` (the column map of cord's full
-/// migration chain), served by the `/ready` probe. Regenerated and
-/// drift-guarded by `tests/schema_ready.rs`.
-fn expected_ready_schema() -> Result<fuz_db::ExpectedSchema, StartupError> {
-    const EXPECTED_SCHEMA_JSON: &str = include_str!("../expected_schema.json");
-    serde_json::from_str(EXPECTED_SCHEMA_JSON)
-        .map_err(|e| StartupError::Internal(format!("expected_schema.json failed to parse: {e}")))
-}
-
-/// The router when no database is configured: the probes and the fallback,
-/// through the same stack as the full router (1 MiB cap, origin-checked).
-///
-/// There is no `AuthGate` without a database, so the stack options come
-/// straight from the env's allowlist and trusted proxies.
-fn boot_only_router(env: &CordEnv) -> GatedRouter {
-    compose_stack(
-        [RouteGroup::new(
-            "api",
-            Router::new()
-                .route("/health", get(health))
-                .route("/", get(root)),
-            BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
-        )],
-        fallback_group(),
-        &StackOptions::new(
-            env.allowed_origins.clone(),
-            Arc::new(env.trusted_proxies.clone()),
-        ),
-    )
-}
-
-/// The fallback group: the `404` for every unrouted path, behind the same cap
-/// and origin check as the routed group.
-fn fallback_group() -> RouteGroup {
-    RouteGroup::new(
-        "fallback",
-        Router::new().fallback(not_found),
-        BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
-    )
-}
-
-/// Health-check response body, the spine's canonical `{"status":"ok"}`.
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-}
-
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse { status: "ok" })
-}
-
-async fn root() -> &'static str {
-    "cordd: the cord server; see /health\n"
-}
-
-async fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, "not found\n").into_response()
-}
-
 /// Compose the full router with every subsystem wired.
 fn compose_full_router(
     app: &CordApp,
-    trusted_proxies: Vec<ParsedProxy>,
     ready: Router,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
-    rate_limiters: RateLimiterMode,
 ) -> Result<GatedRouter, StartupError> {
+    let backend = &app.backend;
     // One gate for the whole server: every route state that resolves a
-    // credential takes a clone of it, and the stack's options read its
+    // credential takes a clone of it, and the stack's options read the same
     // allowlist, so the stack's origin check and each handler's in-handler one
     // cannot drift apart.
-    let gate = app.auth_gate();
-    let stack_options = gate.stack_options(Arc::new(trusted_proxies));
+    let gate = backend.auth_gate();
+    let stack_options = backend.stack_options();
     // One set of per-action limiters shared by the RPC and WebSocket
     // transports and the spine's auth spec set, so a caller gets one budget
     // across them, not one per surface.
-    let action_account_rl = rate_limiters.limiter(fuz_auth::DEFAULT_ACTION_ACCOUNT_RATE_LIMIT);
-    let action_ip_rl = rate_limiters.limiter(fuz_auth::DEFAULT_ACTION_IP_RATE_LIMIT);
-    let registry = build_action_registry(
-        app,
-        extra_action_specs_factory,
-        action_account_rl.clone(),
-        action_ip_rl.clone(),
-    )?;
+    let limits = ActionRateLimits::defaults(backend.rate_limiters);
+    let registry = build_action_registry(app, extra_action_specs_factory, &limits)?;
 
-    // Account REST, bootstrap, and signup nest under `/api/account`.
-    let api_account = fuz_auth::account_router(build_account_state(app, gate.clone()))
+    // Account REST, bootstrap, and signup nest under `/api/account`. Signup
+    // is invite-gated by default (`app_settings.open_signup = false`) and
+    // rate-limited on both axes anyway, so the limiters already stand if an
+    // admin opens signup.
+    let api_account = fuz_auth::account_router(backend.account_route_state(gate.clone()))
         .merge(fuz_auth::bootstrap_routes::bootstrap_router(
-            build_bootstrap_state(app, gate.clone()),
+            backend.bootstrap_route_state(gate.clone()),
         ))
-        .merge(fuz_auth::signup_routes::signup_router(build_signup_state(
-            app,
-            gate.clone(),
-            rate_limiters,
-        )));
+        .merge(fuz_auth::signup_routes::signup_router(
+            backend.signup_route_state(gate.clone()),
+        ));
 
-    // RPC and WebSocket nest under `/api`.
+    // RPC and WebSocket nest under `/api`. No role gate on the socket: it is
+    // a member surface, and the only server-initiated pushes today are the
+    // spine's recipient-filtered role-grant-offer notifications. Add roles
+    // here the moment a privileged broadcast lands.
     let api = Router::new()
-        .merge(create_rpc_router(build_rpc_state(
-            app,
+        .merge(create_rpc_router(backend.rpc_route_state(
             gate.clone(),
             Arc::clone(&registry),
-            action_account_rl.clone(),
-            action_ip_rl.clone(),
+            &limits,
         )))
-        .merge(register_action_ws(build_ws_state(
-            app,
+        .merge(register_action_ws(backend.ws_route_state(
             gate.clone(),
             registry,
-            action_account_rl,
-            action_ip_rl,
+            &limits,
+            Vec::new(),
         )));
 
-    // The admin audit-log SSE stream, mounted at its absolute path.
-    let audit_stream = fuz_realtime::audit_stream_router(build_audit_stream_state(app, gate));
+    // The admin audit-log SSE stream, mounted at its absolute path: admins
+    // only, over a cookie session only (the spine defaults), since the stream
+    // is a browser feed and close-on-revoke keys on the session.
+    let audit_sse = backend
+        .audit_sse
+        .clone()
+        .ok_or_else(|| StartupError::Internal("the audit stream registry is unbuilt".into()))?;
+    let audit_stream = fuz_realtime::audit_stream_router(fuz_realtime::AuditStreamRouteState::new(
+        gate, audit_sse,
+    ));
 
     // Every route sits in the one `api` group, capped at 1 MiB and
     // origin-checked; the body-less routes (the probes, `/ready`, the audit
     // stream) are capped too, since the cap inspects only the request body.
     let api_group = RouteGroup::new(
         "api",
-        Router::new()
-            .route("/health", get(health))
-            .route("/", get(root))
+        probe_router(SERVER_NAME)
             .merge(ready)
             .nest("/api/account", api_account)
             .nest("/api", api)
@@ -336,67 +240,6 @@ fn compose_full_router(
     Ok(compose_stack([api_group], fallback_group(), &stack_options))
 }
 
-fn build_account_state(app: &CordApp, gate: AuthGate) -> AccountRouteState {
-    AccountRouteState {
-        gate,
-        password_hasher: Arc::clone(&app.password_hasher),
-        audit: Arc::clone(&app.audit_emitter),
-        socket_revoker: app.socket_revoker(),
-        bootstrap_available: Arc::clone(&app.bootstrap_available),
-        login_ip_rate_limiter: app.login_ip_rate_limiter.clone(),
-        login_account_rate_limiter: app.login_account_rate_limiter.clone(),
-        login_fail_floor_ms: fuz_auth::DEFAULT_LOGIN_FAIL_FLOOR_MS,
-        login_fail_jitter_ms: fuz_auth::DEFAULT_LOGIN_FAIL_JITTER_MS,
-    }
-}
-
-fn build_bootstrap_state(app: &CordApp, gate: AuthGate) -> fuz_auth::BootstrapRouteState {
-    let options = Arc::new(fuz_auth::BootstrapOptions {
-        pool: app.pool.clone(),
-        password_hasher: Arc::clone(&app.password_hasher),
-        audit: Arc::clone(&app.audit_emitter),
-        bootstrap_available: Arc::clone(&app.bootstrap_available),
-        token_store: app.bootstrap_token_path.as_ref().map(|p| {
-            let store: Arc<dyn fuz_auth::BootstrapTokenStore> =
-                Arc::new(fuz_auth::FileBootstrapTokenStore::new(p.clone()));
-            store
-        }),
-        // Only set under `testing_cordd`: bootstrap teaches the daemon-token
-        // state the keeper's account id so the credential resolves to it.
-        on_keeper_resolved: app.daemon_token_state.clone().map(|state| {
-            let resolved: Arc<dyn fuz_auth::BootstrapKeeperResolved> =
-                Arc::new(fuz_auth::DaemonTokenKeeperResolved::new(state));
-            resolved
-        }),
-    });
-    fuz_auth::BootstrapRouteState { options, gate }
-}
-
-/// Signup is invite-gated by default (`app_settings.open_signup = false`) and
-/// rate-limited on both axes anyway, so the limiters already stand if an
-/// admin opens signup.
-fn build_signup_state(
-    app: &CordApp,
-    gate: AuthGate,
-    rate_limiters: RateLimiterMode,
-) -> fuz_auth::SignupRouteState {
-    fuz_auth::SignupRouteState {
-        options: Arc::new(fuz_auth::SignupOptions {
-            pool: app.pool.clone(),
-            password_hasher: Arc::clone(&app.password_hasher),
-            audit: Arc::clone(&app.audit_emitter),
-            // Own instances, not the login buckets: a signup flood must not
-            // spend the budget that bounds credential guessing.
-            signup_ip_rate_limiter: rate_limiters.limiter(fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT),
-            signup_account_rate_limiter: rate_limiters
-                .limiter(fuz_auth::DEFAULT_LOGIN_ACCOUNT_RATE_LIMIT),
-            signup_fail_floor_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_FLOOR_MS,
-            signup_fail_jitter_ms: fuz_auth::DEFAULT_SIGNUP_FAIL_JITTER_MS,
-        }),
-        gate,
-    }
-}
-
 /// Compile the action registry: the spine's protocol actions, its account,
 /// admin, and role-grant-offer actions over cord's role registry (the
 /// builtins plus the cord roles, which no spine grant path confers) and
@@ -405,15 +248,11 @@ fn build_signup_state(
 fn build_action_registry(
     app: &CordApp,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
-    action_account_rate_limiter: Option<Arc<RateLimiter>>,
-    action_ip_rate_limiter: Option<Arc<RateLimiter>>,
+    limits: &ActionRateLimits,
 ) -> Result<Arc<ActionRegistry>, StartupError> {
     let mut specs: Vec<fuz_actions::ActionSpec> = PROTOCOL_ACTION_SPECS();
-    specs.extend(build_auth_spec_set(
-        Arc::clone(&app.audit_emitter),
-        app.socket_revoker(),
-        action_account_rate_limiter,
-        action_ip_rate_limiter,
+    specs.extend(app.backend.auth_spec_set(
+        limits,
         // a global admin offers; the spine refuses a scoped builtin role
         // before this gate runs
         Arc::new(fuz_auth::AdminOfferAuthorize),
@@ -425,80 +264,22 @@ fn build_action_registry(
     // The `testing_cordd` seam for the `_testing_*` actions; production
     // passes no factory, so `fuz_testing` stays out of the `cordd` graph.
     if let Some(factory) = extra_action_specs_factory {
-        let runtime = fuz_actions::ExtraActionSpecsRuntime {
-            password_hasher: Arc::clone(&app.password_hasher),
-            keyring: Arc::clone(&app.keyring),
-            daemon_token_state: app.daemon_token_state.clone(),
-            session_cookie_name: CORD_SESSION_COOKIE_NAME,
-        };
-        specs.extend(factory(Arc::new(app.clone()), runtime));
+        specs.extend(factory(
+            Arc::new(app.clone()),
+            app.backend.extra_action_specs_runtime(),
+        ));
     }
     // Fail loud: booting with an empty registry would answer
     // `method_not_found` to everything.
-    let registry = ActionRegistry::compile(specs)
-        .map_err(|e| StartupError::Internal(format!("action registry compile failed: {e}")))?;
-    Ok(Arc::new(registry))
-}
-
-/// State for `GET /api/admin/audit/stream`: admins only, over a cookie
-/// session only, since the stream is a browser feed and close-on-revoke keys
-/// on the session.
-fn build_audit_stream_state(app: &CordApp, gate: AuthGate) -> fuz_realtime::AuditStreamRouteState {
-    fuz_realtime::AuditStreamRouteState {
-        gate,
-        audit_sse: Arc::clone(&app.audit_sse),
-        required_role: fuz_auth::ROLE_ADMIN,
-        credential_gate: fuz_auth::CredentialGate::SESSION_ONLY,
-    }
-}
-
-fn build_rpc_state(
-    app: &CordApp,
-    gate: AuthGate,
-    registry: Arc<ActionRegistry>,
-    account_rate_limiter: Option<Arc<RateLimiter>>,
-    ip_rate_limiter: Option<Arc<RateLimiter>>,
-) -> RpcRouteState {
-    RpcRouteState {
-        gate,
-        registry,
-        audit: Arc::clone(&app.audit_emitter),
-        socket_revoker: app.socket_revoker(),
-        notification_sender: app.notification_sender(),
-        account_rate_limiter,
-        ip_rate_limiter,
-    }
-}
-
-fn build_ws_state(
-    app: &CordApp,
-    gate: AuthGate,
-    registry: Arc<ActionRegistry>,
-    account_rate_limiter: Option<Arc<RateLimiter>>,
-    ip_rate_limiter: Option<Arc<RateLimiter>>,
-) -> WsRouteState {
-    WsRouteState {
-        gate,
-        registry,
-        audit: Arc::clone(&app.audit_emitter),
-        socket_revoker: app.socket_revoker(),
-        notification_sender: app.notification_sender(),
-        connection_registry: Arc::clone(&app.realtime),
-        account_rate_limiter,
-        ip_rate_limiter,
-        // No role gate: the socket is a member surface, and the only
-        // server-initiated pushes today are the spine's recipient-filtered
-        // role-grant-offer notifications. Add roles here the moment a
-        // privileged broadcast lands.
-        required_roles: Vec::new(),
-    }
+    compile_action_registry(specs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{Request, StatusCode};
+    use fuz_auth::RateLimiterMode;
     use tower::ServiceExt;
 
     const FOREIGN_ORIGIN: &str = "https://elsewhere.example";
@@ -561,32 +342,43 @@ mod tests {
     }
 
     /// The env a test router runs on; `database_url` `None` is boot-only.
-    fn test_env(database_url: Option<&str>) -> CordEnv {
-        CordEnv::from_vars(|k| match k {
-            "DATABASE_URL" => database_url.map(str::to_owned),
-            "FUZ_ALLOWED_ORIGINS" => Some("http://localhost:*".to_owned()),
-            "SECRET_FUZ_COOKIE_KEYS" => {
-                Some("a-cookie-signing-key-that-is-long-enough-to-pass".to_owned())
-            }
-            _ => None,
-        })
+    fn test_env(database_url: Option<&str>) -> BaseServerEnv {
+        BaseServerEnv::from_vars(
+            &|k| match k {
+                "DATABASE_URL" => database_url.map(str::to_owned),
+                "FUZ_ALLOWED_ORIGINS" => Some("http://localhost:*".to_owned()),
+                "SECRET_FUZ_COOKIE_KEYS" => {
+                    Some("a-cookie-signing-key-that-is-long-enough-to-pass".to_owned())
+                }
+                // no trusted proxies: the test peer is the client
+                "CORD_TRUSTED_PROXIES" => Some(",".to_owned()),
+                _ => None,
+            },
+            crate::runtime::ENV_OPTIONS,
+        )
         .expect("env parses")
     }
 
     fn boot_router() -> GatedRouter {
-        boot_only_router(&test_env(None))
+        boot_only_router(
+            SERVER_NAME,
+            &StackOptions::new(test_env(None).allowed_origins, Arc::new(Vec::new())),
+        )
     }
 
+    /// The spine core built without booting (its pool is lazy), over
+    /// `database_url` and `rate_limiters`.
     fn lazy_app_over(database_url: &str, rate_limiters: RateLimiterMode) -> CordApp {
-        let env = test_env(Some(database_url));
-        CordApp::build(
-            &env,
-            Arc::new(fuz_auth::Argon2idHasher::new()),
-            rate_limiters,
-            None,
-            false,
+        let backend = fuz_actions::server::build_app_backend(
+            &test_env(Some(database_url)),
+            &CORD_BACKEND_SPEC,
+            &SpineBackendOptions {
+                rate_limiters,
+                ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+            },
         )
-        .expect("app builds without touching the DB")
+        .expect("the core builds without touching the DB");
+        CordApp::new(backend)
     }
 
     fn full_router() -> GatedRouter {
@@ -595,11 +387,19 @@ mod tests {
 
     fn full_router_over(app: &CordApp) -> GatedRouter {
         let ready = fuz_http::ready_router(fuz_http::ReadyRouteState {
-            pool: app.pool.clone(),
-            expected: Arc::new(expected_ready_schema().expect("fixture parses")),
+            pool: app.backend.pool.clone(),
+            expected: Arc::new(expected_ready_schema()),
         });
-        compose_full_router(app, Vec::new(), ready, None, RateLimiterMode::Enforced)
-            .expect("router composes")
+        compose_full_router(app, ready, None).expect("router composes")
+    }
+
+    fn expected_ready_schema() -> fuz_db::ExpectedSchema {
+        fuz_actions::server::parse_expected_schema(
+            CORD_BACKEND_SPEC
+                .expected_schema_json
+                .expect("the spec embeds a fixture"),
+        )
+        .expect("committed fixture parses")
     }
 
     #[tokio::test]
@@ -785,7 +585,7 @@ mod tests {
 
     #[test]
     fn expected_schema_parses_and_covers_the_migration_chain() {
-        let schema = expected_ready_schema().expect("committed fixture parses");
+        let schema = expected_ready_schema();
         // the tracker must be expected, so a never-migrated DB fails readiness
         for table in [
             "schema_version",
@@ -806,7 +606,7 @@ mod tests {
     #[test]
     fn action_registry_compiles_with_the_spine_surface() {
         let registry =
-            build_action_registry(&lazy_app(), None, None, None).expect("registry compiles");
+            build_action_registry(&lazy_app(), None, &limits()).expect("registry compiles");
         for method in ["heartbeat", "account_verify", "admin_account_list"] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
@@ -831,152 +631,26 @@ mod tests {
         });
         let app = lazy_app();
         let registry =
-            build_action_registry(&app, Some(factory), None, None).expect("registry compiles");
+            build_action_registry(&app, Some(factory), &limits()).expect("registry compiles");
         assert!(registry.get("_testing_seam_probe").is_some());
         // the spine surface is still there alongside the extra spec
         assert!(registry.get("account_verify").is_some());
 
-        let without = build_action_registry(&app, None, None, None).expect("registry compiles");
+        let without = build_action_registry(&app, None, &limits()).expect("registry compiles");
         assert!(without.get("_testing_seam_probe").is_none());
     }
 
-    /// `testing_cordd`'s `_testing_drain_effects` is a barrier only over the
-    /// tracked emitter: a fire-and-forget write still in flight (here, stuck
-    /// dialing a server that accepts the connection and never answers) holds
-    /// the drain, and the untracked production emitter's drain returns at
-    /// once.
-    #[tokio::test]
-    async fn audit_inflight_tracking_makes_the_drain_wait_for_a_write() {
-        use std::time::Duration;
-
-        use fuz_auth::{AuditEventType, AuditLogInput};
-
-        let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("binds");
-        let url = format!(
-            "postgres://cord:cord@{}/cord_unused",
-            silent.local_addr().expect("has an address")
-        );
-        let build = |tracking| {
-            CordApp::build(
-                &test_env(Some(&url)),
-                Arc::new(fuz_auth::Argon2idHasher::new()),
-                RateLimiterMode::Enforced,
-                None,
-                tracking,
-            )
-            .expect("app builds without touching the DB")
-        };
-        let emit = |app: &CordApp| {
-            app.audit_emitter
-                .emit(AuditLogInput::for_event(AuditEventType::Logout))
-        };
-
-        let tracked = build(true);
-        let write = emit(&tracked);
-        assert!(
-            tokio::time::timeout(
-                Duration::from_millis(200),
-                tracked.audit_emitter.drain_inflight()
-            )
-            .await
-            .is_err(),
-            "the drain waits while the write is in flight"
-        );
-        write.abort();
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            tracked.audit_emitter.drain_inflight(),
-        )
-        .await
-        .expect("the drain resolves once the write ends");
-
-        let untracked = build(false);
-        let write = emit(&untracked);
-        tokio::time::timeout(
-            Duration::from_millis(200),
-            untracked.audit_emitter.drain_inflight(),
-        )
-        .await
-        .expect("untracked, the drain returns at once");
-        write.abort();
+    fn limits() -> ActionRateLimits {
+        ActionRateLimits::defaults(RateLimiterMode::DisabledForTesting)
     }
-}
 
-#[cfg(test)]
-mod client_ip_posture {
-    //! The empty-trusted-proxy posture [`super::compose_full_router`] relies
-    //! on: `CORD_TRUSTED_PROXIES` is unset by default, so the composed router
-    //! layers `client_ip_middleware` over an empty proxy set. These pin that
-    //! the combination records the real TCP peer and never believes a forged
-    //! `X-Forwarded-For`.
-
-    use std::net::SocketAddr;
-    use std::sync::{Arc, Mutex};
-
-    use axum::Router;
-    use axum::body::Body;
-    use axum::extract::{ConnectInfo, Extension};
-    use axum::http::{Request, StatusCode};
-    use axum::middleware::from_fn_with_state;
-    use axum::routing::get;
-    use fuz_http::{ClientIp, ParsedProxy, client_ip_middleware};
-    use tower::ServiceExt;
-
-    /// Drive one request through the composer's empty-set layer shape and
-    /// return the `ClientIp` the middleware resolved.
-    async fn resolved_client_ip(peer: &str, forwarded_for: Option<&str>) -> String {
-        let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let sink = Arc::clone(&seen);
-        let proxies: Arc<Vec<ParsedProxy>> = Arc::new(Vec::new());
-        let app = Router::new()
-            .route(
-                "/ip",
-                get(move |Extension(ClientIp(ip)): Extension<ClientIp>| {
-                    let sink = Arc::clone(&sink);
-                    async move {
-                        *sink.lock().expect("sink is uncontended") = Some(ip);
-                        StatusCode::OK
-                    }
-                }),
-            )
-            .layer(from_fn_with_state(proxies, client_ip_middleware));
-
-        let mut builder = Request::builder().uri("/ip").method("GET");
-        if let Some(value) = forwarded_for {
-            builder = builder.header("x-forwarded-for", value);
+    /// The probes are the spine's, named for `cordd`.
+    #[tokio::test]
+    async fn the_root_names_the_server() {
+        for (label, router) in both_routers() {
+            let (status, body) = send(router, "GET", "/", None).await;
+            assert_eq!(status, StatusCode::OK, "{label}");
+            assert_eq!(body, "cordd (rust) — see /health\n", "{label}");
         }
-        let mut req = builder.body(Body::empty()).expect("request builds");
-        // `serve_with_shutdown` supplies `ConnectInfo` per connection; a
-        // `oneshot` has no connection, so plumb the peer by hand
-        req.extensions_mut().insert(ConnectInfo(
-            peer.parse::<SocketAddr>().expect("peer parses"),
-        ));
-
-        let response = app.oneshot(req).await.expect("router responds");
-        // a 500 would mean the `ClientIp` extension was missing
-        assert_eq!(response.status(), StatusCode::OK, "ClientIp was populated");
-
-        seen.lock()
-            .expect("sink is uncontended")
-            .clone()
-            .expect("the middleware always populates ClientIp")
-    }
-
-    #[tokio::test]
-    async fn no_forwarded_for_resolves_to_the_peer() {
-        assert_eq!(
-            resolved_client_ip("203.0.113.7:51234", None).await,
-            "203.0.113.7"
-        );
-    }
-
-    #[tokio::test]
-    async fn forged_forwarded_for_from_an_untrusted_peer_is_ignored() {
-        assert_eq!(
-            resolved_client_ip("203.0.113.7:51234", Some("198.51.100.9")).await,
-            "203.0.113.7"
-        );
     }
 }

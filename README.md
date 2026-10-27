@@ -153,7 +153,7 @@ cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
 | `SECRET_FUZ_COOKIE_KEYS`   | required with a database: cookie-signing keys, 32+ characters each     |
 | `FUZ_BOOTSTRAP_TOKEN_PATH` | token file that opens first-account bootstrap                          |
 | `HOST`, `PORT`             | bind address, default `127.0.0.1:4061`                                 |
-| `CORD_TRUSTED_PROXIES`     | reverse-proxy IPs or CIDRs trusted for `X-Forwarded-For`               |
+| `CORD_TRUSTED_PROXIES`     | proxy IPs/CIDRs trusted for `X-Forwarded-For`; default loopback        |
 
 It runs its migrations on start. With the server up, the frontend dev
 server proxies `/api` (WebSocket included) and `/health` to port 4061, so

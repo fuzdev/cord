@@ -1,11 +1,12 @@
-//! The boot check that Postgres runs transactions at READ COMMITTED, against
-//! a live database: the default passes, and a database whose
-//! `default_transaction_isolation` an operator set to `repeatable read` is
-//! refused.
+//! `cordd` refuses a database whose `default_transaction_isolation` isn't
+//! `read committed` — the membership serialization's precondition — and
+//! refuses it **before migrating**, so a misconfigured database is never
+//! written to.
 //!
-//! The refusal sets the database's own default (`ALTER DATABASE ... SET`)
-//! and resets it before asserting, so a failure leaves the test database as
-//! it found it. It needs no schema, so it doesn't reset `public`.
+//! The boot runs on its own scratch database
+//! (`fuz_testing::ScratchDb`, `cord_isolation_scratch`), since the setting is
+//! database-wide and would leak into every suite sharing the test database.
+//! The check itself is the spine's (`fuz_actions::server`), tested there.
 //!
 //! ```bash
 //! cargo test -p cord_server --test transaction_isolation -- --ignored
@@ -15,57 +16,59 @@
 
 mod common;
 
-use cord_server::error::StartupError;
-use cord_server::transaction_isolation::{
-    REQUIRED_TRANSACTION_ISOLATION, ensure_read_committed, query_default_transaction_isolation,
-};
+use std::sync::Arc;
+
+use fuz_actions::server::{SpineBackendOptions, StartupError};
 use fuz_db::create_pool;
-
-use common::test_url;
-
-/// Set (or, with `None`, reset) the test database's own
-/// `default_transaction_isolation`. It reaches only connections opened
-/// afterwards.
-async fn set_database_isolation(value: Option<&str>) {
-    let pool = create_pool(&test_url()).expect("create_pool");
-    let client = pool.get().await.expect("pool.get");
-    let database: String = client
-        .query_one("SELECT current_database()", &[])
-        .await
-        .expect("current_database")
-        .get(0);
-    let database = format!("\"{}\"", database.replace('"', "\"\""));
-    let sql = value.map_or_else(
-        || format!("ALTER DATABASE {database} RESET default_transaction_isolation"),
-        |value| format!("ALTER DATABASE {database} SET default_transaction_isolation = '{value}'"),
-    );
-    client.batch_execute(&sql).await.expect("alter database");
-}
+use fuz_testing::ScratchDb;
 
 #[tokio::test]
 #[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
-async fn the_boot_check_refuses_anything_but_read_committed() {
-    // a clean slate, whatever an interrupted run left
-    set_database_isolation(None).await;
-
-    let pool = create_pool(&test_url()).expect("create_pool");
-    let client = pool.get().await.expect("pool.get");
-    assert_eq!(
-        query_default_transaction_isolation(&client)
-            .await
-            .expect("reads the setting"),
-        REQUIRED_TRANSACTION_ISOLATION,
-        "the Postgres default"
-    );
-    drop(client);
-    ensure_read_committed(&pool)
+async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
+    let scratch = ScratchDb::create(common::DB, "cord_isolation_scratch").await;
+    create_pool(scratch.url())
+        .expect("create_pool")
+        .get()
         .await
-        .expect("the default passes");
+        .expect("pool.get")
+        .batch_execute(
+            "ALTER DATABASE cord_isolation_scratch \
+             SET default_transaction_isolation = 'repeatable read'",
+        )
+        .await
+        .expect("alter database");
 
-    set_database_isolation(Some("repeatable read")).await;
-    // a fresh pool: the database default reaches only new connections
-    let refused = ensure_read_committed(&create_pool(&test_url()).expect("create_pool")).await;
-    set_database_isolation(None).await;
+    let url = scratch.url().to_owned();
+    let env = fuz_http::BaseServerEnv::from_vars(
+        &|k| match k {
+            "DATABASE_URL" => Some(url.clone()),
+            "SECRET_FUZ_COOKIE_KEYS" => Some("k".repeat(fuz_auth::keyring::MIN_KEY_LENGTH)),
+            "FUZ_ALLOWED_ORIGINS" => Some("http://localhost".to_owned()),
+            _ => None,
+        },
+        cord_server::runtime::ENV_OPTIONS,
+    )
+    .expect("the env reads");
+    let refused = cord_server::router::build_router(
+        &env,
+        SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        None,
+    )
+    .await;
+
+    let migrated: bool = create_pool(scratch.url())
+        .expect("create_pool")
+        .get()
+        .await
+        .expect("pool.get")
+        .query_one(
+            "SELECT to_regclass('public.schema_version') IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("query the tracker")
+        .get(0);
+    scratch.drop_database().await;
 
     let err = refused.expect_err("repeatable read is refused");
     assert!(
@@ -73,9 +76,5 @@ async fn the_boot_check_refuses_anything_but_read_committed() {
         "{err}"
     );
     assert_eq!(err.exit_code(), 2);
-
-    let pool = create_pool(&test_url()).expect("create_pool");
-    ensure_read_committed(&pool)
-        .await
-        .expect("the reset restores the default");
+    assert!(!migrated, "the refusal comes before any migration");
 }

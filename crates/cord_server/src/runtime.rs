@@ -1,25 +1,20 @@
 //! The server lifecycle, owned by [`run_app`].
 //!
-//! [`run_app`] loads env, installs the signal handler, builds the router
-//! (running migrations), checks the database's transaction isolation, binds
-//! the listener, starts the upkeep tasks ([`spawn_upkeep`]), and drains on
-//! shutdown, so the binary's `main` is tracing init, hasher selection, and
-//! one call.
+//! Over the spine's server toolkit (`fuz_actions::server`): [`run_app`] reads
+//! the env, installs the signal handler, builds the router (the READ
+//! COMMITTED check, then migrations), binds the listener, starts the upkeep
+//! tasks ([`upkeep_options`]), and drains on shutdown, so the binary's `main`
+//! is tracing init, swap-point selection, and one call.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
 
-use fuz_auth::{AuditEmitter, SocketRevoker};
-use fuz_db::Pool;
-use fuz_http::CancellationToken;
-use tokio::task::JoinHandle;
+use fuz_actions::server::{
+    ServeOptions, SpineRunOptions, StartupError, UpkeepOptions, serve_until_shutdown,
+};
+use fuz_http::{BaseServerEnv, ServerEnvOptions};
 
-use crate::env::CordEnv;
-use crate::error::StartupError;
 use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, spawn_cord_invite_sweep};
 use crate::router::{BuiltRouter, build_router};
-use crate::transaction_isolation::ensure_read_committed;
 
 /// cord's instantiation of the spine's extra-action-specs factory, over
 /// [`crate::app::CordApp`].
@@ -29,12 +24,8 @@ use crate::transaction_isolation::ensure_read_committed;
 /// production `cordd` dep graph.
 pub type ExtraActionSpecsFactory = fuz_actions::ExtraActionSpecsFactory<crate::app::CordApp>;
 
-/// cord's instantiation of the spine's pre-migration hook, over
-/// [`StartupError`].
-///
-/// Production passes `None`; the `testing_cordd` binary passes `Some(_)` to
-/// run the env-gated startup schema reset.
-pub type PreMigrationHook = fuz_actions::PreMigrationHook<StartupError>;
+/// The name cord's sentinels (`cordd listening on …`) and `GET /` carry.
+pub const SERVER_NAME: &str = "cordd";
 
 /// Default loopback bind for `cordd` (`127.0.0.1:4061`). A reverse proxy
 /// terminates TLS and forwards to this address; the server serves no static
@@ -42,196 +33,185 @@ pub type PreMigrationHook = fuz_actions::PreMigrationHook<StartupError>;
 pub const DEFAULT_ADDR: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 4061);
 
-/// Bound on the graceful-shutdown connection drain, the spine's shared value.
-pub const DEFAULT_DRAIN_TIMEOUT: Duration = fuz_http::DEFAULT_DRAIN_TIMEOUT;
+/// The env cord reads: the spine's base vars, its trusted proxies under
+/// `CORD_TRUSTED_PROXIES` — the loopback reverse-proxy hop (`127.0.0.1`,
+/// `::1`) when unset, `,` to trust none.
+pub const ENV_OPTIONS: ServerEnvOptions = ServerEnvOptions {
+    trusted_proxies_var: "CORD_TRUSTED_PROXIES",
+};
+
+/// The hint printed under a start failure: for a configuration error, where
+/// cord's env vars are listed; otherwise the spine's.
+#[must_use]
+pub const fn startup_hint(error: &StartupError) -> Option<&'static str> {
+    match error {
+        StartupError::Config(_) => Some("see .env.development.example for the server's env vars"),
+        _ => error.hint(),
+    }
+}
 
 /// Options for [`run_app`].
-///
-/// Named fields so swap points land additively. Production passes `None`
-/// for each test-only seam (extra action specs, the pre-migration hook, the
-/// daemon-token credential) and `false` for audit in-flight tracking; only
-/// the `testing_cordd` binary fills them.
 #[allow(
     missing_debug_implementations,
     reason = "holds an `Arc<dyn PasswordHasher>`"
 )]
 pub struct RunAppOptions {
-    /// The password hasher; production wires [`fuz_auth::Argon2idHasher`].
-    pub password_hasher: Arc<dyn fuz_auth::PasswordHasher>,
-    /// Bind address used when `HOST` and `PORT` are unset; production passes
-    /// [`DEFAULT_ADDR`].
-    pub default_addr: SocketAddr,
-    /// Bounds the graceful-shutdown connection drain.
-    pub drain_timeout: Duration,
-    /// Production passes [`fuz_auth::RateLimiterMode::Enforced`]; every spine
-    /// limiter in the process is built through this one mode.
-    pub rate_limiters: fuz_auth::RateLimiterMode,
+    /// The spine's swap points. Production: [`fuz_auth::Argon2idHasher`],
+    /// [`DEFAULT_ADDR`], [`fuz_http::DEFAULT_DRAIN_TIMEOUT`], every limiter
+    /// enforced (cord's invite limiter too, built through the same mode), no
+    /// daemon token, no pre-migration hook, no in-flight audit tracking. Only
+    /// `testing_cordd` fills the seams.
+    pub spine: SpineRunOptions,
     /// Extra action specs folded into the registry after cord's own, the
     /// `testing_cordd` seam for the `_testing_*` actions. Production passes
     /// `None`.
     pub extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
-    /// Fired after the pool exists and before migrations run, the
-    /// `testing_cordd` seam for its env-gated schema reset. Production passes
-    /// `None`.
-    pub pre_migration_hook: Option<PreMigrationHook>,
-    /// The daemon-token credential. Production passes `None`; only
-    /// `testing_cordd` mints one (through `fuz_testing`, which
-    /// `cargo xtask check-release` keeps out of production binaries), so
-    /// `_testing_reset` can authenticate as the keeper.
-    pub daemon_token_state: Option<fuz_auth::SharedDaemonTokenState>,
-    /// Whether the audit emitter counts its detached writes, so
-    /// `testing_cordd`'s `_testing_drain_effects` can await them (twin of the
-    /// TS testing server's `track_inflight: true`). Production passes
-    /// `false`.
-    pub audit_inflight_tracking: bool,
 }
 
-/// The upkeep tasks [`run_app`] runs beside the server, each a pass now and
-/// then one per interval until `shutdown` is cancelled:
+/// The upkeep [`run_app`] runs beside the server, each task a pass now and
+/// then one per interval until shutdown:
 ///
 /// - the spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]): expired
 ///   sessions deleted and the connections they opened closed, expired
 ///   role-grant offers audited once, every
-///   [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`]
+///   [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`];
 /// - the invite expiry sweep ([`crate::invite::sweep`]), every
-///   [`CORD_INVITE_SWEEP_INTERVAL`]
+///   [`CORD_INVITE_SWEEP_INTERVAL`], over the cleanup's pool and emitter.
 ///
-/// `audit` is the app's emitter, so what they audit reaches the admin audit
-/// streams. `socket_revoker` is the app's too
-/// ([`CordApp::socket_revoker`](crate::app::CordApp::socket_revoker)), over
-/// the registries its sockets and audit streams live in: the auth cleanup
-/// closes an expired session's connections through it — a repeat, since a
-/// socket or stream already closes at its own credential's deadline
-/// ([`fuz_auth::ResolvedAuth::credential_deadline`]). Call it once migrations
-/// have run: the startup passes read the schema. A failed pass is logged and retried on the next interval, and
-/// cancelling `shutdown` drops a pass in progress, so the handles resolve at
-/// once.
-///
-/// # Panics
-///
-/// When called outside a tokio runtime.
+/// `auth_cleanup` is the app's
+/// ([`fuz_actions::server::AppBackend::auth_cleanup_options`]): its emitter,
+/// so what both audit reaches the admin audit streams, and its revoker, over
+/// the sockets and the streams.
 #[must_use]
-pub fn spawn_upkeep(
-    pool: &Pool,
-    audit: &Arc<AuditEmitter>,
-    socket_revoker: &Arc<dyn SocketRevoker>,
-    shutdown: &CancellationToken,
-) -> [JoinHandle<()>; 2] {
-    [
-        fuz_auth::spawn_auth_cleanup(
-            fuz_auth::AuthCleanupOptions {
-                pool: pool.clone(),
-                audit: Arc::clone(audit),
-                socket_revoker: Arc::clone(socket_revoker),
-            },
-            fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
-            shutdown.clone(),
-        ),
-        spawn_cord_invite_sweep(
-            pool.clone(),
-            Arc::clone(audit),
-            CORD_INVITE_SWEEP_INTERVAL,
-            shutdown.clone(),
-        ),
-    ]
+pub fn upkeep_options(auth_cleanup: fuz_auth::AuthCleanupOptions) -> UpkeepOptions {
+    let pool = auth_cleanup.pool.clone();
+    let audit = std::sync::Arc::clone(&auth_cleanup.audit);
+    UpkeepOptions {
+        auth_cleanup,
+        extra: vec![Box::new(move |shutdown| {
+            spawn_cord_invite_sweep(pool, audit, CORD_INVITE_SWEEP_INTERVAL, shutdown)
+        })],
+    }
 }
 
 /// Run the server to completion.
 ///
-/// With a database, the upkeep tasks ([`spawn_upkeep`]: the spine's auth
-/// cleanup and the invite expiry sweep) run beside the server, from the
-/// bind until shutdown begins.
-///
-/// With a database, it refuses to serve unless Postgres runs transactions at
-/// READ COMMITTED ([`crate::transaction_isolation`]).
-///
-/// Returns once SIGINT or SIGTERM arrives and connections have drained: every
-/// live WebSocket is closed with 1001 (going away) and every audit stream
-/// ended, then in-flight requests drain, bounded by the drain timeout.
+/// Reads the env, installs the SIGINT/SIGTERM handler, builds the router via
+/// [`build_router`] (which refuses a database not at READ COMMITTED before
+/// migrating), and serves until the signal
+/// ([`fuz_actions::server::serve_until_shutdown`]): every live WebSocket is
+/// closed with 1001 and every audit stream ended, then in-flight requests
+/// drain. With a database, the upkeep ([`upkeep_options`]) runs beside the
+/// server, from the bind until shutdown begins.
 ///
 /// # Errors
 ///
-/// [`StartupError`] for env or config validation failures, database
-/// connectivity or migration failures, a `default_transaction_isolation`
-/// other than `read committed`, listener bind failures, and serve errors.
+/// [`StartupError`] for env or config failures, database connectivity or
+/// migration failures, a `default_transaction_isolation` other than
+/// `read committed`, and bind or serve failures.
 pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     let RunAppOptions {
-        password_hasher,
-        default_addr,
-        drain_timeout,
-        rate_limiters,
+        spine:
+            SpineRunOptions {
+                backend,
+                default_addr,
+                drain_timeout,
+            },
         extra_action_specs_factory,
-        pre_migration_hook,
-        daemon_token_state,
-        audit_inflight_tracking,
     } = options;
 
-    let env = CordEnv::from_process()?;
-    let addr = env.bind_addr.unwrap_or(default_addr);
-
-    // SIGINT/SIGTERM → `CancellationToken`, shared with the other spine
-    // servers.
+    let env = BaseServerEnv::from_process(ENV_OPTIONS)?;
+    let addr = env.bind_addr(default_addr)?;
     let shutdown = fuz_http::shutdown_token();
 
-    let BuiltRouter { router, app } = build_router(
-        &env,
-        password_hasher,
-        rate_limiters,
-        daemon_token_state,
-        audit_inflight_tracking,
-        extra_action_specs_factory,
-        pre_migration_hook,
+    let BuiltRouter { router, app } =
+        build_router(&env, backend, extra_action_specs_factory).await?;
+
+    serve_until_shutdown(
+        router,
+        ServeOptions {
+            server_name: SERVER_NAME,
+            addr,
+            drain_timeout,
+            shutdown,
+            socket_revoker: app.as_ref().map(|app| app.backend.socket_revoker()),
+            upkeep: app
+                .as_ref()
+                .map(|app| upkeep_options(app.backend.auth_cleanup_options())),
+        },
     )
-    .await?;
+    .await
+}
 
-    // The membership serialization relies on READ COMMITTED; refuse before
-    // the listener binds, so a misconfigured database never serves.
-    if let Some(app) = &app {
-        ensure_read_committed(&app.pool).await?;
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "tests panic on assertion failure by design"
+)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn read(pairs: &[(&str, &str)]) -> Result<BaseServerEnv, fuz_http::ServerEnvError> {
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        BaseServerEnv::from_vars(&|k| map.get(k).cloned(), ENV_OPTIONS)
     }
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|source| StartupError::Bind { addr, source })?;
+    const ORIGINS: (&str, &str) = ("FUZ_ALLOWED_ORIGINS", "http://localhost");
 
-    // The revoker reaches both live transports (the `/api/ws` registry and the
-    // audit-stream SSE registry), so shutdown closes them through it. Boot-only
-    // mode (no database) mounts neither, so it has nothing to close.
-    let socket_revoker = app.as_ref().map(crate::app::CordApp::socket_revoker);
-
-    // Migrations have run, so each task's startup pass can start now.
-    let upkeep = app.map(|app| {
-        spawn_upkeep(
-            &app.pool,
-            &app.audit_emitter,
-            &app.socket_revoker(),
-            &shutdown,
-        )
-    });
-
-    // Unconditional human-visible sentinel, whatever the log filter.
-    eprintln!("cordd listening on http://{addr}");
-
-    // `serve_with_shutdown` supplies `ConnectInfo<SocketAddr>` per connection;
-    // on the signal it gives every live WebSocket a 1001 close and ends every
-    // audit stream, then bounds the drain.
-    let closer: &dyn fuz_http::ShutdownCloser = match &socket_revoker {
-        Some(revoker) => revoker.as_ref(),
-        None => &fuz_http::NoopShutdownCloser,
-    };
-    let served =
-        fuz_http::serve_with_shutdown(listener, router, shutdown.clone(), closer, drain_timeout)
-            .await;
-
-    // `serve_with_shutdown` returns only once the token has fired, so the
-    // upkeep tasks are already stopping.
-    for task in upkeep.into_iter().flatten() {
-        if let Err(e) = task.await {
-            tracing::warn!(error = %e, "an upkeep task failed");
-        }
+    /// Unset, cord trusts the loopback reverse-proxy hop (`127.0.0.1`, `::1`)
+    /// — the hop its deploy sets explicitly — so `X-Forwarded-For` from the
+    /// proxy names the client; `,` opts out.
+    #[test]
+    fn trusted_proxies_default_to_loopback_under_cords_var() {
+        assert_eq!(read(&[ORIGINS]).expect("reads").trusted_proxies.len(), 2);
+        assert!(
+            read(&[ORIGINS, ("CORD_TRUSTED_PROXIES", ",")])
+                .expect("reads")
+                .trusted_proxies
+                .is_empty()
+        );
+        let error = read(&[ORIGINS, ("CORD_TRUSTED_PROXIES", "not-an-ip")]).expect_err("malformed");
+        assert!(error.0.starts_with("CORD_TRUSTED_PROXIES: "), "{error}");
     }
-    served.map_err(StartupError::Serve)?;
 
-    eprintln!("cordd shutdown complete");
-    Ok(())
+    /// A blank `PORT` is refused rather than defaulted: a deploy template that
+    /// rendered it empty is a bug.
+    #[test]
+    fn a_blank_port_is_refused() {
+        let error = StartupError::from(read(&[ORIGINS, ("PORT", " ")]).expect_err("blank"));
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("PORT: "), "{error}");
+    }
+
+    /// A config failure is exit `2`, with cord's env-example hint.
+    #[test]
+    fn a_config_error_exits_two_with_the_env_hint() {
+        let error = StartupError::from(read(&[]).expect_err("no allowlist"));
+        assert_eq!(error.exit_code(), 2);
+        assert!(
+            startup_hint(&error).is_some_and(|h| h.contains(".env.development.example")),
+            "{error}"
+        );
+        let bind = StartupError::Bind {
+            addr: DEFAULT_ADDR,
+            source: std::io::Error::other("in use"),
+        };
+        assert_eq!(startup_hint(&bind), bind.hint());
+    }
+
+    #[test]
+    fn the_bind_defaults_to_loopback_4061() {
+        assert_eq!(
+            read(&[ORIGINS])
+                .expect("reads")
+                .bind_addr(DEFAULT_ADDR)
+                .expect("binds"),
+            DEFAULT_ADDR
+        );
+    }
 }

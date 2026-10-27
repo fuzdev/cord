@@ -65,16 +65,17 @@ Skill(fuz-stack).
 
 `cord_server`'s modules (each module doc holds the detail):
 
-- `main.rs` (`cordd`, `cordd db-status`), `runtime.rs` (`run_app`,
-  `RunAppOptions`, signals, the shutdown close — a 1001 to every live
-  WebSocket and the end of every audit stream, through
-  `CordApp::socket_revoker` — and drain, and `spawn_upkeep`: the spine's auth
-  cleanup and the invite expiry sweep, run beside the server and joined on
-  shutdown; the auth cleanup closes the sockets and audit streams of each
-  expired session it deletes, through `CordApp::socket_revoker`),
-  `env.rs` (`CordEnv`),
-  `app.rs` (`CordApp`, the composition root), `error.rs` (`StartupError`),
-  `transaction_isolation.rs` (the READ COMMITTED boot check)
+- `main.rs` (`cordd`, `cordd db-status`; the strict command line — anything
+  else exits `2`), `runtime.rs` (`run_app`, `RunAppOptions`, the env —
+  the spine's `BaseServerEnv` with `CORD_TRUSTED_PROXIES` — and
+  `upkeep_options`: the spine's auth cleanup and the invite expiry sweep, run
+  beside the server and joined on shutdown; the auth cleanup closes the
+  sockets and audit streams of each expired session it deletes), over the
+  spine's server toolkit (`fuz_actions::server`: signals, the READ COMMITTED
+  boot check before migrations, the shutdown close — a 1001 to every live
+  WebSocket and the end of every audit stream — and drain), `app.rs`
+  (`CordApp`, the composition root: the spine's `AppBackend` beside the
+  invite limiter)
 - `router.rs` — the routes, the `fuz_http::compose_stack` groups (one
   `api` group and the fallback, both capped at 1 MiB and origin-checked, so
   every path refuses a foreign `Origin` and answers a declared over-cap body
@@ -323,10 +324,11 @@ refuses the boot, naming each); with a database, `SECRET_FUZ_COOKIE_KEYS` is req
 too, migrations run before serving, and `cordd` refuses to serve unless
 Postgres's `default_transaction_isolation` is `read committed`. The
 README's table lists every variable; spine-wide names stay unprefixed and
-cord-only ones take `CORD_`. Behind a reverse proxy, `CORD_TRUSTED_PROXIES`
-must name it (`127.0.0.1` for a local nginx): without it every caller
-shares the proxy's IP, so one client exhausts the per-IP budgets, invite
-redemption's included, for everyone.
+cord-only ones take `CORD_`. `CORD_TRUSTED_PROXIES`
+names the reverse proxy whose `X-Forwarded-For` is believed; unset, it is the
+loopback hop (`127.0.0.1`, `::1`, a local nginx), and `,` trusts none. A proxy
+it doesn't name makes every caller share the proxy's IP, so one client
+exhausts the per-IP budgets, invite redemption's included, for everyone.
 Exit codes: `0` success, `2` the caller must fix something, `1` everything
 else; `check-release` keeps fuz_audit's `0` clean, `65` a policy
 violation, and `69`/`70` a tooling failure. Logs go to stdout in color
@@ -410,8 +412,9 @@ of their database: `schema_ready.rs` (the fixture's drift guard),
 `cord_invites.rs`, and `cord_newcomers.rs`, sharing `tests/common/` (the
 reset-and-migrate cycle, the actor seeding, and the `columns.rs` assertion
 come from the spine's `fuz_testing`); each module doc lists what it covers.
-`transaction_isolation.rs` resets no schema: it sets and resets the
-database's own `default_transaction_isolation`.
+`transaction_isolation.rs` resets no schema: it boots `cordd`'s router on
+its own scratch database set to `repeatable read` and asserts the refusal
+comes before any migration.
 
 ```bash
 createdb cord_schema_ready_test

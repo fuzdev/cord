@@ -21,7 +21,8 @@
 //! admits them, as does the expiry sweep's pass
 //! (`cord_server::invite::sweep`) for links expired past the grace,
 //! skipping a link another transaction holds. Last, the upkeep tasks the
-//! server runs (`cord_server::runtime::spawn_upkeep`): their startup passes
+//! server runs (`cord_server::runtime::upkeep_options`, spawned by the spine's
+//! `fuz_actions::server::spawn_upkeep`): their startup passes
 //! run that sweep and the spine's auth cleanup, which closes the expired
 //! session it deletes through the revoker they're handed, and they end on
 //! shutdown.
@@ -55,7 +56,8 @@ use cord_server::invite::redemption_queries::{
 use cord_server::invite::sweep::{
     CORD_INVITE_EXPIRE_AUDIT_EVENT, CordInviteExpireReleased, cord_invite_sweep_pass,
 };
-use cord_server::runtime::spawn_upkeep;
+use cord_server::runtime::upkeep_options;
+use fuz_actions::server::spawn_upkeep;
 use fuz_auth::invite_queries::{
     query_create_invite, query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
 };
@@ -1132,7 +1134,15 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     let recording = Arc::new(RecordingRevoker::default());
     let socket_revoker: Arc<dyn SocketRevoker> = Arc::<RecordingRevoker>::clone(&recording);
     let shutdown = fuz_http::CancellationToken::new();
-    let tasks = spawn_upkeep(pool, &audit, &socket_revoker, &shutdown);
+    let tasks = spawn_upkeep(
+        upkeep_options(fuz_auth::AuthCleanupOptions {
+            pool: pool.clone(),
+            audit: Arc::clone(&audit),
+            socket_revoker,
+        }),
+        &shutdown,
+    );
+    assert_eq!(tasks.len(), 2, "the auth cleanup and the invite sweep");
 
     // each task's startup pass audits what it swept, in either order
     let (mut invite_expired, mut offer_expired) = (None, None);

@@ -15,8 +15,12 @@
 //! - `/api/admin/audit/stream` — the audit log as server-sent events, for
 //!   instance admins over a cookie session
 //!
-//! [`app::CordApp`] holds the long-lived handles; [`router`] carves narrow
-//! route states out of it; [`runtime::run_app`] owns the process lifecycle.
+//! [`app::CordApp`] holds the long-lived handles — the spine's
+//! `fuz_actions::server::AppBackend` beside cord's invite limiter; [`router`]
+//! carves narrow route states out of it; [`runtime::run_app`] owns the process
+//! lifecycle, over the spine's server toolkit (`fuz_actions::server`, whose
+//! boot refuses a database not at READ COMMITTED, which the membership
+//! serialization relies on).
 //!
 //! Cords are cells: [`cord_queries`] reads and writes them over the spine's
 //! `fuz_cell` tables, [`roles`] declares the cord-scoped membership roles,
@@ -24,9 +28,6 @@
 //! the `cord_*` verbs. Membership changes live in [`cord_member_queries`]
 //! and [`cord_member_actions`]; invite links, in [`invite`], over cord's own
 //! `cord_invite` and `cord_invite_redemption` tables ([`migrations`]).
-//! [`transaction_isolation`] is the boot check
-//! that Postgres runs transactions at READ COMMITTED, which the membership
-//! serialization relies on.
 
 pub mod app;
 pub mod cord_actions;
@@ -34,11 +35,8 @@ pub mod cord_authz;
 pub mod cord_member_actions;
 pub mod cord_member_queries;
 pub mod cord_queries;
-pub mod env;
-pub mod error;
 pub mod invite;
 pub mod migrations;
 pub mod roles;
 pub mod router;
 pub mod runtime;
-pub mod transaction_isolation;

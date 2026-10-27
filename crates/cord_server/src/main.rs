@@ -1,70 +1,62 @@
 //! `cordd`, the cord server binary.
 //!
-//! - `cordd` runs the server (see [`cord_server::runtime::run_app`]).
-//! - `cordd db-status` prints a read-only migration report (connectivity,
-//!   table counts, applied and pending migrations) via the spine's
-//!   `fuz_db::status::run_db_status_cli`. It never mutates.
+//! The command line is strict: no arguments (or `start`) runs the server (see
+//! [`cord_server::runtime::run_app`]), configured by the process environment;
+//! `db-status` prints a read-only migration report (connectivity, table
+//! counts, applied and pending migrations) via the spine's
+//! `fuz_db::status::run_db_status_cli`, never mutating; `--help` / `-h`
+//! prints usage. Anything else exits `2` with usage on stderr.
 //!
-//! Exit codes: `0` success, `2` the caller must fix something (arguments,
-//! env), `1` everything else.
+//! A failed start prints its error chain and a hint, and exits `2` when the
+//! caller must fix something local (env, the database's isolation setting),
+//! `1` otherwise.
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use fuz_actions::server::{
+    ServerInvocation, SpineRunOptions, StartCommand, parse_server_invocation, server_usage,
+};
 use fuz_auth::{Argon2idHasher, PasswordHasher};
 
 use cord_server::router::cord_migration_namespaces;
-use cord_server::runtime::{DEFAULT_ADDR, DEFAULT_DRAIN_TIMEOUT, RunAppOptions, run_app};
-
-const USAGE: &str = "usage: cordd [db-status]";
+use cord_server::runtime::{DEFAULT_ADDR, RunAppOptions, run_app, startup_hint};
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let invocation = match parse_server_invocation(&args, StartCommand::Implicit) {
+        Ok(ServerInvocation::Help) => {
+            print!("{}", server_usage("cordd", StartCommand::Implicit));
+            return ExitCode::SUCCESS;
+        }
+        Ok(invocation) => invocation,
+        Err(message) => {
+            eprint!(
+                "error: {message}\n\n{}",
+                server_usage("cordd", StartCommand::Implicit)
+            );
+            return ExitCode::from(fuz_sys::cli::EXIT_USAGE);
+        }
+    };
+
     // Non-blocking stdout logging, so a stalled stdout consumer can't starve
     // the runtime; the guard must live for the whole process.
     let _log_guard = fuz_sys::logging::init_non_blocking_stdout("info,cord_server=info");
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    match args.as_slice() {
-        [] => {}
-        ["db-status"] => {
-            return fuz_db::status::run_db_status_cli(&cord_migration_namespaces()).await;
-        }
-        ["-h" | "--help"] => {
-            println!("{USAGE}");
-            return ExitCode::SUCCESS;
-        }
-        _ => {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
+    if invocation == ServerInvocation::DbStatus {
+        return fuz_db::status::run_db_status_cli(&cord_migration_namespaces()).await;
     }
 
     let password_hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
 
-    let Err(e) = run_app(RunAppOptions {
-        password_hasher,
-        default_addr: DEFAULT_ADDR,
-        drain_timeout: DEFAULT_DRAIN_TIMEOUT,
-        rate_limiters: fuz_auth::RateLimiterMode::Enforced,
+    match run_app(RunAppOptions {
+        spine: SpineRunOptions::production(password_hasher, DEFAULT_ADDR),
         extra_action_specs_factory: None,
-        pre_migration_hook: None,
-        daemon_token_state: None,
-        audit_inflight_tracking: false,
     })
     .await
-    else {
-        return ExitCode::SUCCESS;
-    };
-    eprintln!("error: {e}");
-    let mut source = std::error::Error::source(&e);
-    while let Some(cause) = source {
-        eprintln!("  caused by: {cause}");
-        source = cause.source();
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fuz_sys::cli::report_failure(&e, startup_hint(&e), e.exit_code()),
     }
-    if let Some(hint) = e.hint() {
-        eprintln!("hint: {hint}");
-    }
-    ExitCode::from(e.exit_code())
 }
