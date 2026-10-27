@@ -276,6 +276,10 @@ export type CordMemberJson = z.infer<typeof CordMemberJson>;
 /**
  * An invite link's token, as it appears in the link.
  *
+ * `'secret'`: the token is a credential, so `cord_invite_preview` (a read)
+ * carries it in a `POST` body, not a `GET` URL that proxies and server logs
+ * record.
+ *
  * The Rust server refuses a token out of these bounds at params validation
  * too, counting UTF-16 code units as this does, with the same reasonless
  * `invalid params`; a token in bounds that it never minted gets
@@ -285,7 +289,7 @@ export const CordInviteToken = z
 	.string()
 	.min(1)
 	.max(CORD_INVITE_TOKEN_LENGTH_MAX)
-	.meta({ description: "The invite link's token." });
+	.meta({ description: "The invite link's token.", sensitivity: 'secret' });
 export type CordInviteToken = z.infer<typeof CordInviteToken>;
 
 export const CordCreateInput = z.strictObject({

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { assert, describe, test } from 'vitest';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
+import { schema_has_sensitive_field } from '@fuzdev/fuz_app/schema_meta.ts';
 
 import {
 	CORD_NAME_FORBIDDEN_CHAR_RANGES,
@@ -278,6 +279,11 @@ describe('CordInviteToken', () => {
 		assert.ok(CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX)).success);
 		assert.ok(!CordInviteToken.safeParse('').success);
 		assert.ok(!CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)).success);
+	});
+
+	test('is secret, so cord_invite_preview carries it in a POST body, not a GET URL', () => {
+		assert.strictEqual(CordInviteToken.meta()?.sensitivity, 'secret');
+		assert.isTrue(schema_has_sensitive_field(cord_invite_preview_action_spec.input));
 	});
 });
 
