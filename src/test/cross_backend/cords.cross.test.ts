@@ -25,6 +25,8 @@ import {
 	CordAdminListOutput,
 	CordCreateOutput,
 	CordGetOutput,
+	CordInviteAcceptOutput,
+	CordInviteCreateOutput,
 	CordListOutput,
 	CordUpdateOutput,
 	ERROR_CORD_NAME_INVALID,
@@ -312,6 +314,56 @@ describe('cord_update', () => {
 			fixture.create_session_headers()
 		);
 		assert.deepEqual(expect_output(res, CordUpdateOutput).cord, { ...cord, name: 'the stoop' });
+	});
+
+	test('an invalid name is refused before the gates, so it is no existence oracle', async () => {
+		const fixture = await setup_test();
+		const cord = await create_cord(fixture, 'the porch');
+		const member = await fixture.create_account({ username: 'member' });
+		const { token } = expect_output(
+			await cross_rpc_call(
+				fixture.transport,
+				rpc_path,
+				'cord_invite_create',
+				{ cord_id: cord.id },
+				fixture.create_session_headers()
+			),
+			CordInviteCreateOutput
+		);
+		expect_output(
+			await call_as(fixture, member, 'cord_invite_accept', { token }),
+			CordInviteAcceptOutput
+		);
+
+		// a member who may not rename it, the keeper on no cord, and the keeper
+		// on the real cord all get the same name refusal
+		const replies = [
+			await call_as(fixture, member, 'cord_update', { cord_id: cord.id, name: '' }),
+			await cross_rpc_call(
+				fixture.fresh_transport(),
+				rpc_path,
+				'cord_update',
+				{ cord_id: crypto.randomUUID(), name: '' },
+				fixture.create_session_headers()
+			),
+			await cross_rpc_call(
+				fixture.fresh_transport(),
+				rpc_path,
+				'cord_update',
+				{ cord_id: cord.id, name: '' },
+				fixture.create_session_headers()
+			)
+		];
+		for (const res of replies) {
+			assert.ok(!res.ok);
+			assert.strictEqual(res.error?.code, JSONRPC_ERROR_CODES.invalid_params);
+			assert.strictEqual(error_reason(res), ERROR_CORD_NAME_INVALID);
+		}
+		const [first, ...rest] = replies;
+		for (const res of rest) {
+			assert.strictEqual(res.status, first!.status);
+			assert.deepEqual(res.error, first!.error);
+		}
 	});
 });
 

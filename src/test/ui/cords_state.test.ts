@@ -1,9 +1,9 @@
 import { assert, describe, test } from 'vitest';
 
-import type { CordJson } from '#lib/cord_action_specs.ts';
+import { ERROR_CORD_NAME_INVALID, type CordJson } from '#lib/cord_action_specs.ts';
 import { CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
 
-import { stub_api } from './stub_api.ts';
+import { rpc_error, stub_api } from './stub_api.ts';
 
 const cord = (name: string, role: CordJson['role'] = 'cord_owner'): CordJson =>
 	({
@@ -75,6 +75,14 @@ describe('CordsState', () => {
 		});
 		assert.isUndefined(await state.create_cord('the porch'));
 		assert.strictEqual(state.create.error, 'forbidden');
+	});
+
+	test('a create refused for its name shows the name rules', async () => {
+		const state = new CordsState({
+			api: stub_api({ cord_create: () => Promise.reject(rpc_error(ERROR_CORD_NAME_INVALID)) })
+		});
+		assert.isUndefined(await state.create_cord('the porch'));
+		assert.match(state.create.error!, /A cord name is 1 to/);
 	});
 
 	test('put_cord replaces the cord with its id in place and leaves out one the list lacks', async () => {
@@ -187,6 +195,18 @@ describe('CordState', () => {
 		assert.strictEqual(state.cord?.name, 'the porch');
 		assert.isTrue(await state.rename_cord('the stoop'));
 		assert.strictEqual(state.cord?.name, 'the stoop');
+	});
+
+	test('a rename refused for its name shows the name rules', async () => {
+		const state = new CordState({
+			api: stub_api({
+				cord_get: () => Promise.resolve({ cord: cord('the porch') }),
+				cord_update: () => Promise.reject(rpc_error(ERROR_CORD_NAME_INVALID))
+			})
+		});
+		await state.fetch(cord('x').id);
+		assert.isFalse(await state.rename_cord('the stoop'));
+		assert.match(state.rename.error!, /A cord name is 1 to/);
 	});
 
 	test('a failed fetch leaves no cord', async () => {

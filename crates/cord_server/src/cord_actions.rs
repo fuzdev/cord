@@ -32,11 +32,11 @@ use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
 use fuz_auth::{
     AuditEventType, AuditLogInput, AuditRouting, AuthSpec, CredentialGate, ROLE_ADMIN,
-    RequestActorContext, ResolvedAuthContext,
+    RequestActorContext, ResolvedAuthContext, parse_uuid_param, reject_unknown_keys,
 };
 use fuz_http::{
-    JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_params, not_found,
-    parse_strict_params,
+    JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_input_params,
+    not_found, parse_strict_params,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -56,8 +56,9 @@ pub const ERROR_CORD_NOT_FOUND: &str = "cord_not_found";
 pub const ERROR_CORD_CREATE_FORBIDDEN: &str = "cord_create_forbidden";
 /// Error reason: only the cord's owner or admins may change it.
 pub const ERROR_CORD_UPDATE_FORBIDDEN: &str = "cord_update_forbidden";
-/// Error reason: the cord name is empty, too long, or has a forbidden or
-/// misplaced character.
+/// Error reason: the cord name is missing, not a string, empty, too long, or
+/// has a forbidden or misplaced character — every refusal of `name` on
+/// `cord_create` and `cord_update`.
 pub const ERROR_CORD_NAME_INVALID: &str = "cord_name_invalid";
 
 /// The instance-admin role gate the admin-only specs declare. The dispatcher
@@ -66,17 +67,13 @@ const INSTANCE_ADMIN_ROLES: &[&str] = &[ROLE_ADMIN];
 
 // -- Wire inputs --------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The input of `cord_create`. Decoded by hand
+/// ([`parse_cord_create_params`]), so every refusal of `name` can carry its
+/// reason.
+#[derive(Debug)]
 struct CordCreateInput {
+    /// Validated and trimmed ([`validate_cord_name`]).
     name: String,
-    // read by the dispatcher's authorization phase, not the handler
-    #[serde(
-        default,
-        rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
-    )]
-    _acting: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,18 +100,14 @@ struct CordGetInput {
     _acting: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The input of `cord_update`. Decoded by hand
+/// ([`parse_cord_update_params`]), so every refusal of `name` can carry its
+/// reason.
+#[derive(Debug)]
 struct CordUpdateInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
     cord_id: Uuid,
+    /// Validated and trimmed ([`validate_cord_name`]).
     name: String,
-    #[serde(
-        default,
-        rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
-    )]
-    _acting: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,8 +202,8 @@ pub(crate) fn cord_not_found() -> JsonrpcError {
     not_found("cord", Some(ERROR_CORD_NOT_FOUND))
 }
 
-fn name_invalid(e: impl std::fmt::Display) -> JsonrpcError {
-    invalid_params(&e.to_string(), Some(ERROR_CORD_NAME_INVALID))
+fn name_invalid(detail: impl std::fmt::Display) -> JsonrpcError {
+    invalid_input_params(&detail.to_string(), Some(ERROR_CORD_NAME_INVALID))
 }
 
 fn update_forbidden() -> JsonrpcError {
@@ -308,6 +301,47 @@ pub(crate) async fn audit_cord_grant_event<C: GenericClient + ?Sized>(
     .await
 }
 
+// -- Params validation --------------------------------------------------------
+//
+// `cord_create` and `cord_update` decode by hand, checking what the declared
+// TS spec's schema refuses before the handler runs, in its issue order: an
+// unknown key, then each field as the twin lists it. `acting` is declared on
+// both, but the dispatcher's authorization phase reads and checks it, not
+// these parsers.
+
+/// The keys of `CordCreateInput`'s TS twin.
+const CORD_CREATE_KEYS: &[&str] = &["name", "acting"];
+
+/// The keys of `CordUpdateInput`'s TS twin.
+const CORD_UPDATE_KEYS: &[&str] = &["cord_id", "name", "acting"];
+
+fn parse_cord_create_params(params: &Value) -> Result<CordCreateInput, JsonrpcError> {
+    reject_unknown_keys(params, CORD_CREATE_KEYS)?;
+    let name = parse_cord_name_param(params)?;
+    Ok(CordCreateInput { name })
+}
+
+/// An unknown key or a bad `cord_id` is refused first, with no reason, then
+/// the name.
+fn parse_cord_update_params(params: &Value) -> Result<CordUpdateInput, JsonrpcError> {
+    reject_unknown_keys(params, CORD_UPDATE_KEYS)?;
+    let cord_id = parse_uuid_param(params, "cord_id")?;
+    let name = parse_cord_name_param(params)?;
+    Ok(CordUpdateInput { cord_id, name })
+}
+
+/// Read `name` as the twin's `CordName`, returning it trimmed. Every refusal
+/// carries [`ERROR_CORD_NAME_INVALID`], the reason the twin's field declares:
+/// missing, `null`, not a string, or breaking a rule of
+/// [`validate_cord_name`].
+fn parse_cord_name_param(params: &Value) -> Result<String, JsonrpcError> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| name_invalid("name must be a string"))?;
+    validate_cord_name(name).map_err(name_invalid)
+}
+
 // -- Handlers -----------------------------------------------------------------
 
 async fn handle_cord_create<C: GenericClient + ?Sized>(
@@ -322,11 +356,10 @@ async fn handle_cord_create<C: GenericClient + ?Sized>(
             Some(ERROR_CORD_CREATE_FORBIDDEN),
         ));
     }
-    let name = validate_cord_name(&input.name).map_err(name_invalid)?;
     let CordCreated {
         cord,
         owner_role_grant_id,
-    } = query_cord_create(client, &name, auth.actor.id)
+    } = query_cord_create(client, &input.name, auth.actor.id)
         .await
         .map_err(|e| internal_error_with_source("cord_create", &e))?;
     // the cell has no `created_by`, so the audit row is the creator's record
@@ -392,8 +425,7 @@ async fn handle_cord_update<C: GenericClient + ?Sized>(
     let role =
         require_cord_manager_fresh(client, "cord_update", auth, input.cord_id, update_forbidden)
             .await?;
-    let name = validate_cord_name(&input.name).map_err(name_invalid)?;
-    let cord = query_cord_rename(client, input.cord_id, &name, auth.actor.id)
+    let cord = query_cord_rename(client, input.cord_id, &input.name, auth.actor.id)
         .await
         .map_err(|e| internal_error_with_source("cord_update", &e))?
         .ok_or_else(cord_not_found)?;
@@ -454,7 +486,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
-                    let input: CordCreateInput = parse_strict_params(params)?;
+                    let input = parse_cord_create_params(&params)?;
                     dispatch_db_ctx!(ctx, handle_cord_create(auth, &input))
                 })
             }),
@@ -487,7 +519,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
-                    let input: CordUpdateInput = parse_strict_params(params)?;
+                    let input = parse_cord_update_params(&params)?;
                     dispatch_db_ctx!(ctx, handle_cord_update(auth, &input))
                 })
             }),
@@ -540,9 +572,6 @@ mod tests {
 
     #[test]
     fn inputs_are_strict() {
-        let parsed: Result<CordCreateInput, _> =
-            parse_strict_params(json!({ "name": "x", "extra": 1 }));
-        assert!(parsed.is_err(), "unknown keys are refused");
         let parsed: Result<CordGetInput, _> = parse_strict_params(json!({ "cord_id": null }));
         assert!(parsed.is_err(), "null is refused");
         let parsed: CordGetInput = parse_strict_params(json!({
@@ -555,6 +584,101 @@ mod tests {
             Uuid::from_u128(0x1111_1111_1111_4111_8111_1111_1111_1111)
         );
         let _: CordListInput = parse_strict_params(Value::Null).unwrap();
+    }
+
+    fn assert_name_invalid(result: Result<impl std::fmt::Debug, JsonrpcError>, case: &str) {
+        use fuz_http::{INVALID_PARAMS_MESSAGE, JsonrpcErrorCode};
+        let err = result.expect_err(case);
+        assert_eq!(err.code, JsonrpcErrorCode::InvalidParams, "{case}");
+        assert_eq!(err.message, INVALID_PARAMS_MESSAGE, "{case}");
+        assert_eq!(
+            err.data,
+            Some(json!({ "reason": ERROR_CORD_NAME_INVALID })),
+            "{case}"
+        );
+    }
+
+    fn assert_reasonless_refusal(result: Result<impl std::fmt::Debug, JsonrpcError>, case: &str) {
+        use fuz_http::{INVALID_PARAMS_MESSAGE, JsonrpcErrorCode};
+        let err = result.expect_err(case);
+        assert_eq!(err.code, JsonrpcErrorCode::InvalidParams, "{case}");
+        assert_eq!(err.message, INVALID_PARAMS_MESSAGE, "{case}");
+        assert_eq!(err.data, None, "{case}: no reason");
+    }
+
+    /// Every refusal of `name` on both verbs that take one: missing, `null`,
+    /// a non-string, and each rule of `validate_cord_name`.
+    #[test]
+    fn every_name_refusal_carries_its_reason() {
+        let too_long = "x".repeat(crate::cord_queries::CORD_NAME_LENGTH_MAX + 1);
+        let cases = [
+            ("missing", None),
+            ("null", Some(Value::Null)),
+            ("a number", Some(json!(42))),
+            ("an object", Some(json!({}))),
+            ("empty", Some(json!(""))),
+            ("blank", Some(json!("   "))),
+            ("a line break", Some(json!("two\nlines"))),
+            ("an invisible character", Some(json!("\u{200B}"))),
+            ("a doubled joiner", Some(json!("a\u{200D}\u{200D}b"))),
+            ("too long", Some(json!(too_long))),
+        ];
+        let cord_id = "11111111-1111-4111-8111-111111111111";
+        for (case, name) in cases {
+            let mut create = json!({});
+            let mut update = json!({ "cord_id": cord_id });
+            if let Some(name) = name {
+                create["name"] = name.clone();
+                update["name"] = name;
+            }
+            assert_name_invalid(parse_cord_create_params(&create), case);
+            assert_name_invalid(parse_cord_update_params(&update), case);
+        }
+        // no params at all is the empty object: the name is missing
+        assert_name_invalid(parse_cord_create_params(&Value::Null), "null params");
+    }
+
+    #[test]
+    fn a_valid_name_parses_trimmed() {
+        let parsed = parse_cord_create_params(&json!({
+            "name": "  the porch  ",
+            "acting": "22222222-2222-4222-9222-222222222222",
+        }))
+        .expect("parses");
+        assert_eq!(parsed.name, "the porch");
+        let parsed = parse_cord_update_params(&json!({
+            "cord_id": "11111111-1111-4111-8111-111111111111",
+            "name": "the stoop ",
+        }))
+        .expect("parses");
+        assert_eq!(
+            (parsed.cord_id, parsed.name.as_str()),
+            (
+                Uuid::from_u128(0x1111_1111_1111_4111_8111_1111_1111_1111),
+                "the stoop"
+            )
+        );
+    }
+
+    /// An unknown key on the input, or a bad `cord_id` (the twin's first
+    /// field), is refused with no reason, whatever the name.
+    #[test]
+    fn unknown_keys_and_bad_cord_ids_carry_no_reason() {
+        for params in [
+            json!({ "name": "x", "extra": 1 }),
+            json!({ "name": 42, "extra": 1 }),
+        ] {
+            assert_reasonless_refusal(parse_cord_create_params(&params), &params.to_string());
+        }
+        for params in [
+            json!({ "cord_id": "11111111-1111-4111-8111-111111111111", "name": "x", "extra": 1 }),
+            json!({ "name": "x" }),
+            json!({ "cord_id": null, "name": "x" }),
+            json!({ "cord_id": "not-a-uuid", "name": "x" }),
+            json!({ "cord_id": "not-a-uuid", "name": "" }),
+        ] {
+            assert_reasonless_refusal(parse_cord_update_params(&params), &params.to_string());
+        }
     }
 
     #[test]

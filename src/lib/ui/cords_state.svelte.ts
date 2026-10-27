@@ -7,10 +7,10 @@
  * through `cords_state_context`, which the rail and the home page share;
  * pages construct the others with the `api` from `cord_rpc_context`
  * (`CordState` through a cord's `CordPageState`).
- * Unlike the member, invite, and join states, these slots keep
- * `AsyncSlot`'s default error message rather than mapping it through
- * `cord_errors.ts`; `CordPageState` reads a load's refusal reason with
- * `rpc_error_reason`.
+ * The create and rename slots map a refusal through `cord_errors.ts`, so a
+ * name the server refuses shows the name rules; the read slots keep
+ * `AsyncSlot`'s default error message, and `CordPageState` reads a load's
+ * refusal reason with `rpc_error_reason`.
  *
  * @module
  */
@@ -28,6 +28,7 @@ import type {
 	CordJson,
 	CordUpdateOutput
 } from '../cord_action_specs.ts';
+import { to_cord_error_message } from './cord_errors.ts';
 
 /** Options shared by the cord state classes. */
 export interface CordsStateOptions {
@@ -40,7 +41,9 @@ export class CordsState {
 
 	/** Keeps its error through a retry, so a retry control stays mounted. */
 	readonly list: AsyncSlot = new AsyncSlot({ preserve_error_on_retry: true });
-	readonly create: AsyncSlot<CordCreateOutput> = new AsyncSlot();
+	readonly create: AsyncSlot<CordCreateOutput> = new AsyncSlot({
+		map_error: to_cord_error_message
+	});
 
 	/** The caller's cords, in the order they joined them. */
 	cords: Array<CordJson> = $state.raw([]);
@@ -120,7 +123,9 @@ export class CordState {
 	readonly #api: ThrowingApi<FrontendActionsApi>;
 
 	readonly load: AsyncSlot = new AsyncSlot();
-	readonly rename: AsyncSlot<CordUpdateOutput> = new AsyncSlot();
+	readonly rename: AsyncSlot<CordUpdateOutput> = new AsyncSlot({
+		map_error: to_cord_error_message
+	});
 
 	/** The cord the last fetch asked for, or `null` before the first. */
 	cord_id: Uuid | null = $state.raw(null);

@@ -14,6 +14,7 @@ import { USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN } from '@fuzdev/fuz_app/primit
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import {
+	CORD_NAME_LENGTH_MAX,
 	ERROR_CORD_INVITE_EXHAUSTED,
 	ERROR_CORD_INVITE_EXPIRED,
 	ERROR_CORD_INVITE_FORBIDDEN,
@@ -30,6 +31,7 @@ import {
 	ERROR_CORD_MEMBER_FORBIDDEN,
 	ERROR_CORD_MEMBER_NOT_FOUND,
 	ERROR_CORD_MEMBER_REMOVE_SELF,
+	ERROR_CORD_NAME_INVALID,
 	ERROR_CORD_NOT_FOUND,
 	ERROR_CORD_UPDATE_FORBIDDEN
 } from '../cord_action_specs.ts';
@@ -51,10 +53,14 @@ export const CORD_RATE_LIMITED_MESSAGE =
 /** The instance's username rules, in words, for both the form's own check and the server's refusal. */
 export const CORD_USERNAME_RULE = `A username is ${USERNAME_LENGTH_MIN} to ${USERNAME_LENGTH_MAX} characters: letters, numbers, dashes, and underscores, starting with a letter and ending with a letter or number.`;
 
+/** The cord name rules, in words, for the server's refusal of a name. */
+export const CORD_NAME_RULE = `A cord name is 1 to ${CORD_NAME_LENGTH_MAX} characters, with no invisible, control, or line-breaking characters, and no joining character at an edge, by a space, or doubled.`;
+
 /** The words for the cord refusals a person can run into, by reason. */
 export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_NOT_FOUND]: "There's no cord here, or you're not in it.",
 	[ERROR_CORD_UPDATE_FORBIDDEN]: "Only the cord's owners and admins can change it.",
+	[ERROR_CORD_NAME_INVALID]: CORD_NAME_RULE,
 	[ERROR_CORD_LAST_OWNER]: 'A cord always keeps an owner. Make someone else an owner first.',
 	[ERROR_CORD_MEMBER_FORBIDDEN]: "Your role here can't make that change.",
 	[ERROR_CORD_MEMBER_NOT_FOUND]: "They're not in this cord anymore.",

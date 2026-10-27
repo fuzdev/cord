@@ -29,7 +29,11 @@ export const ERROR_CORD_NOT_FOUND = 'cord_not_found';
 export const ERROR_CORD_CREATE_FORBIDDEN = 'cord_create_forbidden';
 /** Error reason: only the cord's owner or admins may change it. */
 export const ERROR_CORD_UPDATE_FORBIDDEN = 'cord_update_forbidden';
-/** Error reason: the cord name is empty, too long, or has a forbidden or misplaced character. */
+/**
+ * Error reason: the cord name is missing, not a string, empty, too long, or
+ * has a forbidden or misplaced character. The `name` field of `cord_create`
+ * and `cord_update` declares it, so every refusal of the field carries it.
+ */
 export const ERROR_CORD_NAME_INVALID = 'cord_name_invalid';
 /** Error reason: no invite link has that token (or id, on this cord). */
 export const ERROR_CORD_INVITE_NOT_FOUND = 'cord_invite_not_found';
@@ -285,7 +289,10 @@ export const CordInviteToken = z
 export type CordInviteToken = z.infer<typeof CordInviteToken>;
 
 export const CordCreateInput = z.strictObject({
-	name: CordName.meta({ description: "The new cord's name." }),
+	name: CordName.meta({
+		description: "The new cord's name.",
+		invalid_reason: ERROR_CORD_NAME_INVALID
+	}),
 	acting: ActingActor
 });
 export type CordCreateInput = z.infer<typeof CordCreateInput>;
@@ -310,7 +317,10 @@ export type CordGetOutput = z.infer<typeof CordGetOutput>;
 
 export const CordUpdateInput = z.strictObject({
 	cord_id: Uuid.meta({ description: 'The cord to change.' }),
-	name: CordName.meta({ description: "The cord's new name." }),
+	name: CordName.meta({
+		description: "The cord's new name.",
+		invalid_reason: ERROR_CORD_NAME_INVALID
+	}),
 	acting: ActingActor
 });
 export type CordUpdateInput = z.infer<typeof CordUpdateInput>;
