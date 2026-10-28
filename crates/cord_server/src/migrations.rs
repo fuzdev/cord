@@ -114,6 +114,6 @@ mod tests {
 
     #[test]
     fn the_namespace_is_not_reserved() {
-        fuz_db::assert_consumer_namespace(CORD_MIGRATIONS_NAMESPACE).unwrap();
+        fuz_db::assert_migration_namespaces(&[CORD_MIGRATIONS]).unwrap();
     }
 }
