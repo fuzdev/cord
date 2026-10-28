@@ -192,18 +192,12 @@ fn compose_full_router(
     // a member surface, and the only server-initiated pushes today are the
     // spine's recipient-filtered role-grant-offer notifications. Add roles
     // here the moment a privileged broadcast lands.
+    let dispatch = backend.action_dispatch(gate.clone(), registry, &limits);
     let api = Router::new()
-        .merge(create_rpc_router(backend.rpc_route_state(
-            gate.clone(),
-            Arc::clone(&registry),
-            &limits,
-        )))
-        .merge(register_action_ws(backend.ws_route_state(
-            gate.clone(),
-            registry,
-            &limits,
-            Vec::new(),
-        )));
+        .merge(create_rpc_router(dispatch.clone()))
+        .merge(register_action_ws(
+            backend.ws_route_state(dispatch, Vec::new()),
+        ));
 
     // The admin audit-log SSE stream, mounted at its absolute path: admins
     // only, over a cookie session only (the spine defaults), since the stream

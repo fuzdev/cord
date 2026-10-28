@@ -3,7 +3,7 @@
 //! `CordApp` is the wiring root, not a handler context: the spine's
 //! `AppBackend` beside cord's own invite limiter. Handlers receive narrow
 //! `*RouteState` slices via `axum::State` (the spine's
-//! [`fuz_auth::AccountRouteState`], [`fuz_actions::RpcRouteState`],
+//! [`fuz_auth::AccountRouteState`], [`fuz_actions::ActionDispatch`],
 //! [`fuz_actions::WsRouteState`], and friends), built once from `CordApp` in
 //! [`crate::router`].
 
