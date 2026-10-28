@@ -24,7 +24,7 @@
 //! server runs (`cord_server::runtime::upkeep_options`, spawned by the spine's
 //! `fuz_actions::server::spawn_upkeep`): their startup passes
 //! run that sweep and the spine's auth cleanup, which closes the expired
-//! session it deletes through the revoker they're handed, and they end on
+//! session it deletes through the closer they're handed, and they end on
 //! shutdown.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
@@ -62,8 +62,8 @@ use fuz_auth::invite_queries::{
     query_create_invite, query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
 };
 use fuz_auth::{
-    AuditEmitter, AuditLogEvent, CreateRoleGrantOfferInput, ROLE_ADMIN, SocketCloseTarget,
-    SocketRevoker, query_create_role_grant, query_role_grant_offer_create,
+    AuditEmitter, AuditLogEvent, ConnectionCloseTarget, ConnectionCloser,
+    CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant, query_role_grant_offer_create,
 };
 use fuz_db::Pool;
 use uuid::Uuid;
@@ -1037,27 +1037,27 @@ async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
     ));
 }
 
-/// A `SocketRevoker` recording every close it is asked for, by target.
+/// A `ConnectionCloser` recording every close it is asked for, by target.
 #[derive(Default)]
-struct RecordingRevoker {
-    closed: std::sync::Mutex<Vec<SocketCloseTarget>>,
+struct RecordingCloser {
+    closed: std::sync::Mutex<Vec<ConnectionCloseTarget>>,
 }
 
-impl RecordingRevoker {
-    fn record(&self, target: SocketCloseTarget) -> usize {
+impl RecordingCloser {
+    fn record(&self, target: ConnectionCloseTarget) -> usize {
         self.closed.lock().expect("lock").push(target);
         0
     }
 }
 
-impl SocketRevoker for RecordingRevoker {
-    fn close_sockets(&self, target: &SocketCloseTarget) -> usize {
+impl ConnectionCloser for RecordingCloser {
+    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
         self.record(target.clone())
     }
 }
 
-impl fuz_http::ShutdownCloser for RecordingRevoker {
-    fn close_all_sockets(&self) -> usize {
+impl fuz_http::ShutdownCloser for RecordingCloser {
+    fn close_all_connections(&self) -> usize {
         0
     }
     fn wait_closed(&self) -> fuz_http::WaitClosedFuture<'_> {
@@ -1066,7 +1066,7 @@ impl fuz_http::ShutdownCloser for RecordingRevoker {
 }
 
 /// The upkeep tasks' startup passes run both sweeps, the invite expiry sweep
-/// and the spine's auth cleanup, through the emitter and the revoker they're
+/// and the spine's auth cleanup, through the emitter and the closer they're
 /// handed (the auth cleanup closes the expired session it deletes, and not
 /// the account's live one), and cancelling the token ends them.
 async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
@@ -1119,14 +1119,14 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
         let _ = tx.send(event);
         Box::pin(async {})
     }));
-    let recording = Arc::new(RecordingRevoker::default());
-    let socket_revoker: Arc<dyn SocketRevoker> = Arc::<RecordingRevoker>::clone(&recording);
+    let recording = Arc::new(RecordingCloser::default());
+    let connection_closer: Arc<dyn ConnectionCloser> = Arc::<RecordingCloser>::clone(&recording);
     let shutdown = fuz_http::CancellationToken::new();
     let tasks = spawn_upkeep(
         upkeep_options(fuz_auth::AuthCleanupOptions {
             pool: pool.clone(),
             audit: Arc::clone(&audit),
-            socket_revoker,
+            connection_closer,
         }),
         &shutdown,
     );
@@ -1156,7 +1156,7 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     // session close has run by the time the offer's audit arrives
     assert_eq!(
         *recording.closed.lock().expect("lock"),
-        [SocketCloseTarget::Session("upkeep-expired".to_owned())],
+        [ConnectionCloseTarget::Session("upkeep-expired".to_owned())],
         "the auth cleanup closes the expired session it deleted, and only that"
     );
     assert!(!signup_admits(pool, "unkept").await);

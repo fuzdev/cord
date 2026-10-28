@@ -22,7 +22,7 @@ pub struct CordApp {
     /// the daemon-token credential (always `None` in production: only the
     /// `testing_cordd` binary mints one and injects it), the WebSocket
     /// registry, and the admin audit-log SSE registry behind
-    /// `GET /api/admin/audit/stream`. Its [`AppBackend::socket_revoker`]
+    /// `GET /api/admin/audit/stream`. Its [`AppBackend::connection_closer`]
     /// closes both.
     pub backend: AppBackend,
     /// `cord_invite_redeem`'s own per-IP limiter

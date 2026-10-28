@@ -80,7 +80,7 @@ pub struct RunAppOptions {
 ///
 /// `auth_cleanup` is the app's
 /// ([`fuz_actions::server::AppBackend::auth_cleanup_options`]): its emitter,
-/// so what both audit reaches the admin audit streams, and its revoker, over
+/// so what both audit reaches the admin audit streams, and its closer, over
 /// the sockets and the streams.
 #[must_use]
 pub fn upkeep_options(auth_cleanup: fuz_auth::AuthCleanupOptions) -> UpkeepOptions {
@@ -134,7 +134,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             addr,
             drain_timeout,
             shutdown,
-            socket_revoker: app.as_ref().map(|app| app.backend.socket_revoker()),
+            connection_closer: app.as_ref().map(|app| app.backend.connection_closer()),
             upkeep: app
                 .as_ref()
                 .map(|app| upkeep_options(app.backend.auth_cleanup_options())),
