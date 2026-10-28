@@ -87,7 +87,7 @@ pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
     session_cookie_name: CORD_SESSION_COOKIE_NAME,
     migration_namespaces: &cord_migration_namespaces(),
     expected_schema_json: Some(include_str!("../expected_schema.json")),
-    audit_sse: true,
+    audit_sse: Some(fuz_actions::server::AuditSseSpec::DEFAULT),
 };
 
 /// What [`build_router`] builds: the router, and the composition root behind
