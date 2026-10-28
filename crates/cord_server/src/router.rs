@@ -43,10 +43,12 @@ use std::sync::Arc;
 
 use axum::Router;
 use fuz_actions::server::{
-    ActionRateLimits, AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError,
-    boot_only_router, compile_action_registry, create_app_backend, fallback_group, probe_router,
+    AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError, boot_only_router,
+    compile_action_registry, create_app_backend, fallback_group, probe_router,
 };
-use fuz_actions::{ActionRegistry, PROTOCOL_ACTION_SPECS, create_rpc_router, register_action_ws};
+use fuz_actions::{
+    ActionRateLimits, ActionRegistry, PROTOCOL_ACTION_SPECS, create_rpc_router, register_action_ws,
+};
 use fuz_http::{
     BaseServerEnv, BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup, StackOptions,
     compose_stack,
