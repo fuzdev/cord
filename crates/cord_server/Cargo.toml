@@ -17,7 +17,6 @@ fuz_auth.workspace = true
 fuz_cell.workspace = true
 fuz_db.workspace = true
 fuz_http.workspace = true
-fuz_realtime.workspace = true
 fuz_sys = { workspace = true, features = ["logging"] }
 
 # Async runtime + web.

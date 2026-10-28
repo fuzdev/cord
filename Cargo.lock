@@ -245,7 +245,6 @@ dependencies = [
  "fuz_cell",
  "fuz_db",
  "fuz_http",
- "fuz_realtime",
  "fuz_sys",
  "fuz_testing",
  "serde",

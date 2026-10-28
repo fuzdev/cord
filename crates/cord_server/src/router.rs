@@ -43,15 +43,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use fuz_actions::server::{
-    AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError, boot_only_router,
+    AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError, boot_only,
     compile_action_registry, create_app_backend, fallback_group, probe_router,
 };
 use fuz_actions::{
     ActionRateLimits, ActionRegistry, PROTOCOL_ACTION_SPECS, create_rpc_router, register_action_ws,
 };
 use fuz_http::{
-    BaseServerEnv, BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup, StackOptions,
-    compose_stack,
+    BaseServerEnv, BodyCap, DEFAULT_BODY_LIMIT_BYTES, GatedRouter, RouteGroup, compose_stack,
 };
 
 use crate::app::CordApp;
@@ -126,19 +125,8 @@ pub async fn build_router(
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
 ) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
-        // the allowlist is refused or warned of as the full boot would
-        CORD_BACKEND_SPEC
-            .browser_gates
-            .admit_origin_wildcards(env)?;
-        tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
         return Ok(BuiltRouter {
-            router: boot_only_router(
-                SERVER_NAME,
-                &StackOptions::new(
-                    env.allowed_origins.clone(),
-                    Arc::new(env.trusted_proxies.clone()),
-                ),
-            ),
+            router: boot_only(env, &CORD_BACKEND_SPEC, SERVER_NAME)?,
             app: None,
         });
     }
@@ -185,13 +173,7 @@ fn compose_full_router(
     // is invite-gated by default (`app_settings.open_signup = false`) and
     // rate-limited on both axes anyway, so the limiters already stand if an
     // admin opens signup.
-    let api_account = fuz_auth::account_router(backend.account_route_state(gate.clone()))
-        .merge(fuz_auth::bootstrap_routes::bootstrap_router(
-            backend.bootstrap_route_state(gate.clone()),
-        ))
-        .merge(fuz_auth::signup_routes::signup_router(
-            backend.signup_route_state(gate.clone()),
-        ));
+    let api_account = backend.auth_rest_routes(gate.clone()).into_router();
 
     // RPC and WebSocket nest under `/api`. No role gate on the socket: it is
     // a member surface, and the only server-initiated pushes today are the
@@ -207,13 +189,7 @@ fn compose_full_router(
     // The admin audit-log SSE stream, mounted at its absolute path: admins
     // only, over a cookie session only (the spine defaults), since the stream
     // is a browser feed and close-on-revoke keys on the session.
-    let audit_sse = backend
-        .audit_sse
-        .clone()
-        .ok_or_else(|| StartupError::Internal("the audit stream registry is unbuilt".into()))?;
-    let audit_stream = fuz_realtime::audit_stream_router(fuz_realtime::AuditStreamRouteState::new(
-        gate, audit_sse,
-    ));
+    let audit_stream = backend.audit_stream_router(gate)?;
 
     // Every route sits in the one `api` group, capped at 1 MiB and
     // origin-checked; the body-less routes (the probes, `/ready`, the audit
@@ -227,16 +203,6 @@ fn compose_full_router(
             .merge(audit_stream),
         BodyCap::Bytes(DEFAULT_BODY_LIMIT_BYTES),
     );
-
-    let trusted_proxies = &stack_options.trusted_proxies;
-    if trusted_proxies.is_empty() {
-        tracing::info!("no trusted proxies configured; XFF ignored, client IP is the TCP peer");
-    } else {
-        tracing::info!(
-            count = trusted_proxies.len(),
-            "trusted proxies configured; XFF resolution enabled"
-        );
-    }
 
     Ok(compose_stack([api_group], fallback_group(), &stack_options))
 }
@@ -358,11 +324,14 @@ mod tests {
         .expect("env parses")
     }
 
+    /// The boot-only branch's router, through [`boot_only`] (the env opted
+    /// in to `test_env`'s wildcard allowlist).
     fn boot_router() -> GatedRouter {
-        boot_only_router(
-            SERVER_NAME,
-            &StackOptions::new(test_env(None).allowed_origins, Arc::new(Vec::new())),
-        )
+        let env = BaseServerEnv {
+            allow_origin_wildcards: true,
+            ..test_env(None)
+        };
+        boot_only(&env, &CORD_BACKEND_SPEC, SERVER_NAME).expect("the boot-only router builds")
     }
 
     /// The spine core built without booting (its pool is lazy), over
