@@ -113,8 +113,8 @@ The load-bearing rules. Each module named holds the full reasoning.
   kept by Cord (the spine's index is per actor, role, and scope): a role
   change revokes and grants within one transaction, and accept never adds a
   grant beside an existing role. (`cord_authz.rs`, `cord_member_queries.rs`)
-- **Exact-scope authz; never `has_role` for cord roles.** It ignores
-  scope, so one cord's owner would pass for every cord. Use the predicates
+- **Exact-scope authz for cord roles.** A scope-blind role check would let
+  one cord's owner pass for every cord. Use the predicates
   in `cord_authz.rs`. An instance admin is
   `has_scoped_role(ROLE_ADMIN, None)`, a global grant, which the
   dispatcher's role gate also requires.

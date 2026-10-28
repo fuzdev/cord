@@ -1,11 +1,10 @@
 //! Cord authorization: pure predicates over an actor's active role grants.
 //!
 //! Every check here matches the grant's scope **exactly**: a cord role counts
-//! only when its `scope_id` is the cord's id. The spine's
-//! `RequestActorContext::has_role` ignores scope, so it would let a
-//! `cord_owner` grant on one cord stand in for any other; never use it for
-//! cord roles. The grants passed in are the request's role-grant snapshot
-//! (already filtered to active grants), so these predicates need no database.
+//! only when its `scope_id` is the cord's id. A scope-blind role check would
+//! let a `cord_owner` grant on one cord stand in for any other. The grants
+//! passed in are the request's role-grant snapshot (already filtered to
+//! active grants), so these predicates need no database.
 //!
 //! An actor holds at most one cord role per cord. The spine can't enforce
 //! that: its unique index is per (actor, role, scope), so `cord_member` and
@@ -191,8 +190,8 @@ mod tests {
 
     #[test]
     fn an_unscoped_cord_role_confers_nothing() {
-        // `has_role` would count this for every cord; exact scope counts it
-        // for none
+        // a scope-blind check would count this for every cord; exact scope
+        // counts it for none
         let grants = [grant(CORD_OWNER, None)];
         assert_eq!(cord_role_in(&grants, CORD_A), None);
         assert!(cord_memberships(&grants).is_empty());
