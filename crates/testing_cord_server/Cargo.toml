@@ -21,6 +21,8 @@ cord_server = { path = "../cord_server" }
 fuz_testing.workspace = true
 fuz_actions.workspace = true
 fuz_auth.workspace = true
+# `CELL_DROP_TABLES`, the reset's truncate.
+fuz_cell.workspace = true
 fuz_db.workspace = true
 fuz_http.workspace = true
 fuz_sys = { workspace = true, features = ["logging"] }

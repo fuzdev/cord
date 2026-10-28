@@ -232,7 +232,7 @@ fn build_action_registry(
         specs.extend(factory(
             Arc::new(app.clone()),
             app.backend.extra_action_specs_runtime(),
-        ));
+        )?);
     }
     // Fail loud: booting with an empty registry would answer
     // `method_not_found` to everything.
@@ -614,10 +614,10 @@ mod tests {
     fn extra_action_specs_factory_folds_into_the_registry() {
         let factory: ExtraActionSpecsFactory = Box::new(|_app, runtime| {
             assert_eq!(runtime.session_cookie_name, CORD_SESSION_COOKIE_NAME);
-            vec![fuz_actions::public_readonly_spec(
+            Ok(vec![fuz_actions::public_readonly_spec(
                 "_testing_seam_probe",
                 |_params, _ctx| Box::pin(async { Ok(serde_json::json!({})) }),
-            )]
+            )])
         });
         let app = lazy_app();
         let registry = build_action_registry(&app, Some(factory)).expect("registry compiles");

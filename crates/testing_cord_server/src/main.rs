@@ -39,18 +39,12 @@ mod cord_testing_actions;
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use cord_server::router::cord_migration_namespaces;
 use cord_server::runtime::{ExtraActionSpecsFactory, RunAppOptions, run_app, startup_hint};
-use fuz_actions::server::{
-    ServerInvocation, SpineBackendOptions, SpineRunOptions, StartCommand, parse_server_invocation,
-    server_usage,
-};
-use fuz_auth::PasswordHasher;
+use fuz_actions::server::{ServerInvocation, SpineRunOptions, StartCommand, server_invocation};
 use fuz_testing::{
-    TestingArgon2idHasher, TestingResetOptions, create_testing_drain_effects_action_spec,
-    create_testing_reset_action_spec, require_daemon_token_from_env, startup_reset_hook,
+    require_daemon_token_from_env, testing_backend_options, testing_reset_specs,
     truncate_reset_state,
 };
 
@@ -62,35 +56,18 @@ const DAEMON_TOKEN_DIR_ENV: &str = "CORD_DAEMON_TOKEN_DIR";
 const TESTING_DEFAULT_ADDR: SocketAddr =
     SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 4161);
 
-/// The tables `_testing_reset`'s `reset_state` hook empties first: cord's
-/// invite links and their redemptions and the cell tables (cords live there).
-/// The auth tables are then wiped and a fresh keeper seeded, all in one
-/// transaction, so no cord or link outlives the accounts that were in it.
-const DOMAIN_TABLES: &[&str] = &[
-    "cord_invite_redemption",
-    "cord_invite",
-    "cell_field",
-    "cell_item",
-    "cell_grant",
-    "cell",
-];
+/// cord's own tables — its invite links and their redemptions — which
+/// `_testing_reset`'s `reset_state` hook empties with the cell tables (cords
+/// live there). The auth tables are then wiped and a fresh keeper seeded, all
+/// in one transaction, so no cord or link outlives the accounts that were in
+/// it.
+const CORD_TABLES: &[&str] = &["cord_invite_redemption", "cord_invite"];
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let invocation = match parse_server_invocation(&args, StartCommand::Implicit) {
-        Ok(ServerInvocation::Help) => {
-            print!("{}", server_usage("testing_cordd", StartCommand::Implicit));
-            return ExitCode::SUCCESS;
-        }
+    let invocation = match server_invocation("testing_cordd", StartCommand::Implicit) {
         Ok(invocation) => invocation,
-        Err(message) => {
-            eprint!(
-                "error: {message}\n\n{}",
-                server_usage("testing_cordd", StartCommand::Implicit)
-            );
-            return ExitCode::from(fuz_sys::cli::EXIT_USAGE);
-        }
+        Err(exit) => return exit,
     };
 
     let _log_guard = fuz_sys::logging::init_non_blocking_stdout(
@@ -100,8 +77,6 @@ async fn main() -> ExitCode {
     if invocation == ServerInvocation::DbStatus {
         return fuz_db::status::run_db_status_cli(&cord_migration_namespaces()).await;
     }
-
-    let password_hasher: Arc<dyn PasswordHasher> = Arc::new(TestingArgon2idHasher::new());
 
     // Always-visible sentinel, whatever the log filter.
     eprintln!("testing_cordd starting (test-mode argon2 active)");
@@ -114,39 +89,20 @@ async fn main() -> ExitCode {
         Err(e) => return fuz_sys::cli::report_failure(&e, e.hint(), e.exit_code()),
     };
 
-    let reset_daemon_token_state = Arc::clone(&daemon_token_state);
-    let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(move |app, runtime| {
-        vec![
-            create_testing_reset_action_spec(TestingResetOptions {
-                password_hasher: runtime.password_hasher,
-                keyring: runtime.keyring,
-                daemon_token_state: reset_daemon_token_state,
-                session_cookie_name: runtime.session_cookie_name,
-                reset_state: Some(truncate_reset_state(DOMAIN_TABLES)),
-            }),
-            // awaits the emitter's detached writes; tracked because
-            // `audit_inflight_tracking` is on below
-            create_testing_drain_effects_action_spec(Arc::clone(&app.backend.audit_emitter)),
-            cord_testing_actions::create_testing_cord_invite_expire_action_spec(),
-        ]
+    let extra_action_specs_factory: ExtraActionSpecsFactory = Box::new(move |_app, runtime| {
+        let mut specs = testing_reset_specs(
+            &runtime,
+            Some(truncate_reset_state(
+                &[fuz_cell::CELL_DROP_TABLES, CORD_TABLES].concat(),
+            )),
+        )?;
+        specs.push(cord_testing_actions::create_testing_cord_invite_expire_action_spec());
+        Ok(specs)
     });
 
     match run_app(RunAppOptions {
         spine: SpineRunOptions {
-            backend: SpineBackendOptions {
-                password_hasher,
-                login_ip_rate_limit: fuz_auth::DEFAULT_LOGIN_IP_RATE_LIMIT,
-                // The cross-backend suites log in and sign up many times per
-                // process; the limiters' startup banner announces the nulls.
-                rate_limiters: fuz_auth::RateLimiterMode::DisabledForTesting,
-                daemon_token_state: Some(daemon_token_state),
-                // Env-gated (`FUZ_TESTING_RESET_DB_ON_STARTUP=true`) schema
-                // wipe, so repeated cross-backend runs against one database
-                // start clean. A no-op when unset.
-                pre_migration_hook: Some(startup_reset_hook()),
-                // makes `_testing_drain_effects` a real barrier
-                audit_inflight_tracking: true,
-            },
+            backend: testing_backend_options(daemon_token_state),
             default_addr: TESTING_DEFAULT_ADDR,
             drain_timeout: fuz_http::DEFAULT_DRAIN_TIMEOUT,
         },

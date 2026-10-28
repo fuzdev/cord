@@ -14,9 +14,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use fuz_actions::server::{
-    ServerInvocation, SpineRunOptions, StartCommand, parse_server_invocation, server_usage,
-};
+use fuz_actions::server::{ServerInvocation, SpineRunOptions, StartCommand, server_invocation};
 use fuz_auth::{Argon2idHasher, PasswordHasher};
 
 use cord_server::router::cord_migration_namespaces;
@@ -24,20 +22,9 @@ use cord_server::runtime::{DEFAULT_ADDR, RunAppOptions, run_app, startup_hint};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let invocation = match parse_server_invocation(&args, StartCommand::Implicit) {
-        Ok(ServerInvocation::Help) => {
-            print!("{}", server_usage("cordd", StartCommand::Implicit));
-            return ExitCode::SUCCESS;
-        }
+    let invocation = match server_invocation("cordd", StartCommand::Implicit) {
         Ok(invocation) => invocation,
-        Err(message) => {
-            eprint!(
-                "error: {message}\n\n{}",
-                server_usage("cordd", StartCommand::Implicit)
-            );
-            return ExitCode::from(fuz_sys::cli::EXIT_USAGE);
-        }
+        Err(exit) => return exit,
     };
 
     // Non-blocking stdout logging, so a stalled stdout consumer can't starve
