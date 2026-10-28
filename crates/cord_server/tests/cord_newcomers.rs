@@ -1051,20 +1051,8 @@ impl RecordingRevoker {
 }
 
 impl SocketRevoker for RecordingRevoker {
-    fn close_sockets_for_session(&self, target_hash: &str) -> usize {
-        self.record(SocketCloseTarget::Session(target_hash.to_owned()))
-    }
-    fn close_sockets_for_token(&self, target_id: &str) -> usize {
-        self.record(SocketCloseTarget::Token(target_id.to_owned()))
-    }
-    fn close_sockets_for_account(&self, target_id: Uuid) -> usize {
-        self.record(SocketCloseTarget::Account(target_id))
-    }
-    fn close_sockets_for_role(&self, account_id: Uuid, role: &str) -> usize {
-        self.record(SocketCloseTarget::Role {
-            account_id,
-            role: role.to_owned(),
-        })
+    fn close_sockets(&self, target: &SocketCloseTarget) -> usize {
+        self.record(target.clone())
     }
 }
 
