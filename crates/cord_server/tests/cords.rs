@@ -29,26 +29,26 @@ use fuz_auth::actor_queries::query_role_grant_find_active_for_actor;
 use fuz_auth::query_create_role_grant;
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
+use fuz_cell::cell_view_sql::CellViewer;
 use fuz_cell::{CellGrantLevel, CellVisibility};
 use fuz_db::Pool;
 use uuid::Uuid;
 
 /// Whether the spine's visibility-filtered `cell_list` shows `cord_id` to an
-/// actor holding `grants`, with no admin bypass.
+/// actor holding its active role grants — admin only through a global admin
+/// grant among them.
 async fn cell_list_shows(pool: &Pool, actor_id: Uuid, cord_id: Uuid) -> bool {
     let client = pool.get().await.expect("pool.get");
     let grants = query_role_grant_find_active_for_actor(&client, &actor_id)
         .await
         .expect("grants");
-    let roles: Vec<&str> = grants.iter().map(|g| g.role.as_str()).collect();
-    let scopes: Vec<Option<Uuid>> = grants.iter().map(|g| g.scope_id).collect();
     let ids = [cord_id];
     let params = CellListParams {
         ids: Some(&ids),
-        viewer_actor_id: Some(actor_id),
-        viewer_is_admin: false,
-        caller_role_grant_roles: &roles,
-        caller_role_grant_scope_ids: &scopes,
+        viewer: CellViewer::for_actor(
+            actor_id,
+            grants.iter().map(|g| (g.role.as_str(), g.scope_id)),
+        ),
         limit: 10,
         ..CellListParams::default()
     };
