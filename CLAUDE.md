@@ -320,7 +320,8 @@ and Vite in dev proxies `/api` and `/health` to `cordd` on port 4061. Without
 stack). `FUZ_ALLOWED_ORIGINS`
 is required always, boot-only included, and validated entry by entry
 (`fuz_http::AllowedOrigins::parse` — a blank value or any malformed entry
-refuses the boot, naming each); with a database, `SECRET_FUZ_COOKIE_KEYS` is required
+refuses the boot, naming each; a wildcard entry boots only with
+`FUZ_ALLOW_ORIGIN_WILDCARDS=true`, boot-only included); with a database, `SECRET_FUZ_COOKIE_KEYS` is required
 too, migrations run before serving, and `cordd` refuses to serve unless
 Postgres's `default_transaction_isolation` is `read committed`. The
 README's table lists every variable; spine-wide names stay unprefixed and

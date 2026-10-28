@@ -90,7 +90,12 @@ export const rust_backend_config = (): BackendConfig => ({
 		// `RUST_LOG` targets are crate names
 		rust_log: 'info,cord_server=info,testing_cord_server=info',
 		// the keeper credential `_testing_reset` authenticates with
-		daemon_token_dir_env: 'CORD_DAEMON_TOKEN_DIR'
+		daemon_token_dir_env: 'CORD_DAEMON_TOKEN_DIR',
+		extra_env: {
+			// fuz_app's default allowlist, `http://localhost:*`, is a wildcard, which
+			// the spine boots only with the opt-in
+			FUZ_ALLOW_ORIGIN_WILDCARDS: 'true'
+		}
 	}),
 	sse_path: CORD_AUDIT_STREAM_PATH
 });

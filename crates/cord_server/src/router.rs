@@ -88,6 +88,7 @@ pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
     migration_namespaces: &cord_migration_namespaces(),
     expected_schema_json: Some(include_str!("../expected_schema.json")),
     audit_sse: Some(fuz_actions::server::AuditSseSpec::DEFAULT),
+    browser_gates: fuz_actions::server::BrowserGateSpec::DEFAULT,
 };
 
 /// What [`build_router`] builds: the router, and the composition root behind
@@ -125,6 +126,10 @@ pub async fn build_router(
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
 ) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
+        // the allowlist is refused or warned of as the full boot would
+        CORD_BACKEND_SPEC
+            .browser_gates
+            .admit_origin_wildcards(env)?;
         tracing::warn!("DATABASE_URL not set; running in boot-only mode (no /api, no /ready)");
         return Ok(BuiltRouter {
             router: boot_only_router(
@@ -394,6 +399,29 @@ mod tests {
                 .expect("the spec embeds a fixture"),
         )
         .expect("committed fixture parses")
+    }
+
+    /// The boot-only branch refuses a wildcard allowlist without the opt-in,
+    /// as the full boot does, before any database exists — and boots with it.
+    #[tokio::test]
+    async fn boot_only_refuses_a_wildcard_origin_without_the_opt_in() {
+        let options = || SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()));
+        // `test_env`'s allowlist is `http://localhost:*`, with no opt-in
+        let message = match build_router(&test_env(None), options(), None).await {
+            Err(StartupError::Config(message)) => message,
+            Err(other) => other.to_string(),
+            Ok(_) => String::new(),
+        };
+        assert!(
+            message.starts_with("FUZ_ALLOWED_ORIGINS holds a wildcard entry"),
+            "{message:?}"
+        );
+        let opted_in = BaseServerEnv {
+            allow_origin_wildcards: true,
+            ..test_env(None)
+        };
+        let built = build_router(&opted_in, options(), None).await;
+        assert!(built.is_ok_and(|built| built.app.is_none()));
     }
 
     #[tokio::test]

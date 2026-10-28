@@ -146,14 +146,15 @@ cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
 
 `cordd` reads only its process environment:
 
-| Variable                   | Purpose                                                                |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `DATABASE_URL`             | Postgres connection; unset runs a boot-only server with just `/health` |
-| `FUZ_ALLOWED_ORIGINS`      | always required: comma-separated origins (`http://localhost:*`)        |
-| `SECRET_FUZ_COOKIE_KEYS`   | required with a database: cookie-signing keys, 32+ characters each     |
-| `FUZ_BOOTSTRAP_TOKEN_PATH` | token file that opens first-account bootstrap                          |
-| `HOST`, `PORT`             | bind address, default `127.0.0.1:4061`                                 |
-| `CORD_TRUSTED_PROXIES`     | proxy IPs/CIDRs trusted for `X-Forwarded-For`; default loopback        |
+| Variable                     | Purpose                                                                |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `DATABASE_URL`               | Postgres connection; unset runs a boot-only server with just `/health` |
+| `FUZ_ALLOWED_ORIGINS`        | always required: comma-separated origins (`http://localhost:*`)        |
+| `FUZ_ALLOW_ORIGIN_WILDCARDS` | `true` lets a wildcard origin boot (refused otherwise); `true`/`false` |
+| `SECRET_FUZ_COOKIE_KEYS`     | required with a database: cookie-signing keys, 32+ characters each     |
+| `FUZ_BOOTSTRAP_TOKEN_PATH`   | token file that opens first-account bootstrap                          |
+| `HOST`, `PORT`               | bind address, default `127.0.0.1:4061`                                 |
+| `CORD_TRUSTED_PROXIES`       | proxy IPs/CIDRs trusted for `X-Forwarded-For`; default loopback        |
 
 It runs its migrations on start. With the server up, the frontend dev
 server proxies `/api` (WebSocket included) and `/health` to port 4061, so
