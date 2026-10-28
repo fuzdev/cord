@@ -43,7 +43,7 @@ pub const ENV_OPTIONS: ServerEnvOptions = ServerEnvOptions {
 /// The hint printed under a start failure: for a configuration error, where
 /// cord's env vars are listed; otherwise the spine's.
 #[must_use]
-pub const fn startup_hint(error: &StartupError) -> Option<&'static str> {
+pub fn startup_hint(error: &StartupError) -> Option<&'static str> {
     match error {
         StartupError::Config(_) => Some("see .env.development.example for the server's env vars"),
         _ => error.hint(),
