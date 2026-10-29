@@ -142,8 +142,9 @@ use fuz_auth::{
     RateLimiter, RateLimiterOptions, RequestActorContext, is_valid_username_for_creation,
 };
 use fuz_http::{
-    JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_input_params,
-    invalid_params, not_found, parse_str_param, parse_strict_params, reject_unknown_keys,
+    InputShape, JsonrpcError, conflict, forbidden, internal_error_with_source,
+    invalid_input_params, invalid_params, not_found, parse_str_param, parse_strict_params,
+    reject_unknown_keys,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -818,6 +819,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::with_side_effects(
             "cord_invite_create",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -830,6 +832,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::read_only(
             "cord_invite_list",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -841,6 +844,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::with_side_effects(
             "cord_invite_revoke",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -852,6 +856,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::read_only(
             "cord_invite_preview",
             AuthSpec::optional_identity(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = ctx.auth.actor();
@@ -864,6 +869,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::with_side_effects(
             "cord_invite_redeem",
             AuthSpec::public(),
+            InputShape::Object,
             handler(move |params, ctx| {
                 // first thing, so a flood of malformed input spends the budget
                 // and a throttled caller costs no query of its own
@@ -882,6 +888,7 @@ pub(crate) fn cord_invite_action_specs(
         ActionSpec::with_side_effects(
             "cord_invite_accept",
             AuthSpec::authenticated(CredentialGate::SESSION_ONLY),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;

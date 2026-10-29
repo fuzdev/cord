@@ -245,6 +245,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use fuz_auth::RateLimiterMode;
+    use fuz_http::InputShape;
     use tower::ServiceExt;
 
     const FOREIGN_ORIGIN: &str = "https://elsewhere.example";
@@ -616,6 +617,7 @@ mod tests {
             assert_eq!(runtime.session_cookie_name, CORD_SESSION_COOKIE_NAME);
             Ok(vec![fuz_actions::public_readonly_spec(
                 "_testing_seam_probe",
+                InputShape::Object,
                 |_params, _ctx| Box::pin(async { Ok(serde_json::json!({})) }),
             )])
         });

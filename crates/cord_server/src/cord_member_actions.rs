@@ -24,8 +24,8 @@ use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionSpec};
 use fuz_auth::{AuditEventType, AuthSpec, CredentialGate, RequestActorContext};
 use fuz_http::{
-    JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params, not_found,
-    parse_strict_params,
+    InputShape, JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_params,
+    not_found, parse_strict_params,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -298,6 +298,7 @@ pub(crate) fn cord_member_action_specs() -> Vec<ActionSpec> {
         ActionSpec::read_only(
             "cord_member_list",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -309,6 +310,7 @@ pub(crate) fn cord_member_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_member_role_set",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -320,6 +322,7 @@ pub(crate) fn cord_member_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_member_remove",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -331,6 +334,7 @@ pub(crate) fn cord_member_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_leave",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;

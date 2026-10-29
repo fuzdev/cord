@@ -35,8 +35,8 @@ use fuz_auth::{
     RequestActorContext, ResolvedAuthContext,
 };
 use fuz_http::{
-    JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_input_params,
-    not_found, parse_strict_params, parse_uuid_param, reject_unknown_keys,
+    InputShape, JsonrpcError, forbidden, internal_error, internal_error_with_source,
+    invalid_input_params, not_found, parse_strict_params, parse_uuid_param, reject_unknown_keys,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -475,6 +475,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_create",
             AuthSpec::authenticated_gated(CredentialGate::Any, INSTANCE_ADMIN_ROLES),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -486,6 +487,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
         ActionSpec::read_only(
             "cord_list",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -497,6 +499,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
         ActionSpec::read_only(
             "cord_get",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -508,6 +511,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
         ActionSpec::with_side_effects(
             "cord_update",
             AuthSpec::authenticated(CredentialGate::Any),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;
@@ -519,6 +523,7 @@ fn cord_domain_action_specs() -> Vec<ActionSpec> {
         ActionSpec::read_only(
             "cord_admin_list",
             AuthSpec::authenticated_gated(CredentialGate::Any, INSTANCE_ADMIN_ROLES),
+            InputShape::Object,
             handler(|params, ctx| {
                 Box::pin(async move {
                     let auth = require_actor(ctx.auth)?;

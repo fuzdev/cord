@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use fuz_actions::{ActionHandler, ActionSpec};
 use fuz_auth::{AuthSpec, CredentialGate, CredentialType};
-use fuz_http::{internal_error_with_source, not_found};
+use fuz_http::{InputShape, internal_error_with_source, not_found};
 
 /// The spine's `_testing_*` auth axis: keeper-only via the daemon token, no
 /// acting actor.
@@ -39,7 +39,12 @@ pub fn create_testing_cord_invite_expire_action_spec() -> ActionSpec {
             Ok(serde_json::json!({}))
         })
     });
-    ActionSpec::with_side_effects("_testing_cord_invite_expire", TESTING_ACTION_AUTH, handler)
+    ActionSpec::with_side_effects(
+        "_testing_cord_invite_expire",
+        TESTING_ACTION_AUTH,
+        InputShape::Object,
+        handler,
+    )
 }
 
 #[cfg(test)]
