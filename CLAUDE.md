@@ -213,8 +213,9 @@ that has shipped); give it a `*_COLUMNS` const and register it in
 
 A static SvelteKit build over `cordd`'s API, using `@fuzdev/fuz_app` for the
 auth UI and the RPC client. The root `+layout.svelte` provides
-`cord_rpc_context` (`ui/rpc.ts`: the throwing `api` over `POST /api/rpc`,
-HTTP only), `cord_auth_state_context` (`CordAuthState`, also set on
+`cord_rpc_context` (`ui/rpc.ts`: the throwing `api` over `/api/rpc`, HTTP
+only, reads as `GET` unless their input is sensitive),
+`cord_auth_state_context` (`CordAuthState`, also set on
 fuz_app's `auth_state_context`), and `cords_state_context` (the signed-in
 account's `CordsState`, fetched when an account signs in and reset when it
 signs out), and checks the session on mount.

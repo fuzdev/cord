@@ -23,7 +23,7 @@ import { all_cord_domain_action_specs } from './cord_action_specs.ts';
 /**
  * Every action spec the cord server mounts. The protocol actions (`heartbeat`,
  * `cancel`, `peer/ping`) work only over the `/api/ws` WebSocket; sent over
- * `POST /api/rpc` they fail with method-not-found or `peer_no_transport`.
+ * `/api/rpc` they fail with method-not-found or `peer_no_transport`.
  * They're listed so the typed surface matches the server's registry and is
  * ready for the WebSocket transport.
  */
