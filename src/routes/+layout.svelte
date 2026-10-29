@@ -34,8 +34,9 @@
 
 	// a join link and its redemption stored in this tab belong to whoever was
 	// signed in or signing up, so a logout through `auth_state.logout` on any
-	// page forgets them; a session that ends another way (fuz_app's
-	// `AccountSessions` revoking them all, an expiry) doesn't call it
+	// page forgets them, as does fuz_app's `AccountSessions` when it revokes
+	// this session or all of them; a session that ends another way (an
+	// expiry, a revocation from elsewhere) doesn't call it
 	auth_state.on_logout(() => forget_cord_join(cord_join_session_storage()));
 
 	// the signed-in account's cords, shared by the rail and the home page:

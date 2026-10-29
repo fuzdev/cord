@@ -33,9 +33,10 @@
  *   to.
  * - The stored link is forgotten once it has done its job or can't do one
  *   (unless it holds a redemption for someone other than the signed-in
- *   account), and when `logout` runs, which also drops the redemption. A
- *   session ended another way, as by `AccountSessions`' revoke-all, doesn't
- *   forget it (see `CordAuthState.on_logout`).
+ *   account), and when `logout` runs, which also drops the redemption
+ *   (`AccountSessions` runs it for its revokes of this session). A session
+ *   ended another way, as by an expiry, doesn't forget it (see
+ *   `CordAuthState.on_logout`).
  * - A restored redemption dies with a revoked link at once. On an expired
  *   link it lasts until redeem or accept refuses, since the preview can't
  *   show accept's grace.
