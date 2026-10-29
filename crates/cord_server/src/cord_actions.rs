@@ -32,11 +32,11 @@ use deadpool_postgres::GenericClient;
 use fuz_actions::{ActionContext, ActionHandler, ActionSpec};
 use fuz_auth::{
     AuditEventType, AuditLogInput, AuditRouting, AuthSpec, CredentialGate, ROLE_ADMIN,
-    RequestActorContext, ResolvedAuthContext, parse_uuid_param, reject_unknown_keys,
+    RequestActorContext, ResolvedAuthContext,
 };
 use fuz_http::{
     JsonrpcError, forbidden, internal_error, internal_error_with_source, invalid_input_params,
-    not_found, parse_strict_params,
+    not_found, parse_strict_params, parse_uuid_param, reject_unknown_keys,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -82,7 +82,7 @@ struct CordListInput {
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -90,12 +90,12 @@ struct CordListInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordGetInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -116,7 +116,7 @@ struct CordAdminListInput {
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }

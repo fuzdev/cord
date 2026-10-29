@@ -643,6 +643,7 @@ dependencies = [
  "deadpool-postgres",
  "fuz_auth",
  "fuz_db",
+ "fuz_http",
  "fuz_sys",
  "serde",
  "serde_json",
@@ -695,6 +696,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

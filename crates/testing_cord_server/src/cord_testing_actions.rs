@@ -22,8 +22,8 @@ const TESTING_ACTION_AUTH: AuthSpec =
 pub fn create_testing_cord_invite_expire_action_spec() -> ActionSpec {
     let handler: ActionHandler = Arc::new(|params, ctx| {
         Box::pin(async move {
-            fuz_auth::reject_unknown_keys(&params, &["invite_id"])?;
-            let invite_id = fuz_auth::parse_uuid_param(&params, "invite_id")?;
+            fuz_http::reject_unknown_keys(&params, &["invite_id"])?;
+            let invite_id = fuz_http::parse_uuid_param(&params, "invite_id")?;
             let updated = ctx
                 .db
                 .execute(

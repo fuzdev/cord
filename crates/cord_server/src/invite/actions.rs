@@ -140,11 +140,10 @@ use fuz_auth::primitive_schemas::{USERNAME_LENGTH_MAX, USERNAME_LENGTH_MIN};
 use fuz_auth::{
     AuditEventType, AuthSpec, CredentialGate, DEFAULT_RATE_LIMITER_MAX_KEYS, RateLimitClass,
     RateLimiter, RateLimiterOptions, RequestActorContext, is_valid_username_for_creation,
-    parse_str_param, reject_unknown_keys,
 };
 use fuz_http::{
     JsonrpcError, conflict, forbidden, internal_error_with_source, invalid_input_params,
-    invalid_params, not_found, parse_strict_params,
+    invalid_params, not_found, parse_str_param, parse_strict_params, reject_unknown_keys,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -231,7 +230,7 @@ fn check_cord_invite_redeem_rate_limit(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordInviteCreateInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
     #[serde(default)]
     expires_in_seconds: Option<u32>,
@@ -242,7 +241,7 @@ struct CordInviteCreateInput {
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -250,12 +249,12 @@ struct CordInviteCreateInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordInviteListInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -263,14 +262,14 @@ struct CordInviteListInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordInviteRevokeInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     invite_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -284,7 +283,7 @@ struct CordInviteTokenInput {
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }

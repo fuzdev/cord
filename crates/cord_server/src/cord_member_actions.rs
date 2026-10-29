@@ -57,12 +57,12 @@ pub const ERROR_CORD_MEMBER_REMOVE_SELF: &str = "cord_member_remove_self";
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordMemberListInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -70,15 +70,15 @@ struct CordMemberListInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordMemberRoleSetInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     actor_id: Uuid,
     role: CordRole,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -86,14 +86,14 @@ struct CordMemberRoleSetInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordMemberRemoveInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     actor_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
@@ -101,12 +101,12 @@ struct CordMemberRemoveInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CordLeaveInput {
-    #[serde(deserialize_with = "fuz_auth::deserialize_wire_uuid")]
+    #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
     #[serde(
         default,
         rename = "acting",
-        deserialize_with = "fuz_auth::deserialize_optional_wire_uuid"
+        deserialize_with = "fuz_http::deserialize_optional_wire_uuid"
     )]
     _acting: Option<Uuid>,
 }
