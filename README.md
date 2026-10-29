@@ -135,7 +135,7 @@ limits; never deploy it), and `xtask`, whose `check-release` fails if
 
 To run `cordd` locally you need Postgres. Copy `.env.development.example`
 to `.env.development`, fill in `SECRET_FUZ_COOKIE_KEYS`
-(`openssl rand -base64 32`), load it into your shell, and run the server:
+(`openssl rand -hex 32`), load it into your shell, and run the server:
 
 ```bash
 createdb cord

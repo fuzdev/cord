@@ -43,7 +43,7 @@ cp .env.production.example .env.production   # gitignored
 ```
 
 Fill in `DEPLOY_HOST`, `DEPLOY_CERTBOT_EMAIL`, and `SECRET_FUZ_COOKIE_KEYS`
-(`openssl rand -base64 32`), and check the rest. This file stays on your
+(`openssl rand -hex 32`), and check the rest. This file stays on your
 machine; zap generates the host's env file for `cordd` from `zap.ts`.
 
 `deno task validate` evaluates the config offline, touching no host.
