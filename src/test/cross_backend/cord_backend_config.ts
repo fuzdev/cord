@@ -5,9 +5,11 @@
  * limiters over the same `run_app`).
  *
  * The shared shape (the `/api/*` paths, `HOST`, the bootstrap block, cookie
- * keys, origins, the daemon-token dir, and the `FUZ_TESTING_RESET_DB_ON_STARTUP`
+ * keys, the daemon-token dir, and the `FUZ_TESTING_RESET_DB_ON_STARTUP`
  * self-wipe) comes from fuz_app's `make_default_rust_backend_config`; this
- * declares only what differs.
+ * declares only what differs. Origins come from it too: the
+ * `http://localhost:*` allowlist with the `FUZ_ALLOW_ORIGIN_WILDCARDS` opt-in
+ * its wildcard needs, so cord sets neither.
  *
  * The binary needs a real Postgres database (`tokio-postgres` can't reach an
  * in-process one); the global setup creates it when it's missing.
@@ -90,12 +92,7 @@ export const rust_backend_config = (): BackendConfig => ({
 		// `RUST_LOG` targets are crate names
 		rust_log: 'info,cord_server=info,testing_cord_server=info',
 		// the keeper credential `_testing_reset` authenticates with
-		daemon_token_dir_env: 'CORD_DAEMON_TOKEN_DIR',
-		extra_env: {
-			// fuz_app's default allowlist, `http://localhost:*`, is a wildcard, which
-			// the spine boots only with the opt-in
-			FUZ_ALLOW_ORIGIN_WILDCARDS: 'true'
-		}
+		daemon_token_dir_env: 'CORD_DAEMON_TOKEN_DIR'
 	}),
 	sse_path: CORD_AUDIT_STREAM_PATH
 });
