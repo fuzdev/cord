@@ -5,6 +5,7 @@
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
 	import LoginForm from '@fuzdev/fuz_app/ui/LoginForm.svelte';
 	import BootstrapForm from '@fuzdev/fuz_app/ui/BootstrapForm.svelte';
+	import { BackendProbe } from '@fuzdev/fuz_app/ui/backend_probe.svelte.ts';
 	import ColumnLayout from '@fuzdev/fuz_app/ui/ColumnLayout.svelte';
 	import MenuLink from '@fuzdev/fuz_app/ui/MenuLink.svelte';
 	import {
@@ -22,21 +23,10 @@
 	const { api } = cord_rpc_context.get();
 
 	// `check_session` can't tell a down server from a logged-out 401, so probe
-	// `/health` to show a hint instead of a login form that can't work
-	let probing = $state.raw(true);
-	let server_unreachable = $state.raw(false);
-	if (BROWSER) {
-		void (async () => {
-			try {
-				const response = await fetch('/health');
-				server_unreachable = !response.ok;
-			} catch {
-				server_unreachable = true;
-			} finally {
-				probing = false;
-			}
-		})();
-	}
+	// `/health` to show a hint instead of a login form that can't work; only the
+	// health reply counts, never a static fallback's HTML
+	const backend = new BackendProbe();
+	if (BROWSER) void backend.probe();
 
 	// the RPC contexts the `Admin*` components read: accounts, invites, audit log, settings
 	provide_admin_rpc_contexts(create_admin_rpc_adapters(api));
@@ -63,9 +53,9 @@
 	</div>
 {:else}
 	<main class="width_atmost_sm mx_auto p_lg">
-		{#if !auth_state.session_checked || probing}
+		{#if !auth_state.session_checked || backend.reachable === null}
 			<p class="text_50">checking session...</p>
-		{:else if server_unreachable}
+		{:else if !backend.reachable}
 			<Alert status="error">
 				<p>The Cord server (<code>cordd</code>) isn't responding. Start it, then reload.</p>
 			</Alert>
