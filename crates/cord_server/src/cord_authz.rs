@@ -75,14 +75,20 @@ impl CordRole {
     /// and admins.
     #[must_use]
     pub const fn can_manage(self) -> bool {
-        matches!(self, Self::Owner | Self::Admin)
+        match self {
+            Self::Owner | Self::Admin => true,
+            Self::Member => false,
+        }
     }
 
     /// Whether the role may set members' roles (to owner, admin, or member):
     /// owners only.
     #[must_use]
     pub const fn can_set_member_roles(self) -> bool {
-        matches!(self, Self::Owner)
+        match self {
+            Self::Owner => true,
+            Self::Admin | Self::Member => false,
+        }
     }
 
     /// Whether this role may remove a member holding `target`: an owner
