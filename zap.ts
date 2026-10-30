@@ -41,6 +41,7 @@ import { debian_ssh_reload } from '@fuzdev/zap/recipe_debian_ssh.ts';
 import {
 	ssl_params,
 	rate_limit_zone,
+	RATE_LIMIT_ZONE,
 	NGINX_VALIDATE,
 	nginx_config_verify
 } from '@fuzdev/zap/recipe_nginx.ts';
@@ -109,15 +110,6 @@ NO_COLOR=1
 // carries `wss://{{domain}}` for the WebSocket.
 const CSP = spa_csp();
 
-// The rate-limit zone `rate_limit_zone` defines, read back from its own output
-// rather than retyped, so the audit-stream location below can reference it and
-// a rename in the recipe can't leave a dangling `limit_req`.
-const RATE_LIMIT_ZONE_NAME = (() => {
-	const match = /zone=([A-Za-z0-9_]+):/.exec(rate_limit_zone());
-	if (!match?.[1]) throw Error('rate_limit_zone() output has no zone name');
-	return match[1];
-})();
-
 // Cord's own nginx locations, injected into the HTTPS server block.
 //
 // The admin audit log streams server-sent events from
@@ -128,7 +120,8 @@ const RATE_LIMIT_ZONE_NAME = (() => {
 // proxy headers (the `X-Forwarded-For` overwrite is what makes
 // `CORD_TRUSTED_PROXIES` safe), with buffering off and an hour's read timeout;
 // the browser's EventSource reconnects after that and fills the gap. It keeps
-// the `/api` rate limit, since an exact match escapes the prefix block's.
+// the `/api` rate limit, since an exact match escapes the prefix block's,
+// naming the recipe's zone through `RATE_LIMIT_ZONE` so the two can't drift.
 //
 // No `add_header` here: nginx drops inherited `add_header` directives in any
 // block that sets its own, so staying silent keeps the server-level security
@@ -139,7 +132,7 @@ const RATE_LIMIT_ZONE_NAME = (() => {
 // WebSocket open.
 const EXTRA_LOCATIONS = `    # Admin audit log stream (server-sent events): unbuffered, long-lived.
     location = /api/admin/audit/stream {
-        limit_req zone=${RATE_LIMIT_ZONE_NAME} burst=5 nodelay;
+        limit_req zone=${RATE_LIMIT_ZONE} burst=5 nodelay;
 
         proxy_pass http://127.0.0.1:{{port}};
         proxy_http_version 1.1;
