@@ -211,7 +211,11 @@ mod tests {
 
     /// A pool whose every checkout fails fast (nothing listens on port 1).
     fn unreachable_pool() -> Pool {
-        fuz_db::create_pool("postgres://127.0.0.1:1/cord_unreachable").expect("the pool is lazy")
+        fuz_db::create_pool(
+            "postgres://127.0.0.1:1/cord_unreachable",
+            &fuz_db::PoolOptions::default(),
+        )
+        .expect("the pool is lazy")
     }
 
     #[tokio::test]

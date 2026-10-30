@@ -26,7 +26,7 @@ use fuz_testing::ScratchDb;
 #[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
 async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
     let scratch = ScratchDb::create(common::DB, "cord_isolation_scratch").await;
-    create_pool(scratch.url())
+    create_pool(scratch.url(), &fuz_db::PoolOptions::default())
         .expect("create_pool")
         .get()
         .await
@@ -56,7 +56,7 @@ async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
     )
     .await;
 
-    let migrated: bool = create_pool(scratch.url())
+    let migrated: bool = create_pool(scratch.url(), &fuz_db::PoolOptions::default())
         .expect("create_pool")
         .get()
         .await
