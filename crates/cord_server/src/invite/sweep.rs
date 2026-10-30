@@ -121,7 +121,7 @@ pub async fn cord_invite_sweep_pass(
     let mut client = match pool.get().await {
         Ok(client) => client,
         Err(e) => {
-            tracing::warn!(error = %e, "cord invite sweep: no database connection");
+            tracing::warn!(error = ?e, "cord invite sweep: no database connection");
             return Vec::new();
         }
     };
@@ -133,7 +133,7 @@ pub async fn cord_invite_sweep_pass(
     {
         Ok(invite_ids) => invite_ids,
         Err(e) => {
-            tracing::warn!(error = %e, "cord invite sweep: selecting expired links failed");
+            tracing::warn!(error = ?e, "cord invite sweep: selecting expired links failed");
             return Vec::new();
         }
     };
