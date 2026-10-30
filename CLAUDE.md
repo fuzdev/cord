@@ -243,9 +243,11 @@ but no link lists of their own.
 
 The state classes hold fuz_app `AsyncSlot`s (`KeyedAsyncSlot` for per-row
 writes) over the `api`. The member, invite, and join states map errors
-through `ui/cord_errors.ts`; `cords_state.svelte.ts` keeps `AsyncSlot`'s
-default messages. Per-cord states drop responses for a cord they've moved
-off, and their `fetch` is safe to call from an `$effect`.
+through `ui/cord_errors.ts`; `cords_state.svelte.ts` maps its create and
+rename refusals through it too (`map_error: to_cord_error_message`), while
+its read slots keep `AsyncSlot`'s default messages. Per-cord states drop
+responses for a cord they've moved off, and their `fetch` is safe to call
+from an `$effect`.
 
 A cord's pages share a layout that owns one `CordPageState`
 (`ui/cord_page_state.svelte.ts`: the cord, its members, and the viewer's
