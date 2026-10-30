@@ -233,9 +233,10 @@ fn check_cord_invite_redeem_rate_limit(
 struct CordInviteCreateInput {
     #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
-    #[serde(default)]
+    // `z.number().int()` on the twin: any integral spelling
+    #[serde(default, deserialize_with = "fuz_http::deserialize_optional_wire_int")]
     expires_in_seconds: Option<u32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "fuz_http::deserialize_optional_wire_int")]
     max_uses: Option<u32>,
     #[serde(default)]
     admits_newcomers: Option<bool>,
@@ -1163,6 +1164,25 @@ mod tests {
             let parsed: Result<CordInviteCreateInput, _> =
                 parse_strict_params(json!({ "cord_id": cord_id, field: -1 }));
             assert!(parsed.is_err(), "{field}: negative is refused");
+        }
+    }
+
+    /// The twin's `z.number().int()` reads any integral spelling.
+    #[test]
+    fn limits_read_integral_floats() {
+        let cord_id = "11111111-1111-4111-8111-111111111111";
+        let parsed: CordInviteCreateInput = parse_strict_params(
+            json!({ "cord_id": cord_id, "expires_in_seconds": 3600.0, "max_uses": 5.0 }),
+        )
+        .expect("integral floats are integers");
+        assert_eq!(
+            (parsed.expires_in_seconds, parsed.max_uses),
+            (Some(3600), Some(5))
+        );
+        for field in ["expires_in_seconds", "max_uses"] {
+            let parsed: Result<CordInviteCreateInput, _> =
+                parse_strict_params(json!({ "cord_id": cord_id, field: 5.5 }));
+            assert!(parsed.is_err(), "{field}: a fraction is refused");
         }
     }
 
