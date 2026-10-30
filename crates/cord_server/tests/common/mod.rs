@@ -56,11 +56,6 @@ macro_rules! in_tx {
 #[allow(unused_imports)]
 pub(crate) use in_tx;
 
-/// The test database's URL: `CORD_SCHEMA_READY_TEST_URL`, or the default.
-pub fn test_url() -> String {
-    DB.url()
-}
-
 /// A pool over a freshly reset and migrated database.
 pub async fn fresh_db_pool() -> Pool {
     fresh_test_db_pool(DB).await
