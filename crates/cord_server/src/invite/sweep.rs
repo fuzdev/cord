@@ -45,6 +45,7 @@ use deadpool_postgres::{Object, Pool};
 use fuz_actions::PostCommitEffects;
 use fuz_auth::{AuditEmitter, AuditLogInput, AuditRouting};
 use fuz_cell::CellError;
+use fuz_db::{DbError, commit_checked};
 use fuz_http::CancellationToken;
 use serde_json::json;
 use tokio::task::JoinHandle;
@@ -143,7 +144,7 @@ pub async fn cord_invite_sweep_pass(
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(
-                    error = %e,
+                    error = ?e,
                     %invite_id,
                     "cord invite sweep: releasing a link's reservations failed"
                 );
@@ -153,6 +154,19 @@ pub async fn cord_invite_sweep_pass(
     released
 }
 
+/// Why releasing one link failed: a statement inside its transaction, or
+/// the commit.
+#[derive(Debug, thiserror::Error)]
+enum SweepLinkError {
+    /// A driver or decode failure inside the transaction.
+    #[error(transparent)]
+    Query(#[from] CellError),
+    /// The `COMMIT` failed, or [`commit_checked`]'s pre-commit probe found
+    /// the transaction aborted and rolled it back.
+    #[error("commit failed")]
+    Commit(#[source] DbError),
+}
+
 /// Release one link's waiting reservations in their own transaction, or
 /// `None` when the link is busy, no longer qualifies, or had nothing left
 /// to release.
@@ -160,8 +174,8 @@ async fn sweep_link(
     client: &mut Object,
     audit: &Arc<AuditEmitter>,
     invite_id: Uuid,
-) -> Result<Option<CordInviteExpireReleased>, CellError> {
-    let tx = client.transaction().await?;
+) -> Result<Option<CordInviteExpireReleased>, SweepLinkError> {
+    let tx = client.transaction().await.map_err(CellError::Db)?;
     // dropping `tx` uncommitted rolls it back
     let Some(cord_id) = query_cord_invite_try_lock_expired_beyond(
         &tx,
@@ -195,8 +209,9 @@ async fn sweep_link(
             })),
             &post_commit,
         )
-        .await?;
-    tx.commit().await?;
+        .await
+        .map_err(CellError::Db)?;
+    commit_checked(tx).await.map_err(SweepLinkError::Commit)?;
     post_commit.drain_all().await;
     Ok(Some(CordInviteExpireReleased {
         cord_id,
