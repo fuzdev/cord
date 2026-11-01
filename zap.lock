@@ -1,7 +1,7 @@
 {
   "version": 2,
   "toolchain": {
-    "fgro_blake3": "d5d10656aab9b1126949c67260afe0f06fbb208230306efd245186f2c4462c22"
+    "fgro_blake3": "2f8292615ebdc52212c7c3798ca6d3038e0d23b64a98746c8948a4a137721823"
   },
   "entries": {}
 }
