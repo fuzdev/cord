@@ -386,6 +386,8 @@ export default (zap: ZapBuilder): void => {
 				working_directory: CURRENT_LINK,
 				read_write_paths: [CONFIG_DIR],
 				env_file: `${SHARED_DIR}/.env.production`,
+				after: ['network.target', 'postgresql.service'],
+				wants: ['postgresql.service'],
 				hardening_comment: `# Additional sandboxing for an Axum/tokio daemon over local PostgreSQL (TCP).
 # AF_UNIX+AF_INET[6] cover the TCP listener and the Postgres connection.
 # The only write is deleting the claimed bootstrap token in the config dir.

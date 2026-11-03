@@ -77,9 +77,8 @@ release, restarts `cordd`, and polls `https://<domain>/ready`. `/ready`
 answers 200 only once `cordd` is up and the database schema matches the
 release, so a release that doesn't get there is rolled back. The deploy
 refuses when the host has drifted from `zap.ts` (run `deno task apply
---wetrun` first). Commit before deploying: a dirty tree only warns, ships
-under the last commit's hash, and is skipped entirely when that hash is
-already live (`--force` deploys it tagged `-dirty`).
+--wetrun` first). Commit before deploying: a wetrun from a dirty tree is
+refused; `--force` ships it as its own release, `<hash>-dirty-<id>`.
 
 ## 5. Claim the instance
 
