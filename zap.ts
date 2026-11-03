@@ -36,8 +36,8 @@
 
 import type { ZapBuilder } from '@fuzdev/zap/zap.ts';
 import { fail2ban_jail } from '@fuzdev/zap/recipe_fail2ban.ts';
-import { ssh_hardening } from '@fuzdev/zap/recipe_ssh.ts';
-import { debian_ssh_reload } from '@fuzdev/zap/recipe_debian_ssh.ts';
+import { SSHD_VALIDATE, ssh_hardening, ssh_hardening_verify } from '@fuzdev/zap/recipe_ssh.ts';
+import { debian_ssh_service } from '@fuzdev/zap/recipe_debian_ssh.ts';
 import {
 	ssl_params,
 	rate_limit_zone,
@@ -569,19 +569,41 @@ export default (zap: ZapBuilder): void => {
 		depends_on: ['nginx-service']
 	});
 
+	// `00-` so the hardening sorts before any other drop-in: sshd keeps the first
+	// value it reads, so a later one (a cloud image's `50-cloud-init.conf`) can't
+	// re-enable password auth
 	zap.file({
 		id: 'ssh-hardened-config',
 		name: 'SSH hardening config',
-		path: '/etc/ssh/sshd_config.d/99-hardened.conf',
+		path: '/etc/ssh/sshd_config.d/00-hardened.conf',
 		content: { type: 'inline', content: ssh_hardening({ user: DEPLOY_USER }) },
+		validate: SSHD_VALIDATE,
 		depends_on: ['verify-pre-hardening']
 	});
 
+	// The drop-in's earlier name; removed after its replacement is in place.
+	// TODO: drop once every host has converged off it
 	zap.script({
-		id: 'ssh-reload',
-		name: 'Reload SSH with hardened config',
-		...debian_ssh_reload(),
+		id: 'ssh-old-hardened-config-removed',
+		name: 'Remove the old 99-hardened.conf SSH drop-in',
+		check: "sudo test ! -e '/etc/ssh/sshd_config.d/99-hardened.conf'",
+		run: "sudo rm -f -- '/etc/ssh/sshd_config.d/99-hardened.conf'",
 		depends_on: ['ssh-hardened-config']
+	});
+
+	zap.service({
+		id: 'ssh-service',
+		name: 'sshd',
+		...debian_ssh_service({ reload_on: ['ssh-hardened-config', 'ssh-old-hardened-config-removed'] }),
+		depends_on: ['ssh-hardened-config', 'ssh-old-hardened-config-removed']
+	});
+
+	// Re-asserts the hardening in sshd's effective config on every plan
+	zap.verify({
+		id: 'ssh-hardening-valid',
+		name: 'Effective sshd config is hardened',
+		...ssh_hardening_verify(),
+		depends_on: ['ssh-service']
 	});
 
 	//
