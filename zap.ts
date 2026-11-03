@@ -52,7 +52,10 @@ import {
 import { debian_web_firewall } from '@fuzdev/zap/recipe_debian_firewall.ts';
 import { hardened_systemd_unit } from '@fuzdev/zap/recipe_debian_systemd.ts';
 import { postgres_apt_repo } from '@fuzdev/zap/recipe_debian_postgres.ts';
-import { debian_certbot_stop_nginx } from '@fuzdev/zap/recipe_debian_certbot.ts';
+import {
+	debian_certbot_reload_nginx_hook,
+	debian_certbot_stop_nginx
+} from '@fuzdev/zap/recipe_debian_certbot.ts';
 import { certbot_standalone_issue, certbot_webroot_switch } from '@fuzdev/zap/recipe_certbot.ts';
 import { spa_csp } from '@fuzdev/zap/recipe_csp.ts';
 import { fuz_app_bootstrap_token } from '@fuzdev/zap/recipe_bootstrap.ts';
@@ -451,6 +454,15 @@ export default (zap: ZapBuilder): void => {
 		name: 'Switch cert renewal to webroot',
 		...certbot_webroot_switch(),
 		depends_on: ['certbot-webroot-dir', 'nginx-service']
+	});
+
+	// certbot.timer renews but reloads nothing, so nginx would keep serving the old
+	// certificate: certbot runs this hook after each renewal to reload it.
+	zap.file({
+		id: 'certbot-deploy-hook',
+		name: 'Reload nginx after certbot renews',
+		...debian_certbot_reload_nginx_hook(),
+		depends_on: ['certbot']
 	});
 
 	//
