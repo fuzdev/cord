@@ -18,7 +18,7 @@
  *   the kernel and namespace restrictions; the one writable path is the
  *   config dir, since `cordd` deletes the bootstrap token once it's claimed)
  * - fail2ban and ufw
- * - PostgreSQL over TCP localhost (trust auth for the loopback `cord` role)
+ * - PostgreSQL over the Unix socket as the service account (peer auth)
  *
  * ## SSH lockout prevention
  *
@@ -48,7 +48,7 @@ import {
 } from '@fuzdev/zap/recipe_nginx.ts';
 import {
 	debian_nginx_spa_site,
-	debian_nginx_remove_default
+	debian_nginx_catch_all
 } from '@fuzdev/zap/recipe_debian_nginx.ts';
 import { debian_web_firewall } from '@fuzdev/zap/recipe_debian_firewall.ts';
 import { hardened_systemd_unit } from '@fuzdev/zap/recipe_debian_systemd.ts';
@@ -392,11 +392,11 @@ export default (zap: ZapBuilder): void => {
 				env_file: `${SHARED_DIR}/.env.production`,
 				after: ['network.target', 'postgresql.service'],
 				wants: ['postgresql.service'],
-				hardening_comment: `# Additional sandboxing for an Axum/tokio daemon over local PostgreSQL (TCP).
-# AF_UNIX+AF_INET[6] cover the TCP listener and the Postgres connection.
+				hardening_comment: `# Additional sandboxing for an Axum/tokio daemon over local PostgreSQL (its Unix
+# socket). AF_UNIX+AF_INET[6] cover the TCP listener and the Postgres socket.
 # The only write is deleting the claimed bootstrap token in the config dir.
-# MemoryDenyWriteExecute / SystemCallFilter stay off, as on the other
-# fuz_app hosts, for the argon2/tokio runtime.`
+# MemoryDenyWriteExecute stays off, as on the other fuz_app hosts, for the
+# argon2/tokio runtime.`
 			})
 		},
 		depends_on: ['env-production']
@@ -526,11 +526,19 @@ export default (zap: ZapBuilder): void => {
 	});
 
 	// One-time: remove the default site, then validate the config
+	const nginx_catch_all = debian_nginx_catch_all();
 	zap.script({
 		id: 'nginx-remove-default',
 		name: 'Remove default nginx site',
-		...debian_nginx_remove_default(),
+		...nginx_catch_all.remove_default,
 		depends_on: ['nginx-enabled']
+	});
+	// A host name no site serves gets no answer (444, and no TLS handshake)
+	zap.file({
+		id: 'nginx-catch-all',
+		name: 'nginx catch-all server',
+		...nginx_catch_all.catch_all,
+		depends_on: ['nginx-remove-default']
 	});
 
 	zap.service({
@@ -539,8 +547,14 @@ export default (zap: ZapBuilder): void => {
 		service: 'nginx',
 		enabled: true,
 		running: true,
-		reload_on: ['nginx-config', 'nginx-ssl-params', 'nginx-rate-limit', 'nginx-enabled'],
-		depends_on: ['nginx-remove-default']
+		reload_on: [
+			'nginx-config',
+			'nginx-ssl-params',
+			'nginx-rate-limit',
+			'nginx-enabled',
+			'nginx-catch-all'
+		],
+		depends_on: ['nginx-catch-all']
 	});
 
 	// Re-checks the on-disk config with `nginx -t` on every plan

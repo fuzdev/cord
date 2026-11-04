@@ -118,7 +118,7 @@ signup invites.
   back without undoing them, so every migration has to be additive.
 - **Voice and video relay** (a TURN server) arrives with the live room;
   this config doesn't install one yet.
-- **PostgreSQL** trusts the `cord` role over localhost, which is fine on a
-  host that runs nothing else.
+- **PostgreSQL** is reached over its Unix socket as the `cord` account (peer
+  auth), so no password is involved.
 - **nginx**: zap runs `nginx -t` on every config write and on every plan.
 - **Logs**: `journalctl -u cordd`.
