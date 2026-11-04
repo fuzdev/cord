@@ -40,6 +40,7 @@ import { SSHD_VALIDATE, ssh_hardening, ssh_hardening_verify } from '@fuzdev/zap/
 import { debian_ssh_service } from '@fuzdev/zap/recipe_debian_ssh.ts';
 import {
 	ssl_params,
+	SSL_PARAMS_PATH,
 	rate_limit_zone,
 	RATE_LIMIT_ZONE,
 	NGINX_VALIDATE,
@@ -478,7 +479,7 @@ export default (zap: ZapBuilder): void => {
 	zap.file({
 		id: 'nginx-ssl-params',
 		name: 'nginx shared SSL parameters',
-		path: '/etc/nginx/snippets/ssl_params.conf',
+		path: SSL_PARAMS_PATH,
 		content: { type: 'inline', content: ssl_params() },
 		validate: NGINX_VALIDATE,
 		depends_on: ['nginx']
