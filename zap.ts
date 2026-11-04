@@ -449,11 +449,14 @@ export default (zap: ZapBuilder): void => {
 	});
 
 	// Idempotent: once the renewal config records webroot, the check passes.
+	// The switch re-issues the certificate, and certbot runs deploy hooks only for
+	// `renew` before 5.3, so it runs the reload hook itself.
+	const certbot_reload_hook = debian_certbot_reload_nginx_hook();
 	zap.script({
 		id: 'certbot-renewal-webroot',
 		name: 'Switch cert renewal to webroot',
-		...certbot_webroot_switch(),
-		depends_on: ['certbot-webroot-dir', 'nginx-service']
+		...certbot_webroot_switch({ deploy_hook: certbot_reload_hook }),
+		depends_on: ['certbot-webroot-dir', 'nginx-service', 'certbot-deploy-hook']
 	});
 
 	// certbot.timer renews but reloads nothing, so nginx would keep serving the old
@@ -461,7 +464,7 @@ export default (zap: ZapBuilder): void => {
 	zap.file({
 		id: 'certbot-deploy-hook',
 		name: 'Reload nginx after certbot renews',
-		...debian_certbot_reload_nginx_hook(),
+		...certbot_reload_hook,
 		depends_on: ['certbot']
 	});
 
