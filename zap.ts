@@ -572,6 +572,9 @@ export default (zap: ZapBuilder): void => {
 		depends_on: ['nginx-service']
 	});
 
+	// One options object for the drop-in and its verify, so the two can't drift
+	const hardening = { user: DEPLOY_USER };
+
 	// `00-` so the hardening sorts before any other drop-in: sshd keeps the first
 	// value it reads, so a later one (a cloud image's `50-cloud-init.conf`) can't
 	// re-enable password auth
@@ -579,7 +582,7 @@ export default (zap: ZapBuilder): void => {
 		id: 'ssh-hardened-config',
 		name: 'SSH hardening config',
 		path: '/etc/ssh/sshd_config.d/00-hardened.conf',
-		content: { type: 'inline', content: ssh_hardening({ user: DEPLOY_USER }) },
+		content: { type: 'inline', content: ssh_hardening(hardening) },
 		validate: SSHD_VALIDATE,
 		depends_on: ['verify-pre-hardening']
 	});
@@ -605,7 +608,7 @@ export default (zap: ZapBuilder): void => {
 	zap.verify({
 		id: 'ssh-hardening-valid',
 		name: 'Effective sshd config is hardened',
-		...ssh_hardening_verify(),
+		...ssh_hardening_verify(hardening),
 		depends_on: ['ssh-service']
 	});
 
