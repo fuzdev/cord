@@ -9,6 +9,7 @@ import * as role_grant_offer_specs from '@fuzdev/fuz_app/auth/role_grant_offer_a
 import * as cord_specs from './cord_action_specs.ts';
 import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
 import { z } from 'zod';
+import type { Infer } from '@fuzdev/fuz_schema/schema.ts';
 import type {
 	ActionEventRemoteNotificationData,
 	ActionEventRequestResponseData
@@ -185,7 +186,7 @@ export interface ActionInputs {
 	>;
 	account_token_create: z.infer<typeof account_specs.account_token_create_action_spec.input>;
 	account_token_list: z.infer<typeof account_specs.account_token_list_action_spec.input>;
-	account_token_revoke: z.infer<typeof account_specs.account_token_revoke_action_spec.input>;
+	account_token_revoke: Infer<typeof account_specs.account_token_revoke_action_spec.input>;
 	admin_account_list: z.infer<typeof admin_specs.admin_account_list_action_spec.input>;
 	admin_session_list: z.infer<typeof admin_specs.admin_session_list_action_spec.input>;
 	admin_session_revoke_all: z.infer<typeof admin_specs.admin_session_revoke_all_action_spec.input>;
@@ -305,7 +306,7 @@ export interface ActionOutputs {
 	>;
 	account_token_create: z.infer<typeof account_specs.account_token_create_action_spec.output>;
 	account_token_list: z.infer<typeof account_specs.account_token_list_action_spec.output>;
-	account_token_revoke: z.infer<typeof account_specs.account_token_revoke_action_spec.output>;
+	account_token_revoke: Infer<typeof account_specs.account_token_revoke_action_spec.output>;
 	admin_account_list: z.infer<typeof admin_specs.admin_account_list_action_spec.output>;
 	admin_session_list: z.infer<typeof admin_specs.admin_session_list_action_spec.output>;
 	admin_session_revoke_all: z.infer<typeof admin_specs.admin_session_revoke_all_action_spec.output>;
