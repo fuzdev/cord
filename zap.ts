@@ -90,11 +90,12 @@ const CURRENT_LINK = `${APP_DIR}/current`;
 // The host's env file: the shared fuz_app base, then cord's own lines.
 // `CORD_TRUSTED_PROXIES` is written by hand because zap's trusted-proxies
 // recipe only emits `FUZ_<infix>_TRUSTED_PROXIES`, a name `cordd` doesn't read.
-const ENV_TEMPLATE = `${fuz_app_env_base({
+const ENV_BASE = {
 	user: DEPLOY_USER,
 	service: DATABASE_NAME,
 	config_dir: CONFIG_DIR
-})}
+};
+const ENV_EXTRA = `
 # Security - allowed origins for API requests
 FUZ_ALLOWED_ORIGINS=https://{{domain}}
 
@@ -362,15 +363,20 @@ export default (zap: ZapBuilder): void => {
 		id: 'env-production',
 		name: 'Production environment',
 		path: `${SHARED_DIR}/.env.production`,
-		content: {
-			type: 'template',
-			template: ENV_TEMPLATE,
-			vars: {
-				port: PORT,
-				domain: zap.env('DEPLOY_DOMAIN'),
-				cookie_keys: zap.env('SECRET_FUZ_COOKIE_KEYS')
+		content: fuz_app_env_base({
+			...ENV_BASE,
+			port: PORT,
+			cookie_keys: zap.env('SECRET_FUZ_COOKIE_KEYS'),
+			extra: {
+				template: ENV_EXTRA,
+				vars: {
+					domain: zap.env('DEPLOY_DOMAIN')
+				},
+				kinds: {
+					domain: 'hostname'
+				}
 			}
-		},
+		}),
 		mode: '600',
 		owner: DEPLOY_USER,
 		group: DEPLOY_USER,
@@ -498,21 +504,16 @@ export default (zap: ZapBuilder): void => {
 		id: 'nginx-config',
 		name: 'nginx site config',
 		path: `/etc/nginx/sites-available/${zap.env('DEPLOY_DOMAIN')}`,
-		content: {
-			type: 'template',
-			template: debian_nginx_spa_site({
-				root: `${CURRENT_LINK}/build`,
-				csp: CSP,
-				client_max_body_size: '1m',
-				client_max_body_size_comment: 'cordd takes no uploads; its JSON bodies stay small.',
-				spa_try_files: SPA_TRY_FILES,
-				extra_locations: EXTRA_LOCATIONS
-			}),
-			vars: {
-				domain: zap.env('DEPLOY_DOMAIN'),
-				port: PORT
-			}
-		},
+		content: debian_nginx_spa_site({
+			domain: zap.env('DEPLOY_DOMAIN'),
+			port: PORT,
+			root: `${CURRENT_LINK}/build`,
+			csp: CSP,
+			client_max_body_size: '1m',
+			client_max_body_size_comment: 'cordd takes no uploads; its JSON bodies stay small.',
+			spa_try_files: SPA_TRY_FILES,
+			extra_locations: EXTRA_LOCATIONS
+		}),
 		validate: NGINX_VALIDATE,
 		depends_on: ['nginx', 'ssl-certificate', 'nginx-ssl-params', 'nginx-rate-limit']
 	});
