@@ -55,9 +55,9 @@ import { hardened_systemd_unit } from '@fuzdev/zap/recipe_debian_systemd.ts';
 import { postgres_apt_repo } from '@fuzdev/zap/recipe_debian_postgres.ts';
 import {
 	debian_certbot_reload_nginx_hook,
-	debian_certbot_stop_nginx
+	debian_certbot_standalone_issue
 } from '@fuzdev/zap/recipe_debian_certbot.ts';
-import { certbot_standalone_issue, certbot_webroot_switch } from '@fuzdev/zap/recipe_certbot.ts';
+import { certbot_webroot_switch } from '@fuzdev/zap/recipe_certbot.ts';
 import { spa_csp } from '@fuzdev/zap/recipe_csp.ts';
 import { fuz_app_bootstrap_token } from '@fuzdev/zap/recipe_bootstrap.ts';
 import { fuz_app_env_base } from '@fuzdev/zap/recipe_env.ts';
@@ -442,17 +442,10 @@ export default (zap: ZapBuilder): void => {
 	});
 
 	zap.script({
-		id: 'stop-nginx-for-certbot',
-		name: 'Stop nginx for certbot standalone (fresh-host bootstrap only)',
-		...debian_certbot_stop_nginx(),
-		depends_on: ['nginx', 'certbot']
-	});
-
-	zap.script({
 		id: 'ssl-certificate',
 		name: 'SSL certificate via certbot (bootstrap)',
-		...certbot_standalone_issue(),
-		depends_on: ['stop-nginx-for-certbot']
+		...debian_certbot_standalone_issue(),
+		depends_on: ['nginx', 'certbot']
 	});
 
 	// Idempotent: once the renewal config records webroot, the check passes.
