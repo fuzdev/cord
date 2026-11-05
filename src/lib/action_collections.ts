@@ -203,26 +203,26 @@ export interface ActionInputs {
 	account_undelete: z.infer<typeof admin_specs.account_undelete_action_spec.input>;
 	app_settings_get: z.infer<typeof admin_specs.app_settings_get_action_spec.input>;
 	app_settings_update: z.infer<typeof admin_specs.app_settings_update_action_spec.input>;
-	role_grant_offer_create: z.infer<
+	role_grant_offer_create: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_create_action_spec.input
 	>;
-	role_grant_offer_accept: z.infer<
+	role_grant_offer_accept: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_accept_action_spec.input
 	>;
-	role_grant_offer_decline: z.infer<
+	role_grant_offer_decline: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_decline_action_spec.input
 	>;
-	role_grant_offer_retract: z.infer<
+	role_grant_offer_retract: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_retract_action_spec.input
 	>;
-	role_grant_offer_list: z.infer<
+	role_grant_offer_list: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_list_action_spec.input
 	>;
-	role_grant_offer_history: z.infer<
+	role_grant_offer_history: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_history_action_spec.input
 	>;
-	role_grant_revoke: z.infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.input>;
-	role_grant_assign: z.infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.input>;
+	role_grant_revoke: Infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.input>;
+	role_grant_assign: Infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.input>;
 	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.input>;
 	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.input>;
 	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.input>;
@@ -323,26 +323,26 @@ export interface ActionOutputs {
 	account_undelete: z.infer<typeof admin_specs.account_undelete_action_spec.output>;
 	app_settings_get: z.infer<typeof admin_specs.app_settings_get_action_spec.output>;
 	app_settings_update: z.infer<typeof admin_specs.app_settings_update_action_spec.output>;
-	role_grant_offer_create: z.infer<
+	role_grant_offer_create: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_create_action_spec.output
 	>;
-	role_grant_offer_accept: z.infer<
+	role_grant_offer_accept: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_accept_action_spec.output
 	>;
-	role_grant_offer_decline: z.infer<
+	role_grant_offer_decline: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_decline_action_spec.output
 	>;
-	role_grant_offer_retract: z.infer<
+	role_grant_offer_retract: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_retract_action_spec.output
 	>;
-	role_grant_offer_list: z.infer<
+	role_grant_offer_list: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_list_action_spec.output
 	>;
-	role_grant_offer_history: z.infer<
+	role_grant_offer_history: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_history_action_spec.output
 	>;
-	role_grant_revoke: z.infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.output>;
-	role_grant_assign: z.infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.output>;
+	role_grant_revoke: Infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.output>;
+	role_grant_assign: Infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.output>;
 	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.output>;
 	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.output>;
 	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.output>;
