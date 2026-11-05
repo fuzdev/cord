@@ -187,22 +187,22 @@ export interface ActionInputs {
 	account_token_create: z.infer<typeof account_specs.account_token_create_action_spec.input>;
 	account_token_list: z.infer<typeof account_specs.account_token_list_action_spec.input>;
 	account_token_revoke: Infer<typeof account_specs.account_token_revoke_action_spec.input>;
-	admin_account_list: z.infer<typeof admin_specs.admin_account_list_action_spec.input>;
-	admin_session_list: z.infer<typeof admin_specs.admin_session_list_action_spec.input>;
-	admin_session_revoke_all: z.infer<typeof admin_specs.admin_session_revoke_all_action_spec.input>;
-	admin_token_revoke_all: z.infer<typeof admin_specs.admin_token_revoke_all_action_spec.input>;
-	audit_log_list: z.infer<typeof admin_specs.audit_log_list_action_spec.input>;
-	audit_log_role_grant_history: z.infer<
+	admin_account_list: Infer<typeof admin_specs.admin_account_list_action_spec.input>;
+	admin_session_list: Infer<typeof admin_specs.admin_session_list_action_spec.input>;
+	admin_session_revoke_all: Infer<typeof admin_specs.admin_session_revoke_all_action_spec.input>;
+	admin_token_revoke_all: Infer<typeof admin_specs.admin_token_revoke_all_action_spec.input>;
+	audit_log_list: Infer<typeof admin_specs.audit_log_list_action_spec.input>;
+	audit_log_role_grant_history: Infer<
 		typeof admin_specs.audit_log_role_grant_history_action_spec.input
 	>;
-	invite_create: z.infer<typeof admin_specs.invite_create_action_spec.input>;
-	invite_list: z.infer<typeof admin_specs.invite_list_action_spec.input>;
-	invite_delete: z.infer<typeof admin_specs.invite_delete_action_spec.input>;
-	account_delete: z.infer<typeof admin_specs.account_delete_action_spec.input>;
-	account_purge: z.infer<typeof admin_specs.account_purge_action_spec.input>;
-	account_undelete: z.infer<typeof admin_specs.account_undelete_action_spec.input>;
-	app_settings_get: z.infer<typeof admin_specs.app_settings_get_action_spec.input>;
-	app_settings_update: z.infer<typeof admin_specs.app_settings_update_action_spec.input>;
+	invite_create: Infer<typeof admin_specs.invite_create_action_spec.input>;
+	invite_list: Infer<typeof admin_specs.invite_list_action_spec.input>;
+	invite_delete: Infer<typeof admin_specs.invite_delete_action_spec.input>;
+	account_delete: Infer<typeof admin_specs.account_delete_action_spec.input>;
+	account_purge: Infer<typeof admin_specs.account_purge_action_spec.input>;
+	account_undelete: Infer<typeof admin_specs.account_undelete_action_spec.input>;
+	app_settings_get: Infer<typeof admin_specs.app_settings_get_action_spec.input>;
+	app_settings_update: Infer<typeof admin_specs.app_settings_update_action_spec.input>;
 	role_grant_offer_create: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_create_action_spec.input
 	>;
@@ -309,20 +309,20 @@ export interface ActionOutputs {
 	account_token_revoke: Infer<typeof account_specs.account_token_revoke_action_spec.output>;
 	admin_account_list: z.infer<typeof admin_specs.admin_account_list_action_spec.output>;
 	admin_session_list: z.infer<typeof admin_specs.admin_session_list_action_spec.output>;
-	admin_session_revoke_all: z.infer<typeof admin_specs.admin_session_revoke_all_action_spec.output>;
-	admin_token_revoke_all: z.infer<typeof admin_specs.admin_token_revoke_all_action_spec.output>;
+	admin_session_revoke_all: Infer<typeof admin_specs.admin_session_revoke_all_action_spec.output>;
+	admin_token_revoke_all: Infer<typeof admin_specs.admin_token_revoke_all_action_spec.output>;
 	audit_log_list: z.infer<typeof admin_specs.audit_log_list_action_spec.output>;
 	audit_log_role_grant_history: z.infer<
 		typeof admin_specs.audit_log_role_grant_history_action_spec.output
 	>;
 	invite_create: z.infer<typeof admin_specs.invite_create_action_spec.output>;
 	invite_list: z.infer<typeof admin_specs.invite_list_action_spec.output>;
-	invite_delete: z.infer<typeof admin_specs.invite_delete_action_spec.output>;
-	account_delete: z.infer<typeof admin_specs.account_delete_action_spec.output>;
-	account_purge: z.infer<typeof admin_specs.account_purge_action_spec.output>;
-	account_undelete: z.infer<typeof admin_specs.account_undelete_action_spec.output>;
-	app_settings_get: z.infer<typeof admin_specs.app_settings_get_action_spec.output>;
-	app_settings_update: z.infer<typeof admin_specs.app_settings_update_action_spec.output>;
+	invite_delete: Infer<typeof admin_specs.invite_delete_action_spec.output>;
+	account_delete: Infer<typeof admin_specs.account_delete_action_spec.output>;
+	account_purge: Infer<typeof admin_specs.account_purge_action_spec.output>;
+	account_undelete: Infer<typeof admin_specs.account_undelete_action_spec.output>;
+	app_settings_get: Infer<typeof admin_specs.app_settings_get_action_spec.output>;
+	app_settings_update: Infer<typeof admin_specs.app_settings_update_action_spec.output>;
 	role_grant_offer_create: Infer<
 		typeof role_grant_offer_specs.role_grant_offer_create_action_spec.output
 	>;
