@@ -10,7 +10,7 @@
  * @module
  */
 
-import { create_role_schema } from '@fuzdev/fuz_app/auth/role_schema.ts';
+import { create_role_registry } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import { create_session_config } from '@fuzdev/fuz_app/auth/session_cookie.ts';
 import {
 	create_rust_spine_consumer_rpc_endpoints,
@@ -29,7 +29,7 @@ export const cord_session_options = create_session_config(CORD_SESSION_COOKIE_NA
  * cord's role registry, the TS twin of `cord_role_registry`: the cord-scoped
  * membership roles, with no grant path — only cord's own verbs confer them.
  */
-export const cord_roles = create_role_schema(
+export const cord_roles = create_role_registry(
 	CordRole.options.map((name) => ({ name, grant_paths: [] }))
 );
 
