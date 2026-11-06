@@ -590,10 +590,11 @@ async fn scenario_an_account_that_took_a_waiting_username(
         .redemption
         .signup_invite_id
         .expect("invite");
-    // the spine compares usernames lowercased
-    let drifter = seed_actor(pool, "Drifter").await;
+    // the spine stores usernames lowercase, and the redeem query compares
+    // the input case-insensitively
+    let drifter = seed_actor(pool, "drifter").await;
     assert!(matches!(
-        redeem(pool, &drifting, "drifter").await,
+        redeem(pool, &drifting, "Drifter").await,
         Err(CordInviteError::UsernameUnavailable)
     ));
     assert_eq!(
