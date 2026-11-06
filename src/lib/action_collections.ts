@@ -180,7 +180,7 @@ export interface ActionInputs {
 	'peer/ping': z.infer<typeof peer_ping_specs.peer_ping_action_spec.input>;
 	account_verify: z.infer<typeof account_specs.account_verify_action_spec.input>;
 	account_session_list: z.infer<typeof account_specs.account_session_list_action_spec.input>;
-	account_session_revoke: z.infer<typeof account_specs.account_session_revoke_action_spec.input>;
+	account_session_revoke: Infer<typeof account_specs.account_session_revoke_action_spec.input>;
 	account_session_revoke_all: z.infer<
 		typeof account_specs.account_session_revoke_all_action_spec.input
 	>;
@@ -298,8 +298,8 @@ export interface ActionOutputs {
 	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.output>;
 	cancel: z.infer<typeof cancel_specs.cancel_action_spec.output>;
 	'peer/ping': z.infer<typeof peer_ping_specs.peer_ping_action_spec.output>;
-	account_verify: z.infer<typeof account_specs.account_verify_action_spec.output>;
-	account_session_list: z.infer<typeof account_specs.account_session_list_action_spec.output>;
+	account_verify: Infer<typeof account_specs.account_verify_action_spec.output>;
+	account_session_list: Infer<typeof account_specs.account_session_list_action_spec.output>;
 	account_session_revoke: z.infer<typeof account_specs.account_session_revoke_action_spec.output>;
 	account_session_revoke_all: z.infer<
 		typeof account_specs.account_session_revoke_all_action_spec.output
@@ -307,16 +307,16 @@ export interface ActionOutputs {
 	account_token_create: z.infer<typeof account_specs.account_token_create_action_spec.output>;
 	account_token_list: z.infer<typeof account_specs.account_token_list_action_spec.output>;
 	account_token_revoke: Infer<typeof account_specs.account_token_revoke_action_spec.output>;
-	admin_account_list: z.infer<typeof admin_specs.admin_account_list_action_spec.output>;
-	admin_session_list: z.infer<typeof admin_specs.admin_session_list_action_spec.output>;
+	admin_account_list: Infer<typeof admin_specs.admin_account_list_action_spec.output>;
+	admin_session_list: Infer<typeof admin_specs.admin_session_list_action_spec.output>;
 	admin_session_revoke_all: Infer<typeof admin_specs.admin_session_revoke_all_action_spec.output>;
 	admin_token_revoke_all: Infer<typeof admin_specs.admin_token_revoke_all_action_spec.output>;
-	audit_log_list: z.infer<typeof admin_specs.audit_log_list_action_spec.output>;
-	audit_log_role_grant_history: z.infer<
+	audit_log_list: Infer<typeof admin_specs.audit_log_list_action_spec.output>;
+	audit_log_role_grant_history: Infer<
 		typeof admin_specs.audit_log_role_grant_history_action_spec.output
 	>;
-	invite_create: z.infer<typeof admin_specs.invite_create_action_spec.output>;
-	invite_list: z.infer<typeof admin_specs.invite_list_action_spec.output>;
+	invite_create: Infer<typeof admin_specs.invite_create_action_spec.output>;
+	invite_list: Infer<typeof admin_specs.invite_list_action_spec.output>;
 	invite_delete: Infer<typeof admin_specs.invite_delete_action_spec.output>;
 	account_delete: Infer<typeof admin_specs.account_delete_action_spec.output>;
 	account_purge: Infer<typeof admin_specs.account_purge_action_spec.output>;
