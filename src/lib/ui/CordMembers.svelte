@@ -165,7 +165,7 @@
 				{@const role_error = members_state.role_set.error(member.actor_id)}
 				{@const remove_error = members_state.remove.error(member.actor_id)}
 				<li class="py_xs" tabindex="-1" {@attach ref(row_els, member.actor_id)}>
-					<div class="row gap_sm flex-wrap:wrap">
+					<div class="row_wrap gap_sm">
 						<span>
 							<strong>{name_of(member)}</strong>
 							{#if member.display_name !== null && member.display_name !== member.username}
@@ -234,7 +234,7 @@
 					{#if confirming?.actor_id === member.actor_id}
 						{@const prompt_id = `role-confirm-${member.actor_id}`}
 						<!-- focus lands on the safe choice, and the group's label, the question, is read on entry -->
-						<div class="row gap_sm flex-wrap:wrap" role="group" aria-labelledby={prompt_id}>
+						<div class="row_wrap gap_sm" role="group" aria-labelledby={prompt_id}>
 							{#if confirming.kind === 'step_down'}
 								<p class="mb_0" id={prompt_id}>
 									Step down to {CORD_ROLE_LABELS[confirming.next]}? Only another owner can make you

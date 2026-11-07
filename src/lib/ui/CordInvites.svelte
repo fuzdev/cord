@@ -117,7 +117,7 @@
 				{@const minter = members && to_cord_invite_minter(invite, members)}
 				{@const revoke_error = invites_state.revoke.error(invite.id)}
 				<li class="py_xs">
-					<div class="row gap_sm flex-wrap:wrap">
+					<div class="row_wrap gap_sm">
 						<span class="chip" class:palette_b={invite.status === 'active'}>
 							{STATUS_LABELS[invite.status]}
 						</span>

@@ -74,7 +74,7 @@
 	onDestroy(() => void ctx?.close());
 </script>
 
-<div class="row gap_sm flex-wrap:wrap">
+<div class="row_wrap gap_sm">
 	<span>test tone</span>
 	{#each SIDES as side (side.label)}
 		<button

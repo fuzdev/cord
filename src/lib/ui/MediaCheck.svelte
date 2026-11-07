@@ -469,7 +469,7 @@
 			<div class="av-column">
 				<section class="panel p_md setup">
 					<h2 class="mb_lg">setup</h2>
-					<div class="row gap_md flex-wrap:wrap">
+					<div class="row_wrap gap_md">
 						{#if stream}
 							<button type="button" onclick={stop}>stop</button>
 						{:else}
@@ -580,7 +580,7 @@
 					</fieldset>
 					<fieldset>
 						<legend>mic processing</legend>
-						<div class="row gap_lg flex-wrap:wrap">
+						<div class="row_wrap gap_lg">
 							<label class="row">
 								<input type="checkbox" bind:checked={echo_cancellation} disabled={!!stream} /> echo
 								cancellation
@@ -605,7 +605,7 @@
 					</section>
 					<section class="panel p_md">
 						<h2 class="mb_lg">tracks</h2>
-						<div class="row gap_xl flex-wrap:wrap align-items:start">
+						<div class="row_wrap gap_xl align-items:start">
 							{#if audio_track_info}{@render track_table(audio_track_info)}{/if}
 							{#if video_track_info}{@render track_table(video_track_info)}{/if}
 						</div>
