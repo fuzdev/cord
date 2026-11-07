@@ -13,8 +13,7 @@
  */
 
 import { z } from 'zod';
-import { Username, Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
-import { ActingActor } from '@fuzdev/fuz_app/http/auth_shape.ts';
+import { ZodActingActor, ZodUsername, ZodUuid } from '@fuzdev/fuz_app/zod_schemas.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import type {
 	ActionSpecUnion,
@@ -215,7 +214,7 @@ export type CordName = z.infer<typeof CordName>;
 
 /** A cord as one of its members sees it, with the caller's role in it. */
 export const CordJson = z.strictObject({
-	id: Uuid,
+	id: ZodUuid,
 	name: z.string(),
 	role: CordRole,
 	created_at: z.string()
@@ -224,7 +223,7 @@ export type CordJson = z.infer<typeof CordJson>;
 
 /** A cord in the instance admins' ops list. */
 export const CordAdminJson = z.strictObject({
-	id: Uuid,
+	id: ZodUuid,
 	name: z.string(),
 	member_count: z.number().int(),
 	created_at: z.string()
@@ -244,12 +243,12 @@ export type CordInviteStatus = z.infer<typeof CordInviteStatus>;
  * token, which is shown once, when the link is created.
  */
 export const CordInviteJson = z.strictObject({
-	id: Uuid,
-	cord_id: Uuid,
+	id: ZodUuid,
+	cord_id: ZodUuid,
 	role: CordRole,
 	/** Whether the link can bring someone with no account onto the instance. */
 	admits_newcomers: z.boolean(),
-	created_by: Uuid.nullable(),
+	created_by: ZodUuid.nullable(),
 	created_at: z.string(),
 	expires_at: z.string().nullable(),
 	max_uses: z.number().int().nullable(),
@@ -265,7 +264,7 @@ export type CordInviteJson = z.infer<typeof CordInviteJson>;
 
 /** A member of a cord as its members see them. */
 export const CordMemberJson = z.strictObject({
-	actor_id: Uuid,
+	actor_id: ZodUuid,
 	username: z.string(),
 	/** The actor's name, or `null` when it's blank. */
 	display_name: z.string().nullable(),
@@ -297,22 +296,22 @@ export const CordCreateInput = z.strictObject({
 		description: "The new cord's name.",
 		invalid_reason: ERROR_CORD_NAME_INVALID
 	}),
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordCreateInput = z.infer<typeof CordCreateInput>;
 
 export const CordCreateOutput = z.strictObject({ cord: CordJson });
 export type CordCreateOutput = z.infer<typeof CordCreateOutput>;
 
-export const CordListInput = z.strictObject({ acting: ActingActor });
+export const CordListInput = z.strictObject({ acting: ZodActingActor });
 export type CordListInput = z.infer<typeof CordListInput>;
 
 export const CordListOutput = z.strictObject({ cords: z.array(CordJson) });
 export type CordListOutput = z.infer<typeof CordListOutput>;
 
 export const CordGetInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord to read.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: 'The cord to read.' }),
+	acting: ZodActingActor
 });
 export type CordGetInput = z.infer<typeof CordGetInput>;
 
@@ -320,26 +319,26 @@ export const CordGetOutput = z.strictObject({ cord: CordJson });
 export type CordGetOutput = z.infer<typeof CordGetOutput>;
 
 export const CordUpdateInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord to change.' }),
+	cord_id: ZodUuid.meta({ description: 'The cord to change.' }),
 	name: CordName.meta({
 		description: "The cord's new name.",
 		invalid_reason: ERROR_CORD_NAME_INVALID
 	}),
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordUpdateInput = z.infer<typeof CordUpdateInput>;
 
 export const CordUpdateOutput = z.strictObject({ cord: CordJson });
 export type CordUpdateOutput = z.infer<typeof CordUpdateOutput>;
 
-export const CordAdminListInput = z.strictObject({ acting: ActingActor });
+export const CordAdminListInput = z.strictObject({ acting: ZodActingActor });
 export type CordAdminListInput = z.infer<typeof CordAdminListInput>;
 
 export const CordAdminListOutput = z.strictObject({ cords: z.array(CordAdminJson) });
 export type CordAdminListOutput = z.infer<typeof CordAdminListOutput>;
 
 export const CordInviteCreateInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord the link invites to.' }),
+	cord_id: ZodUuid.meta({ description: 'The cord the link invites to.' }),
 	expires_in_seconds: z
 		.number()
 		.int()
@@ -358,7 +357,7 @@ export const CordInviteCreateInput = z.strictObject({
 		description:
 			'Whether the link can bring someone with no account onto the instance. Instance admins only, and the link needs both a use limit and an expiry, of at most `CORD_INVITE_NEWCOMER_EXPIRES_IN_SECONDS_MAX`.'
 	}),
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordInviteCreateInput = z.infer<typeof CordInviteCreateInput>;
 
@@ -370,8 +369,8 @@ export const CordInviteCreateOutput = z.strictObject({
 export type CordInviteCreateOutput = z.infer<typeof CordInviteCreateOutput>;
 
 export const CordInviteListInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord whose links to list.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: 'The cord whose links to list.' }),
+	acting: ZodActingActor
 });
 export type CordInviteListInput = z.infer<typeof CordInviteListInput>;
 
@@ -379,9 +378,9 @@ export const CordInviteListOutput = z.strictObject({ invites: z.array(CordInvite
 export type CordInviteListOutput = z.infer<typeof CordInviteListOutput>;
 
 export const CordInviteRevokeInput = z.strictObject({
-	cord_id: Uuid.meta({ description: "The link's cord." }),
-	invite_id: Uuid.meta({ description: 'The link to revoke.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: "The link's cord." }),
+	invite_id: ZodUuid.meta({ description: 'The link to revoke.' }),
+	acting: ZodActingActor
 });
 export type CordInviteRevokeInput = z.infer<typeof CordInviteRevokeInput>;
 
@@ -390,12 +389,12 @@ export type CordInviteRevokeOutput = z.infer<typeof CordInviteRevokeOutput>;
 
 export const CordInvitePreviewInput = z.strictObject({
 	token: CordInviteToken,
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordInvitePreviewInput = z.infer<typeof CordInvitePreviewInput>;
 
 /** A cord as a link's preview and redemption show it. */
-export const CordInviteCordJson = z.strictObject({ id: Uuid, name: z.string() });
+export const CordInviteCordJson = z.strictObject({ id: ZodUuid, name: z.string() });
 export type CordInviteCordJson = z.infer<typeof CordInviteCordJson>;
 
 export const CordInvitePreviewOutput = z.strictObject({
@@ -420,7 +419,7 @@ export type CordInvitePreviewOutput = z.infer<typeof CordInvitePreviewOutput>;
 /** No `acting`: redeem is public and never reads the caller. */
 export const CordInviteRedeemInput = z.strictObject({
 	token: CordInviteToken,
-	username: Username.meta({
+	username: ZodUsername.meta({
 		description: 'The username to reserve for the newcomer, who then signs up with it.',
 		invalid_reason: ERROR_CORD_INVITE_USERNAME_INVALID
 	})
@@ -438,7 +437,7 @@ export type CordInviteRedeemOutput = z.infer<typeof CordInviteRedeemOutput>;
 
 export const CordInviteAcceptInput = z.strictObject({
 	token: CordInviteToken,
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordInviteAcceptInput = z.infer<typeof CordInviteAcceptInput>;
 
@@ -450,8 +449,8 @@ export const CordInviteAcceptOutput = z.strictObject({
 export type CordInviteAcceptOutput = z.infer<typeof CordInviteAcceptOutput>;
 
 export const CordMemberListInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord whose members to list.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: 'The cord whose members to list.' }),
+	acting: ZodActingActor
 });
 export type CordMemberListInput = z.infer<typeof CordMemberListInput>;
 
@@ -459,10 +458,10 @@ export const CordMemberListOutput = z.strictObject({ members: z.array(CordMember
 export type CordMemberListOutput = z.infer<typeof CordMemberListOutput>;
 
 export const CordMemberRoleSetInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord.' }),
-	actor_id: Uuid.meta({ description: 'The member whose role to set.' }),
+	cord_id: ZodUuid.meta({ description: 'The cord.' }),
+	actor_id: ZodUuid.meta({ description: 'The member whose role to set.' }),
 	role: CordRole.meta({ description: 'Their new role.' }),
-	acting: ActingActor
+	acting: ZodActingActor
 });
 export type CordMemberRoleSetInput = z.infer<typeof CordMemberRoleSetInput>;
 
@@ -470,9 +469,9 @@ export const CordMemberRoleSetOutput = z.strictObject({ member: CordMemberJson }
 export type CordMemberRoleSetOutput = z.infer<typeof CordMemberRoleSetOutput>;
 
 export const CordMemberRemoveInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord.' }),
-	actor_id: Uuid.meta({ description: 'The member to remove.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: 'The cord.' }),
+	actor_id: ZodUuid.meta({ description: 'The member to remove.' }),
+	acting: ZodActingActor
 });
 export type CordMemberRemoveInput = z.infer<typeof CordMemberRemoveInput>;
 
@@ -480,8 +479,8 @@ export const CordMemberRemoveOutput = z.strictObject({ ok: z.literal(true) });
 export type CordMemberRemoveOutput = z.infer<typeof CordMemberRemoveOutput>;
 
 export const CordLeaveInput = z.strictObject({
-	cord_id: Uuid.meta({ description: 'The cord to leave.' }),
-	acting: ActingActor
+	cord_id: ZodUuid.meta({ description: 'The cord to leave.' }),
+	acting: ZodActingActor
 });
 export type CordLeaveInput = z.infer<typeof CordLeaveInput>;
 

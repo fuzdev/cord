@@ -50,7 +50,7 @@ import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { AsyncSlot } from '@fuzdev/fuz_app/ui/async_slot.svelte.ts';
 import { Password, PASSWORD_LENGTH_MIN } from '@fuzdev/fuz_app/auth/password.ts';
 import { parse } from '@fuzdev/fuz_schema/schema.ts';
-import { Username } from '@fuzdev/fuz_app/primitive_schemas.ts';
+import { ZodUsername } from '@fuzdev/fuz_app/zod_schemas.ts';
 import type { AsyncStatus } from '@fuzdev/fuz_util/async.ts';
 
 import type { FrontendActionsApi } from '../action_metatypes.ts';
@@ -332,7 +332,7 @@ export const check_cord_newcomer_fields = (
 	password: string,
 	password_confirm: string
 ): { field: CordNewcomerField; message: string } | null => {
-	if (!Username.safeParse(username.trim()).success) {
+	if (!ZodUsername.safeParse(username.trim()).success) {
 		return { field: 'username', message: CORD_USERNAME_RULE };
 	}
 	if (!parse(Password, password).ok) {

@@ -20,6 +20,6 @@ describe('all_cord_action_specs', () => {
 	});
 
 	test('the generated method enum covers the same methods', () => {
-		assert.deepEqual([...ActionMethod.options].sort(), [...methods].sort());
+		assert.deepEqual([...ActionMethod.def].sort(), [...methods].sort());
 	});
 });
