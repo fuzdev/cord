@@ -426,17 +426,19 @@ describe('the server twins', () => {
 
 describe('the output shapes', () => {
 	const id = '11111111-1111-4111-8111-111111111111';
+	// what both spines write: `to_char(... 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`
+	const AT = '2026-01-01T00:00:00Z';
 	const invite = {
 		id,
 		cord_id: id,
 		role: 'cord_member',
 		admits_newcomers: false,
 		created_by: id,
-		created_at: 't',
-		expires_at: 't',
+		created_at: AT,
+		expires_at: AT,
 		max_uses: 5,
 		use_count: 0,
-		revoked_at: 't',
+		revoked_at: AT,
 		status: 'active',
 		redemption_count: 0,
 		redemption_accepted_count: 0
@@ -445,12 +447,12 @@ describe('the output shapes', () => {
 	const cases = [
 		{
 			schema: CordJson,
-			value: { id, name: 'the porch', role: 'cord_owner', created_at: 't' },
+			value: { id, name: 'the porch', role: 'cord_owner', created_at: AT },
 			nullable: none
 		},
 		{
 			schema: CordAdminJson,
-			value: { id, name: 'the porch', member_count: 3, created_at: 't' },
+			value: { id, name: 'the porch', member_count: 3, created_at: AT },
 			nullable: none
 		},
 		{
@@ -486,14 +488,19 @@ describe('the output shapes', () => {
 		]) {
 			assert.ok(!is(CordInviteJson, { ...invite, ...bad }), JSON.stringify(bad));
 		}
-		assert.ok(!is(CordAdminJson, { id, name: 'n', member_count: 0.5, created_at: 't' }));
-		assert.ok(!is(CordJson, { id: 'x', name: 'n', role: 'cord_owner', created_at: 't' }));
+		assert.ok(!is(CordAdminJson, { id, name: 'n', member_count: 0.5, created_at: AT }));
+		// a timestamp is the wire's, UTC seconds with a `Z`
+		for (const at of ['t', '2026-01-01T00:00:00+00:00', '2026-01-01 00:00:00Z']) {
+			assert.ok(!is(CordJson, { id, name: 'n', role: 'cord_owner', created_at: at }), at);
+			assert.ok(!is(CordInviteJson, { ...invite, expires_at: at }), at);
+		}
+		assert.ok(!is(CordJson, { id: 'x', name: 'n', role: 'cord_owner', created_at: AT }));
 		assert.strictEqual(
 			parse_or_throw(CordJson, {
 				id: id.toUpperCase(),
 				name: 'n',
 				role: 'cord_owner',
-				created_at: 't'
+				created_at: AT
 			}).id,
 			id
 		);

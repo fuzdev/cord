@@ -36,7 +36,13 @@ import { meta } from '@fuzdev/fuz_schema/meta.ts';
 // bring in the `sensitivity` and `invalid_reason` keys of `SchemaMeta` (declaration merging)
 import type {} from '@fuzdev/fuz_app/sensitivity.ts';
 import type {} from '@fuzdev/fuz_app/schema_meta.ts';
-import { ActingActor, Username, Uuid, bounded_string } from '@fuzdev/fuz_app/primitive_schemas.ts';
+import {
+	ActingActor,
+	Timestamp,
+	Username,
+	Uuid,
+	bounded_string
+} from '@fuzdev/fuz_app/primitive_schemas.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
 import type {
 	ActionSpecUnion,
@@ -251,7 +257,7 @@ export const CordJson = object({
 	id: Uuid,
 	name: string,
 	role: CordRole,
-	created_at: string
+	created_at: Timestamp
 });
 export type CordJson = Infer<typeof CordJson>;
 
@@ -260,7 +266,7 @@ export const CordAdminJson = object({
 	id: Uuid,
 	name: string,
 	member_count: Int,
-	created_at: string
+	created_at: Timestamp
 });
 export type CordAdminJson = Infer<typeof CordAdminJson>;
 
@@ -283,11 +289,11 @@ export const CordInviteJson = object({
 	/** Whether the link can bring someone with no account onto the instance. */
 	admits_newcomers: boolean,
 	created_by: nullable(Uuid),
-	created_at: string,
-	expires_at: nullable(string),
+	created_at: Timestamp,
+	expires_at: nullable(Timestamp),
 	max_uses: nullable(Int),
 	use_count: Int,
-	revoked_at: nullable(string),
+	revoked_at: nullable(Timestamp),
 	status: CordInviteStatus,
 	/** How many times the link was redeemed for a newcomer; each spent a use. */
 	redemption_count: Int,
