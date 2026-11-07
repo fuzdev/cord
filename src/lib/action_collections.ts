@@ -8,7 +8,7 @@ import * as admin_specs from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import * as role_grant_offer_specs from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 import * as cord_specs from './cord_action_specs.ts';
 import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
-import type { Infer } from '@fuzdev/fuz_schema/schema.ts';
+import type { Infer, InferInput } from '@fuzdev/fuz_schema/schema.ts';
 import type {
 	ActionEventRemoteNotificationData,
 	ActionEventRequestResponseData
@@ -237,6 +237,78 @@ export interface ActionInputs {
 	cord_member_role_set: Infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
 	cord_member_remove: Infer<typeof cord_specs.cord_member_remove_action_spec.input>;
 	cord_leave: Infer<typeof cord_specs.cord_leave_action_spec.input>;
+}
+
+/**
+ * Action inputs as a caller passes them, indexed by method name:
+ * each input schema's input type, before the parse.
+ */
+export interface ActionCallInputs {
+	heartbeat: InferInput<typeof heartbeat_specs.heartbeat_action_spec.input>;
+	cancel: InferInput<typeof cancel_specs.cancel_action_spec.input>;
+	'peer/ping': InferInput<typeof peer_ping_specs.peer_ping_action_spec.input>;
+	account_verify: InferInput<typeof account_specs.account_verify_action_spec.input>;
+	account_session_list: InferInput<typeof account_specs.account_session_list_action_spec.input>;
+	account_session_revoke: InferInput<typeof account_specs.account_session_revoke_action_spec.input>;
+	account_session_revoke_all: InferInput<
+		typeof account_specs.account_session_revoke_all_action_spec.input
+	>;
+	account_token_create: InferInput<typeof account_specs.account_token_create_action_spec.input>;
+	account_token_list: InferInput<typeof account_specs.account_token_list_action_spec.input>;
+	account_token_revoke: InferInput<typeof account_specs.account_token_revoke_action_spec.input>;
+	admin_account_list: InferInput<typeof admin_specs.admin_account_list_action_spec.input>;
+	admin_session_list: InferInput<typeof admin_specs.admin_session_list_action_spec.input>;
+	admin_session_revoke_all: InferInput<
+		typeof admin_specs.admin_session_revoke_all_action_spec.input
+	>;
+	admin_token_revoke_all: InferInput<typeof admin_specs.admin_token_revoke_all_action_spec.input>;
+	audit_log_list: InferInput<typeof admin_specs.audit_log_list_action_spec.input>;
+	audit_log_role_grant_history: InferInput<
+		typeof admin_specs.audit_log_role_grant_history_action_spec.input
+	>;
+	invite_create: InferInput<typeof admin_specs.invite_create_action_spec.input>;
+	invite_list: InferInput<typeof admin_specs.invite_list_action_spec.input>;
+	invite_delete: InferInput<typeof admin_specs.invite_delete_action_spec.input>;
+	account_delete: InferInput<typeof admin_specs.account_delete_action_spec.input>;
+	account_purge: InferInput<typeof admin_specs.account_purge_action_spec.input>;
+	account_undelete: InferInput<typeof admin_specs.account_undelete_action_spec.input>;
+	app_settings_get: InferInput<typeof admin_specs.app_settings_get_action_spec.input>;
+	app_settings_update: InferInput<typeof admin_specs.app_settings_update_action_spec.input>;
+	role_grant_offer_create: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_create_action_spec.input
+	>;
+	role_grant_offer_accept: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_accept_action_spec.input
+	>;
+	role_grant_offer_decline: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_decline_action_spec.input
+	>;
+	role_grant_offer_retract: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_retract_action_spec.input
+	>;
+	role_grant_offer_list: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_list_action_spec.input
+	>;
+	role_grant_offer_history: InferInput<
+		typeof role_grant_offer_specs.role_grant_offer_history_action_spec.input
+	>;
+	role_grant_revoke: InferInput<typeof role_grant_offer_specs.role_grant_revoke_action_spec.input>;
+	role_grant_assign: InferInput<typeof role_grant_offer_specs.role_grant_assign_action_spec.input>;
+	cord_create: InferInput<typeof cord_specs.cord_create_action_spec.input>;
+	cord_list: InferInput<typeof cord_specs.cord_list_action_spec.input>;
+	cord_get: InferInput<typeof cord_specs.cord_get_action_spec.input>;
+	cord_update: InferInput<typeof cord_specs.cord_update_action_spec.input>;
+	cord_admin_list: InferInput<typeof cord_specs.cord_admin_list_action_spec.input>;
+	cord_invite_create: InferInput<typeof cord_specs.cord_invite_create_action_spec.input>;
+	cord_invite_list: InferInput<typeof cord_specs.cord_invite_list_action_spec.input>;
+	cord_invite_revoke: InferInput<typeof cord_specs.cord_invite_revoke_action_spec.input>;
+	cord_invite_preview: InferInput<typeof cord_specs.cord_invite_preview_action_spec.input>;
+	cord_invite_redeem: InferInput<typeof cord_specs.cord_invite_redeem_action_spec.input>;
+	cord_invite_accept: InferInput<typeof cord_specs.cord_invite_accept_action_spec.input>;
+	cord_member_list: InferInput<typeof cord_specs.cord_member_list_action_spec.input>;
+	cord_member_role_set: InferInput<typeof cord_specs.cord_member_role_set_action_spec.input>;
+	cord_member_remove: InferInput<typeof cord_specs.cord_member_remove_action_spec.input>;
+	cord_leave: InferInput<typeof cord_specs.cord_leave_action_spec.input>;
 }
 
 /**

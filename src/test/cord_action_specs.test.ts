@@ -7,7 +7,6 @@ import {
 	resolve_issues_invalid_reason,
 	schema_has_sensitive_field
 } from '@fuzdev/fuz_app/schema_meta.ts';
-import { parse_any } from '@fuzdev/fuz_app/schema_issues.ts';
 import { generate_valid_body } from '@fuzdev/fuz_app/testing/schema_generators.ts';
 
 import {
@@ -523,7 +522,7 @@ describe('the input contracts', () => {
 		for (const spec of all_cord_domain_action_specs) {
 			const body = { ...(generate_valid_body(spec.input) as object), acting };
 			assert.strictEqual(
-				parse_any(spec.input, body).ok,
+				parse(spec.input, body).ok,
 				spec !== cord_invite_redeem_action_spec,
 				spec.method
 			);
