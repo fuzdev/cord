@@ -1,7 +1,14 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { assert, describe, test } from 'vitest';
+import { is, parse, parse_or_throw } from '@fuzdev/fuz_schema/schema.ts';
+import { get_meta } from '@fuzdev/fuz_schema/meta.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
-import { schema_has_sensitive_field } from '@fuzdev/fuz_app/schema_meta.ts';
+import {
+	resolve_issues_invalid_reason,
+	schema_has_sensitive_field
+} from '@fuzdev/fuz_app/schema_meta.ts';
+import { parse_any } from '@fuzdev/fuz_app/schema_issues.ts';
+import { generate_valid_body } from '@fuzdev/fuz_app/testing/schema_generators.ts';
 
 import {
 	CORD_NAME_FORBIDDEN_CHAR_RANGES,
@@ -22,25 +29,34 @@ import {
 	cord_invite_preview_action_spec,
 	cord_invite_redeem_action_spec,
 	CordInviteRedeemInput,
-	CordInvitePreviewOutput
+	CordInvitePreviewOutput,
+	CordAdminJson,
+	CordCreateInput,
+	CordInviteCreateOutput,
+	CordInviteJson,
+	CordJson,
+	CordMemberJson,
+	CordUpdateInput,
+	ERROR_CORD_INVITE_USERNAME_INVALID,
+	ERROR_CORD_NAME_INVALID
 } from '#lib/cord_action_specs.ts';
 import * as cord_action_specs from '#lib/cord_action_specs.ts';
 import { all_cord_action_specs } from '#lib/action_specs.ts';
 
 describe('CordName', () => {
 	test('trims', () => {
-		assert.strictEqual(CordName.parse('  the porch  '), 'the porch');
+		assert.strictEqual(parse_or_throw(CordName, '  the porch  '), 'the porch');
 	});
 
 	test('refuses an empty or blank name', () => {
-		assert.isFalse(CordName.safeParse('').success);
-		assert.isFalse(CordName.safeParse('   ').success);
+		assert.isFalse(is(CordName, ''));
+		assert.isFalse(is(CordName, '   '));
 	});
 
 	test('counts characters as the server does, by code point', () => {
 		const longest = '🌙'.repeat(CORD_NAME_LENGTH_MAX);
-		assert.isTrue(CordName.safeParse(longest).success, 'astral characters count once each');
-		assert.isFalse(CordName.safeParse('a'.repeat(CORD_NAME_LENGTH_MAX + 1)).success);
+		assert.isTrue(is(CordName, longest), 'astral characters count once each');
+		assert.isFalse(is(CordName, 'a'.repeat(CORD_NAME_LENGTH_MAX + 1)));
 	});
 
 	test('refuses invisible, control, and line-breaking characters', () => {
@@ -69,19 +85,19 @@ describe('CordName', () => {
 			'reserved\uFFF0',
 			'tag\u{E0000}'
 		]) {
-			assert.isFalse(CordName.safeParse(name).success, JSON.stringify(name));
+			assert.isFalse(is(CordName, name), JSON.stringify(name));
 		}
 		// visible non-ASCII, interior spaces, and emoji variation selectors are fine
-		assert.strictEqual(CordName.parse('\u3000la cabaña 🌙\u00A0'), 'la cabaña 🌙');
-		assert.strictEqual(CordName.parse('☀\uFE0F'), '☀\uFE0F');
+		assert.strictEqual(parse_or_throw(CordName, '\u3000la cabaña 🌙\u00A0'), 'la cabaña 🌙');
+		assert.strictEqual(parse_or_throw(CordName, '☀\uFE0F'), '☀\uFE0F');
 	});
 
 	test('refuses lone surrogates, which the server cannot receive', () => {
 		for (const name of ['a\uD800b', 'a\uDFFFb', '\uDC00', 'x\uD83D']) {
-			assert.isFalse(CordName.safeParse(name).success, JSON.stringify(name));
+			assert.isFalse(is(CordName, name), JSON.stringify(name));
 		}
 		// a paired surrogate is an ordinary astral character
-		assert.strictEqual(CordName.parse('a\uD83C\uDF19b'), 'a🌙b');
+		assert.strictEqual(parse_or_throw(CordName, 'a\uD83C\uDF19b'), 'a🌙b');
 	});
 
 	test('allows join characters between letters and emoji', () => {
@@ -94,7 +110,7 @@ describe('CordName', () => {
 			'می\u200Cخواهم',
 			'ශ්\u200Dරී'
 		]) {
-			assert.strictEqual(CordName.parse(name), name, JSON.stringify(name));
+			assert.strictEqual(parse_or_throw(CordName, name), name, JSON.stringify(name));
 		}
 	});
 
@@ -110,16 +126,16 @@ describe('CordName', () => {
 			'a\u200D\u200Db',
 			'a\u200C\u200Db'
 		]) {
-			assert.isFalse(CordName.safeParse(name).success, JSON.stringify(name));
+			assert.isFalse(is(CordName, name), JSON.stringify(name));
 		}
 	});
 
 	test('trims as the server does', () => {
 		// JS `trim` would strip a leading BOM and keep U+0085; Rust's does the
 		// reverse. Both are refused before trimming, so the twins agree.
-		assert.isFalse(CordName.safeParse('\uFEFFx').success);
-		assert.isFalse(CordName.safeParse('\u0085x').success);
-		assert.strictEqual(CordName.parse('\u2000\u202F\u205F x \u1680\u00A0'), 'x');
+		assert.isFalse(is(CordName, '\uFEFFx'));
+		assert.isFalse(is(CordName, '\u0085x'));
+		assert.strictEqual(parse_or_throw(CordName, '\u2000\u202F\u205F x \u1680\u00A0'), 'x');
 	});
 
 	test('the forbidden ranges match the server and the Unicode-property formula', () => {
@@ -235,25 +251,22 @@ describe('cord action specs', () => {
 
 describe('CordInviteRedeemInput', () => {
 	test('takes a token and a username the instance would create, lowercased', () => {
-		assert.deepEqual(CordInviteRedeemInput.parse({ token: 't', username: 'NewComer' }), {
+		assert.deepEqual(parse_or_throw(CordInviteRedeemInput, { token: 't', username: 'NewComer' }), {
 			token: 't',
 			username: 'newcomer'
 		});
 		for (const username of ['ab', '1abc', 'abc_', 'a b c', 'ab.cd', 'x'.repeat(40)]) {
-			assert.ok(
-				!CordInviteRedeemInput.safeParse({ token: 't', username }).success,
-				JSON.stringify(username)
-			);
+			assert.ok(!is(CordInviteRedeemInput, { token: 't', username }), JSON.stringify(username));
 		}
 	});
 
 	test('takes no acting actor, since redeem never reads the caller', () => {
 		assert.ok(
-			!CordInviteRedeemInput.safeParse({
+			!is(CordInviteRedeemInput, {
 				token: 't',
 				username: 'newcomer',
 				acting: '11111111-1111-4111-8111-111111111111'
-			}).success
+			})
 		);
 	});
 });
@@ -267,22 +280,31 @@ describe('CordInvitePreviewOutput', () => {
 			cord: null,
 			role: null
 		};
-		assert.ok(CordInvitePreviewOutput.safeParse(preview).success);
+		assert.ok(is(CordInvitePreviewOutput, preview));
 		const { newcomers_open: _, ...without } = preview;
-		assert.ok(!CordInvitePreviewOutput.safeParse(without).success);
+		assert.ok(!is(CordInvitePreviewOutput, without));
 	});
 });
 
 describe('CordInviteToken', () => {
 	test('is bounded as the server looks tokens up', () => {
-		assert.ok(CordInviteToken.safeParse('x').success);
-		assert.ok(CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX)).success);
-		assert.ok(!CordInviteToken.safeParse('').success);
-		assert.ok(!CordInviteToken.safeParse('x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)).success);
+		assert.ok(is(CordInviteToken, 'x'));
+		assert.ok(is(CordInviteToken, 'x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX)));
+		assert.ok(!is(CordInviteToken, ''));
+		assert.ok(!is(CordInviteToken, 'x'.repeat(CORD_INVITE_TOKEN_LENGTH_MAX + 1)));
+	});
+
+	test('counts UTF-16 code units, as the server does', () => {
+		const emoji = '\u{1F600}';
+		assert.ok(is(CordInviteToken, emoji.repeat(CORD_INVITE_TOKEN_LENGTH_MAX / 2)), '128 units');
+		assert.ok(
+			!is(CordInviteToken, emoji.repeat(CORD_INVITE_TOKEN_LENGTH_MAX / 2 + 1)),
+			'130 units, 65 code points'
+		);
 	});
 
 	test('is secret, so cord_invite_preview carries it in a POST body, not a GET URL', () => {
-		assert.strictEqual(CordInviteToken.meta()?.sensitivity, 'secret');
+		assert.strictEqual(get_meta(CordInviteToken)?.sensitivity, 'secret');
 		assert.isTrue(schema_has_sensitive_field(cord_invite_preview_action_spec.input));
 	});
 });
@@ -291,21 +313,21 @@ describe('CordInviteCreateInput', () => {
 	const cord_id = '11111111-1111-4111-8111-111111111111';
 
 	test('takes optional, bounded limits', () => {
-		assert.ok(CordInviteCreateInput.safeParse({ cord_id }).success);
+		assert.ok(is(CordInviteCreateInput, { cord_id }));
 		assert.ok(
-			CordInviteCreateInput.safeParse({
+			is(CordInviteCreateInput, {
 				cord_id,
 				expires_in_seconds: 3600,
 				max_uses: 5,
 				admits_newcomers: true
-			}).success
+			})
 		);
 		assert.ok(
-			CordInviteCreateInput.safeParse({
+			is(CordInviteCreateInput, {
 				cord_id,
 				expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MAX,
 				max_uses: CORD_INVITE_MAX_USES_MAX
-			}).success
+			})
 		);
 		for (const limits of [
 			{ expires_in_seconds: CORD_INVITE_EXPIRES_IN_SECONDS_MIN - 1 },
@@ -313,15 +335,13 @@ describe('CordInviteCreateInput', () => {
 			{ expires_in_seconds: 90.5 },
 			{ expires_in_seconds: null },
 			{ max_uses: 0 },
+			{ max_uses: 1.5 },
 			{ max_uses: CORD_INVITE_MAX_USES_MAX + 1 },
 			{ max_uses: null },
 			{ admits_newcomers: null },
 			{ admits_newcomers: 'yes' }
 		]) {
-			assert.ok(
-				!CordInviteCreateInput.safeParse({ cord_id, ...limits }).success,
-				JSON.stringify(limits)
-			);
+			assert.ok(!is(CordInviteCreateInput, { cord_id, ...limits }), JSON.stringify(limits));
 		}
 	});
 });
@@ -402,5 +422,111 @@ describe('the server twins', () => {
 			.map((spec) => spec.method)
 			.filter((method) => method.startsWith('cord_'));
 		assert.deepEqual(rust_methods.sort(), ts_methods.sort());
+	});
+});
+
+describe('the output shapes', () => {
+	const id = '11111111-1111-4111-8111-111111111111';
+	const invite = {
+		id,
+		cord_id: id,
+		role: 'cord_member',
+		admits_newcomers: false,
+		created_by: id,
+		created_at: 't',
+		expires_at: 't',
+		max_uses: 5,
+		use_count: 0,
+		revoked_at: 't',
+		status: 'active',
+		redemption_count: 0,
+		redemption_accepted_count: 0
+	};
+	const none: Array<string> = [];
+	const cases = [
+		{
+			schema: CordJson,
+			value: { id, name: 'the porch', role: 'cord_owner', created_at: 't' },
+			nullable: none
+		},
+		{
+			schema: CordAdminJson,
+			value: { id, name: 'the porch', member_count: 3, created_at: 't' },
+			nullable: none
+		},
+		{
+			schema: CordInviteJson,
+			value: invite,
+			nullable: ['created_by', 'expires_at', 'max_uses', 'revoked_at']
+		},
+		{
+			schema: CordMemberJson,
+			value: { actor_id: id, username: 'alice', display_name: 'Al', role: 'cord_admin' },
+			nullable: ['display_name']
+		},
+		{ schema: CordInviteCreateOutput, value: { invite, token: 't' }, nullable: none }
+	];
+
+	test('require every field, and take null exactly where the server sends it', () => {
+		for (const { schema, value, nullable } of cases) {
+			assert.ok(is(schema, value), JSON.stringify(value));
+			for (const key of Object.keys(value)) {
+				const { [key]: _, ...without } = value as Record<string, unknown>;
+				assert.ok(!is(schema, without), `${key} is required`);
+				assert.strictEqual(is(schema, { ...value, [key]: null }), nullable.includes(key), key);
+			}
+		}
+	});
+
+	test('take integer counts and known enum values, and lowercase ids', () => {
+		for (const bad of [
+			{ use_count: 1.5 },
+			{ max_uses: 2 ** 53 },
+			{ status: 'paused' },
+			{ role: 'cord_guest' }
+		]) {
+			assert.ok(!is(CordInviteJson, { ...invite, ...bad }), JSON.stringify(bad));
+		}
+		assert.ok(!is(CordAdminJson, { id, name: 'n', member_count: 0.5, created_at: 't' }));
+		assert.ok(!is(CordJson, { id: 'x', name: 'n', role: 'cord_owner', created_at: 't' }));
+		assert.strictEqual(
+			parse_or_throw(CordJson, {
+				id: id.toUpperCase(),
+				name: 'n',
+				role: 'cord_owner',
+				created_at: 't'
+			}).id,
+			id
+		);
+	});
+});
+
+describe('the input contracts', () => {
+	test('owe the server reasons for a bad name or username', () => {
+		for (const [schema, input, reason] of [
+			[CordCreateInput, { name: '' }, ERROR_CORD_NAME_INVALID],
+			[
+				CordUpdateInput,
+				{ cord_id: '11111111-1111-4111-8111-111111111111', name: '' },
+				ERROR_CORD_NAME_INVALID
+			],
+			[CordInviteRedeemInput, { token: 't', username: 'ab' }, ERROR_CORD_INVITE_USERNAME_INVALID]
+		] as const) {
+			const parsed = parse(schema, input);
+			assert.ok(!parsed.ok);
+			assert.strictEqual(resolve_issues_invalid_reason(schema, parsed.issues, input), reason);
+		}
+	});
+
+	test('take an acting actor everywhere but redemption', () => {
+		const acting = '11111111-1111-4111-8111-111111111111';
+		for (const spec of all_cord_domain_action_specs) {
+			const body = { ...(generate_valid_body(spec.input) as object), acting };
+			assert.strictEqual(
+				parse_any(spec.input, body).ok,
+				spec !== cord_invite_redeem_action_spec,
+				spec.method
+			);
+		}
 	});
 });

@@ -10,6 +10,7 @@
 	 */
 
 	import PendingButton from '@fuzdev/fuz_ui/PendingButton.svelte';
+	import { parse } from '@fuzdev/fuz_schema/schema.ts';
 
 	import { CordName } from '../cord_action_specs.ts';
 
@@ -41,13 +42,13 @@
 
 	const submit = async (): Promise<void> => {
 		if (pending) return;
-		const parsed = CordName.safeParse(name);
-		if (!parsed.success) {
-			invalid = parsed.error.issues[0]?.message ?? 'invalid name';
+		const parsed = parse(CordName, name);
+		if (!parsed.ok) {
+			invalid = parsed.issues[0]?.message ?? 'invalid name';
 			return;
 		}
 		invalid = null;
-		const ok = await onsubmit(parsed.data);
+		const ok = await onsubmit(parsed.value);
 		if (ok && clear_on_success) name = '';
 	};
 </script>

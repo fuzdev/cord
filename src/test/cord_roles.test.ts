@@ -5,7 +5,7 @@ import {
 	CORD_ADMIN,
 	CORD_MEMBER,
 	CORD_OWNER,
-	type CordRole,
+	CordRole,
 	cord_leaves_no_owner,
 	cord_role_can_manage,
 	cord_role_can_remove,
@@ -13,6 +13,12 @@ import {
 } from '#lib/cord_roles.ts';
 
 const ROLES: Array<CordRole> = [CORD_OWNER, CORD_ADMIN, CORD_MEMBER];
+
+describe('CordRole', () => {
+	test('lists the roles, highest authority first', () => {
+		assert.deepEqual([...CordRole.def], ROLES);
+	});
+});
 
 describe('the member rules', () => {
 	test('only owners set member roles', () => {

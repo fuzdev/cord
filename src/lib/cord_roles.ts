@@ -13,7 +13,7 @@
  * @module
  */
 
-import { z } from 'zod';
+import { one_of, type Infer } from '@fuzdev/fuz_schema/schema.ts';
 
 /** The cord's owner. */
 export const CORD_OWNER = 'cord_owner';
@@ -25,8 +25,8 @@ export const CORD_ADMIN = 'cord_admin';
 export const CORD_MEMBER = 'cord_member';
 
 /** A role in one cord, highest authority first. */
-export const CordRole = z.enum([CORD_OWNER, CORD_ADMIN, CORD_MEMBER]);
-export type CordRole = z.infer<typeof CordRole>;
+export const CordRole = one_of([CORD_OWNER, CORD_ADMIN, CORD_MEMBER]);
+export type CordRole = Infer<typeof CordRole>;
 
 /** Human labels for the cord roles. */
 export const CORD_ROLE_LABELS: Record<CordRole, string> = {

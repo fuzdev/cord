@@ -233,7 +233,7 @@ fn check_cord_invite_redeem_rate_limit(
 struct CordInviteCreateInput {
     #[serde(deserialize_with = "fuz_http::deserialize_wire_uuid")]
     cord_id: Uuid,
-    // `z.number().int()` on the twin: any integral spelling
+    // the twin's integer schema: any integral spelling
     #[serde(default, deserialize_with = "fuz_http::deserialize_optional_wire_int")]
     expires_in_seconds: Option<u32>,
     #[serde(default, deserialize_with = "fuz_http::deserialize_optional_wire_int")]
@@ -1167,7 +1167,7 @@ mod tests {
         }
     }
 
-    /// The twin's `z.number().int()` reads any integral spelling.
+    /// The twin's integer schema reads any integral spelling.
     #[test]
     fn limits_read_integral_floats() {
         let cord_id = "11111111-1111-4111-8111-111111111111";

@@ -8,7 +8,6 @@ import * as admin_specs from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import * as role_grant_offer_specs from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 import * as cord_specs from './cord_action_specs.ts';
 import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
-import { z } from 'zod';
 import type { Infer } from '@fuzdev/fuz_schema/schema.ts';
 import type {
 	ActionEventRemoteNotificationData,
@@ -223,21 +222,21 @@ export interface ActionInputs {
 	>;
 	role_grant_revoke: Infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.input>;
 	role_grant_assign: Infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.input>;
-	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.input>;
-	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.input>;
-	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.input>;
-	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.input>;
-	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.input>;
-	cord_invite_create: z.infer<typeof cord_specs.cord_invite_create_action_spec.input>;
-	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.input>;
-	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.input>;
-	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.input>;
-	cord_invite_redeem: z.infer<typeof cord_specs.cord_invite_redeem_action_spec.input>;
-	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.input>;
-	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.input>;
-	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
-	cord_member_remove: z.infer<typeof cord_specs.cord_member_remove_action_spec.input>;
-	cord_leave: z.infer<typeof cord_specs.cord_leave_action_spec.input>;
+	cord_create: Infer<typeof cord_specs.cord_create_action_spec.input>;
+	cord_list: Infer<typeof cord_specs.cord_list_action_spec.input>;
+	cord_get: Infer<typeof cord_specs.cord_get_action_spec.input>;
+	cord_update: Infer<typeof cord_specs.cord_update_action_spec.input>;
+	cord_admin_list: Infer<typeof cord_specs.cord_admin_list_action_spec.input>;
+	cord_invite_create: Infer<typeof cord_specs.cord_invite_create_action_spec.input>;
+	cord_invite_list: Infer<typeof cord_specs.cord_invite_list_action_spec.input>;
+	cord_invite_revoke: Infer<typeof cord_specs.cord_invite_revoke_action_spec.input>;
+	cord_invite_preview: Infer<typeof cord_specs.cord_invite_preview_action_spec.input>;
+	cord_invite_redeem: Infer<typeof cord_specs.cord_invite_redeem_action_spec.input>;
+	cord_invite_accept: Infer<typeof cord_specs.cord_invite_accept_action_spec.input>;
+	cord_member_list: Infer<typeof cord_specs.cord_member_list_action_spec.input>;
+	cord_member_role_set: Infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
+	cord_member_remove: Infer<typeof cord_specs.cord_member_remove_action_spec.input>;
+	cord_leave: Infer<typeof cord_specs.cord_leave_action_spec.input>;
 }
 
 /**
@@ -343,21 +342,21 @@ export interface ActionOutputs {
 	>;
 	role_grant_revoke: Infer<typeof role_grant_offer_specs.role_grant_revoke_action_spec.output>;
 	role_grant_assign: Infer<typeof role_grant_offer_specs.role_grant_assign_action_spec.output>;
-	cord_create: z.infer<typeof cord_specs.cord_create_action_spec.output>;
-	cord_list: z.infer<typeof cord_specs.cord_list_action_spec.output>;
-	cord_get: z.infer<typeof cord_specs.cord_get_action_spec.output>;
-	cord_update: z.infer<typeof cord_specs.cord_update_action_spec.output>;
-	cord_admin_list: z.infer<typeof cord_specs.cord_admin_list_action_spec.output>;
-	cord_invite_create: z.infer<typeof cord_specs.cord_invite_create_action_spec.output>;
-	cord_invite_list: z.infer<typeof cord_specs.cord_invite_list_action_spec.output>;
-	cord_invite_revoke: z.infer<typeof cord_specs.cord_invite_revoke_action_spec.output>;
-	cord_invite_preview: z.infer<typeof cord_specs.cord_invite_preview_action_spec.output>;
-	cord_invite_redeem: z.infer<typeof cord_specs.cord_invite_redeem_action_spec.output>;
-	cord_invite_accept: z.infer<typeof cord_specs.cord_invite_accept_action_spec.output>;
-	cord_member_list: z.infer<typeof cord_specs.cord_member_list_action_spec.output>;
-	cord_member_role_set: z.infer<typeof cord_specs.cord_member_role_set_action_spec.output>;
-	cord_member_remove: z.infer<typeof cord_specs.cord_member_remove_action_spec.output>;
-	cord_leave: z.infer<typeof cord_specs.cord_leave_action_spec.output>;
+	cord_create: Infer<typeof cord_specs.cord_create_action_spec.output>;
+	cord_list: Infer<typeof cord_specs.cord_list_action_spec.output>;
+	cord_get: Infer<typeof cord_specs.cord_get_action_spec.output>;
+	cord_update: Infer<typeof cord_specs.cord_update_action_spec.output>;
+	cord_admin_list: Infer<typeof cord_specs.cord_admin_list_action_spec.output>;
+	cord_invite_create: Infer<typeof cord_specs.cord_invite_create_action_spec.output>;
+	cord_invite_list: Infer<typeof cord_specs.cord_invite_list_action_spec.output>;
+	cord_invite_revoke: Infer<typeof cord_specs.cord_invite_revoke_action_spec.output>;
+	cord_invite_preview: Infer<typeof cord_specs.cord_invite_preview_action_spec.output>;
+	cord_invite_redeem: Infer<typeof cord_specs.cord_invite_redeem_action_spec.output>;
+	cord_invite_accept: Infer<typeof cord_specs.cord_invite_accept_action_spec.output>;
+	cord_member_list: Infer<typeof cord_specs.cord_member_list_action_spec.output>;
+	cord_member_role_set: Infer<typeof cord_specs.cord_member_role_set_action_spec.output>;
+	cord_member_remove: Infer<typeof cord_specs.cord_member_remove_action_spec.output>;
+	cord_leave: Infer<typeof cord_specs.cord_leave_action_spec.output>;
 }
 
 /**

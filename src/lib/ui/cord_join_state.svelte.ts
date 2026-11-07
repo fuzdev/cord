@@ -44,13 +44,12 @@
  * @module
  */
 
-import { z } from 'zod';
 import { untrack } from 'svelte';
 import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { AsyncSlot } from '@fuzdev/fuz_app/ui/async_slot.svelte.ts';
 import { Password, PASSWORD_LENGTH_MIN } from '@fuzdev/fuz_app/auth/password.ts';
-import { parse } from '@fuzdev/fuz_schema/schema.ts';
-import { ZodUsername } from '@fuzdev/fuz_app/zod_schemas.ts';
+import { is, nullable, object, parse, string, type Infer } from '@fuzdev/fuz_schema/schema.ts';
+import { Username } from '@fuzdev/fuz_app/primitive_schemas.ts';
 import type { AsyncStatus } from '@fuzdev/fuz_util/async.ts';
 
 import type { FrontendActionsApi } from '../action_metatypes.ts';
@@ -85,15 +84,15 @@ export const CORD_JOIN_STORAGE_KEY = 'cord_join';
 export type CordJoinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** A newcomer's redemption of the link: the cord it's for and the username it reserved. */
-export const CordJoinRedeemed = z.strictObject({ cord: CordInviteCordJson, username: z.string() });
-export type CordJoinRedeemed = z.infer<typeof CordJoinRedeemed>;
+export const CordJoinRedeemed = object({ cord: CordInviteCordJson, username: string });
+export type CordJoinRedeemed = Infer<typeof CordJoinRedeemed>;
 
 /** What the join page keeps in `sessionStorage`: its link, and a redemption once there is one. */
-export const CordJoinStored = z.strictObject({
-	token: z.string(),
-	redeemed: CordJoinRedeemed.nullable()
+export const CordJoinStored = object({
+	token: string,
+	redeemed: nullable(CordJoinRedeemed)
 });
-export type CordJoinStored = z.infer<typeof CordJoinStored>;
+export type CordJoinStored = Infer<typeof CordJoinStored>;
 
 /** This tab's `sessionStorage`, or `null` where there's none or it's blocked. */
 export const cord_join_session_storage = (): CordJoinStorage | null => {
@@ -109,7 +108,8 @@ const read_cord_join = (storage: CordJoinStorage | null): CordJoinStored | null 
 	try {
 		const raw = storage?.getItem(CORD_JOIN_STORAGE_KEY);
 		if (!raw) return null;
-		return CordJoinStored.safeParse(JSON.parse(raw)).data ?? null;
+		const parsed = parse(CordJoinStored, JSON.parse(raw));
+		return parsed.ok ? parsed.value : null;
 	} catch {
 		return null;
 	}
@@ -263,7 +263,7 @@ export const to_cord_join_view = (input: CordJoinViewInput): CordJoinView => {
 		return { kind: 'newcomer', cord: input.redeemed.cord };
 	}
 	if (!input.token_loaded || !input.session_checked) return { kind: 'checking' };
-	if (input.token === null || !CordInviteToken.safeParse(input.token).success || input.dead) {
+	if (input.token === null || !is(CordInviteToken, input.token) || input.dead) {
 		return { kind: 'dead' };
 	}
 	// a login succeeded and the account is still loading
@@ -332,7 +332,7 @@ export const check_cord_newcomer_fields = (
 	password: string,
 	password_confirm: string
 ): { field: CordNewcomerField; message: string } | null => {
-	if (!ZodUsername.safeParse(username.trim()).success) {
+	if (!is(Username, username.trim())) {
 		return { field: 'username', message: CORD_USERNAME_RULE };
 	}
 	if (!parse(Password, password).ok) {
@@ -497,7 +497,7 @@ export class CordJoinState {
 	async fetch_preview(account_id: string | null): Promise<void> {
 		const token = this.token;
 		if (this.newcomer_running || token === null) return;
-		if (!CordInviteToken.safeParse(token).success) return;
+		if (!is(CordInviteToken, token)) return;
 		// untracked, so the calling effect doesn't rerun on the write below
 		if (untrack(() => this.preview_for) !== account_id) this.preview.reset();
 		this.preview_for = account_id;

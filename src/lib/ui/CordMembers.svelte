@@ -185,7 +185,7 @@
 									drafts.set(member.actor_id, e.currentTarget.value as CordRole);
 								}}
 							>
-								{#each CordRole.options as option (option)}
+								{#each CordRole.def as option (option)}
 									<option
 										value={option}
 										disabled={cord_leaves_no_owner(owner_count, member.role, option)}

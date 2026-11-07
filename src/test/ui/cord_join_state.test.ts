@@ -1,4 +1,5 @@
 import { assert, describe, test } from 'vitest';
+import { is } from '@fuzdev/fuz_schema/schema.ts';
 
 import {
 	CORD_INVITE_TOKEN_LENGTH_MAX,
@@ -18,7 +19,7 @@ import {
 	CORD_JOIN_STORAGE_KEY,
 	CordJoinState,
 	type CordJoinStorage,
-	type CordJoinStored,
+	CordJoinStored,
 	type CordJoinView,
 	type CordJoinViewInput,
 	check_cord_newcomer_fields,
@@ -1156,5 +1157,17 @@ describe('CordJoinState', () => {
 		assert.strictEqual(state.token, TOKEN);
 		state.load('');
 		assert.strictEqual(state.token, TOKEN);
+	});
+});
+
+describe('CordJoinStored', () => {
+	test('keeps a link with or without a redemption, and nothing else', () => {
+		const cord = { id: '11111111-1111-4111-8111-111111111111', name: 'the porch' };
+		assert.ok(is(CordJoinStored, { token: 't', redeemed: null }));
+		assert.ok(is(CordJoinStored, { token: 't', redeemed: { cord, username: 'bob' } }));
+		assert.ok(!is(CordJoinStored, { token: 't' }));
+		assert.ok(!is(CordJoinStored, { token: 't', redeemed: { cord } }));
+		assert.ok(!is(CordJoinStored, { token: 't', redeemed: { cord, username: null } }));
+		assert.ok(!is(CordJoinStored, { token: 't', redeemed: null, extra: 1 }));
 	});
 });

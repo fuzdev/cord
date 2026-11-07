@@ -1,4 +1,5 @@
 import { assert, describe, test } from 'vitest';
+import { is } from '@fuzdev/fuz_schema/schema.ts';
 import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 import {
@@ -88,7 +89,7 @@ describe('to_cord_invite_create_request', () => {
 			const result = to_cord_invite_create_request(CORD_ID, input);
 			assert.ok(result.ok, JSON.stringify(input));
 			assert.deepEqual(result.value, expected);
-			assert.ok(CordInviteCreateInput.safeParse(result.value).success, JSON.stringify(input));
+			assert.ok(is(CordInviteCreateInput, result.value), JSON.stringify(input));
 		}
 	});
 

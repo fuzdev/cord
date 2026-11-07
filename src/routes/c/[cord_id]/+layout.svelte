@@ -25,7 +25,8 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
-	import { ZodUuid } from '@fuzdev/fuz_app/zod_schemas.ts';
+	import { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
+	import { parse } from '@fuzdev/fuz_schema/schema.ts';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cord_rpc_context } from '#lib/ui/rpc.ts';
@@ -43,11 +44,14 @@
 	const cords_state = cords_state_context.get();
 
 	// a malformed id can't name a cord, so it reads as not found without a
-	// request; ids compare lowercase, the way the server answers them
+	// request; `Uuid` lowercases, the way the server answers ids
 	const cord_page = cord_page_state_context.set(
 		new CordPageState({
 			api,
-			get_cord_id: () => ZodUuid.safeParse(page.params.cord_id?.toLowerCase()).data,
+			get_cord_id: () => {
+				const parsed = parse(Uuid, page.params.cord_id);
+				return parsed.ok ? parsed.value : undefined;
+			},
 			get_self_actor_id: () => auth_state.actor?.id ?? null
 		})
 	);

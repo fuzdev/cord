@@ -30,7 +30,7 @@ export const cord_session_options = create_session_config(CORD_SESSION_COOKIE_NA
  * membership roles, with no grant path — only cord's own verbs confer them.
  */
 export const cord_roles = create_role_registry(
-	CordRole.options.map((name) => ({ name, grant_paths: [] }))
+	CordRole.def.map((name) => ({ name, grant_paths: [] }))
 );
 
 const surface_options: RustSpineConsumerRpcEndpointsOptions = {
