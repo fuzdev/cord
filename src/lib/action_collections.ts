@@ -175,9 +175,9 @@ export const ActionInputs = {
 	cord_leave: cord_specs.cord_leave_action_spec.input
 } as const;
 export interface ActionInputs {
-	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.input>;
-	cancel: z.infer<typeof cancel_specs.cancel_action_spec.input>;
-	'peer/ping': z.infer<typeof peer_ping_specs.peer_ping_action_spec.input>;
+	heartbeat: Infer<typeof heartbeat_specs.heartbeat_action_spec.input>;
+	cancel: Infer<typeof cancel_specs.cancel_action_spec.input>;
+	'peer/ping': Infer<typeof peer_ping_specs.peer_ping_action_spec.input>;
 	account_verify: Infer<typeof account_specs.account_verify_action_spec.input>;
 	account_session_list: Infer<typeof account_specs.account_session_list_action_spec.input>;
 	account_session_revoke: Infer<typeof account_specs.account_session_revoke_action_spec.input>;
@@ -295,9 +295,9 @@ export const ActionOutputs = {
 	cord_leave: cord_specs.cord_leave_action_spec.output
 } as const;
 export interface ActionOutputs {
-	heartbeat: z.infer<typeof heartbeat_specs.heartbeat_action_spec.output>;
-	cancel: z.infer<typeof cancel_specs.cancel_action_spec.output>;
-	'peer/ping': z.infer<typeof peer_ping_specs.peer_ping_action_spec.output>;
+	heartbeat: Infer<typeof heartbeat_specs.heartbeat_action_spec.output>;
+	cancel: Infer<typeof cancel_specs.cancel_action_spec.output>;
+	'peer/ping': Infer<typeof peer_ping_specs.peer_ping_action_spec.output>;
 	account_verify: Infer<typeof account_specs.account_verify_action_spec.output>;
 	account_session_list: Infer<typeof account_specs.account_session_list_action_spec.output>;
 	account_session_revoke: Infer<typeof account_specs.account_session_revoke_action_spec.output>;
