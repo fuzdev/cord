@@ -6,7 +6,8 @@ serves the static frontend and proxies `/api`, `/health`, and `/ready` to
 `cordd`, which runs as a hardened systemd service over a local PostgreSQL.
 
 zap is dry-run by default: each command below previews its plan, and
-`--wetrun` carries it out. The `deno task` names come from the `scripts` in
+`-- --wetrun` carries it out (without the `--`, npm consumes the flag and zap
+stays a dry run). The `npm run` names come from the `scripts` in
 [`package.json`](package.json) and pass `--env-file .env.production zap.ts`.
 The zap recipes resolve through `node_modules/@fuzdev/zap`, the link
 `npm install` makes to the zap checkout, so `zap` finds them from any
@@ -46,15 +47,15 @@ Fill in `DEPLOY_HOST`, `DEPLOY_CERTBOT_EMAIL`, and `SECRET_FUZ_COOKIE_KEYS`
 (`openssl rand -hex 32`), and check the rest. This file stays on your
 machine; zap generates the host's env file for `cordd` from `zap.ts`.
 
-`deno task validate` evaluates the config offline, touching no host.
+`npm run validate` evaluates the config offline, touching no host.
 
 ## 3. Provision
 
 ```bash
-deno task apply:bootstrap            # preview, connecting as BOOTSTRAP_USER
-deno task apply:bootstrap --wetrun
-deno task apply                      # as cord from here on: preview the rest
-deno task apply --wetrun             # converge it (a wetrun runs only a previewed plan)
+npm run apply:bootstrap            # preview, connecting as BOOTSTRAP_USER
+npm run apply:bootstrap -- --wetrun
+npm run apply                      # as cord from here on: preview the rest
+npm run apply -- --wetrun          # converge it (a wetrun runs only a previewed plan)
 ```
 
 The bootstrap run installs nginx, PostgreSQL 18, certbot, fail2ban, and
@@ -67,8 +68,8 @@ with `--bootstrap`, since only its last step locks root out.
 ## 4. Deploy
 
 ```bash
-deno task deploy                     # preview
-deno task deploy --wetrun
+npm run deploy                     # preview
+npm run deploy -- --wetrun
 ```
 
 zap builds locally (`cargo xtask check-release`, the release `cordd`,
@@ -76,8 +77,8 @@ zap builds locally (`cargo xtask check-release`, the release `cordd`,
 release, restarts `cordd`, and polls `https://<domain>/ready`. `/ready`
 answers 200 only once `cordd` is up and the database schema matches the
 release, so a release that doesn't get there is rolled back. The deploy
-refuses when the host has drifted from `zap.ts` (run `deno task apply
---wetrun` first). Commit before deploying: a wetrun from a dirty tree is
+refuses when the host has drifted from `zap.ts` (run `npm run apply
+-- --wetrun` first). Commit before deploying: a wetrun from a dirty tree is
 refused; `--force` ships it as its own release, `<hash>-dirty-<id>`.
 
 ## 5. Claim the instance

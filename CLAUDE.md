@@ -360,7 +360,7 @@ instance value lives in code. zap evaluates the config with a pinned `fgro
 eval`, which reads no `deno.json`, so the recipes resolve through `node_modules`: the
 `@fuzdev/zap` dev dependency is a path to a sibling zap checkout, which
 `npm install` links in; `tsconfig.json` excludes `zap.ts`. Check it offline
-with `deno task check:zap` (types) and
+with `npm run check:zap` (types) and
 `zap config validate --env-file <file> zap.ts` (eval and schema, no host).
 
 What's cord-specific, beyond the stock fuz_app recipes:
