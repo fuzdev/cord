@@ -12,7 +12,13 @@
     "check": "gro check",
     "test": "gro test",
     "test:cross": "FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:zap": "deno check zap.ts",
+    "validate": "zap config validate --env-file .env.production zap.ts",
+    "plan": "zap plan --env-file .env.production zap.ts",
+    "apply": "zap apply --env-file .env.production zap.ts",
+    "apply:bootstrap": "zap apply --env-file .env.production --bootstrap zap.ts",
+    "deploy": "zap deploy --env-file .env.production zap.ts"
   },
   "type": "module",
   "imports": {

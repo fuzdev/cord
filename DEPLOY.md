@@ -6,8 +6,8 @@ serves the static frontend and proxies `/api`, `/health`, and `/ready` to
 `cordd`, which runs as a hardened systemd service over a local PostgreSQL.
 
 zap is dry-run by default: each command below previews its plan, and
-`--wetrun` carries it out. The `deno task` names come from
-[`deno.json`](deno.json) and pass `--env-file .env.production zap.ts`.
+`--wetrun` carries it out. The `deno task` names come from the `scripts` in
+[`package.json`](package.json) and pass `--env-file .env.production zap.ts`.
 The zap recipes resolve through `node_modules/@fuzdev/zap`, the link
 `npm install` makes to the zap checkout, so `zap` finds them from any
 working directory.

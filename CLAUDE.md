@@ -60,7 +60,7 @@ Skill(fuz-stack).
 - `crates/xtask/` — `cargo xtask check-release`
 - `.env.development.example` — the server's local env, copied to the
   gitignored `.env.development`
-- `zap.ts`, `deno.json`, `.env.production.example`, `DEPLOY.md` — the
+- `zap.ts`, the `package.json` zap scripts, `.env.production.example`, `DEPLOY.md` — the
   zap deploy (see Deploying)
 
 `cord_server`'s modules (each module doc holds the detail):
