@@ -9,17 +9,18 @@ zap is dry-run by default: each command below previews its plan, and
 `-- --wetrun` carries it out (without the `--`, npm consumes the flag and zap
 stays a dry run). The `npm run` names come from the `scripts` in
 [`package.json`](package.json) and pass `--env-file .env.production zap.ts`.
-The zap recipes resolve through `node_modules/@fuzdev/zap`, the link
-`npm install` makes to the zap checkout, so `zap` finds them from any
-working directory.
+The zap recipes resolve through `node_modules/@fuzdev/zap`, which
+`npm install` fetches at the exact version `package.json` pins, so `zap` finds
+them from any working directory.
 
 ## What you need
 
-- `zap` and `deno` on your `PATH` (zap evaluates `zap.ts` under Deno)
+- `zap` on your `PATH`, and `fgro`, Gro's runtime, which zap evaluates
+  `zap.ts` with; both are built from source (see
+  [zap's install guide](https://zap.fuz.dev/docs/install)), and the `zap`
+  binary must be the same 0.x minor as the `@fuzdev/zap` package
 - this repo checked out beside fuz's Rust server crates (the `cordd` build,
-  see the README) and beside zap, which `package.json` names as the
-  `@fuzdev/zap` dev dependency (run `npm install` to link it); keep the
-  installed `zap` binary built from that checkout
+  see the README), with `npm install` run for the `@fuzdev/zap` dev dependency
 - the Rust toolchain and `gro`, for the build zap runs locally; `cordd` is
   built on your machine and shipped as-is, so build on Linux x86_64 with a
   glibc no newer than the host's (Debian 13 building for Debian 13 is fine;

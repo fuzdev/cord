@@ -214,8 +214,10 @@ their database URLs.
 host: nginx serving the frontend, PostgreSQL, and `cordd` as a hardened
 systemd service, provisioned and deployed with
 [zap](https://zap.fuz.dev/). [DEPLOY.md](DEPLOY.md) is the runbook.
-Deploying needs zap checked out beside this repo (`package.json` links its
-recipes), along with fuz's server crates for the `cordd` build.
+Deploying needs the `zap` binary and `fgro`, both built from source
+([install](https://zap.fuz.dev/docs/install)); `package.json` installs zap's
+recipes from npm. The `cordd` build also needs fuz's server crates beside this
+repo.
 
 ## Built with
 
