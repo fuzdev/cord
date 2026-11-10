@@ -59,8 +59,8 @@ import {
 } from '@fuzdev/zap/recipe_debian_certbot.ts';
 import { certbot_webroot_switch } from '@fuzdev/zap/recipe_certbot.ts';
 import { spa_csp } from '@fuzdev/zap/recipe_csp.ts';
-import { fuz_app_bootstrap_token } from '@fuzdev/zap/recipe_bootstrap.ts';
-import { fuz_app_env_base } from '@fuzdev/zap/recipe_env.ts';
+import { fuz_app_bootstrap_token } from '@fuzdev/zap/recipe_fuz_app_bootstrap.ts';
+import { fuz_app_env_base } from '@fuzdev/zap/recipe_fuz_app_env.ts';
 
 //
 // Constants
@@ -110,10 +110,10 @@ CORD_TRUSTED_PROXIES=127.0.0.1
 NO_COLOR=1
 `;
 
-// Content-Security-Policy for the prerendered SPA: the locked-down fuz_app
-// baseline. The frontend loads nothing from other origins. `connect-src`
-// carries `wss://{{domain}}` for the WebSocket.
-const CSP = spa_csp();
+// Content-Security-Policy for the prerendered SPA: the recipe's baseline, with
+// 'wasm-unsafe-eval' for the blake3 WASM. The frontend loads nothing from other
+// origins. `connect-src` carries `wss://{{domain}}` for the WebSocket.
+const CSP = spa_csp({ wasm_unsafe_eval: true });
 
 // Cord's own nginx locations, injected into the HTTPS server block.
 //
@@ -345,7 +345,7 @@ export default (zap: ZapBuilder): void => {
 
 	// The one-shot token for claiming the first account at /admin. Minted once;
 	// the check also passes after `cordd` has consumed and deleted it (the
-	// `bootstrap_lock` row). See `recipe_bootstrap` for rotating a stuck token.
+	// `bootstrap_lock` row). See `recipe_fuz_app_bootstrap` for rotating a stuck token.
 	zap.script({
 		id: 'bootstrap-token',
 		name: 'Create bootstrap token',
@@ -441,10 +441,18 @@ export default (zap: ZapBuilder): void => {
 		depends_on: ['create-user']
 	});
 
+	// the certificate's name, its registration email, and the addresses its names
+	// must resolve to, for both certbot scripts
+	const certificate = {
+		domain: zap.env('DEPLOY_DOMAIN'),
+		email: zap.env('DEPLOY_CERTBOT_EMAIL'),
+		expected_addresses: [zap.env('DEPLOY_HOST')]
+	};
+
 	zap.script({
 		id: 'ssl-certificate',
 		name: 'SSL certificate via certbot (bootstrap)',
-		...debian_certbot_standalone_issue(),
+		...debian_certbot_standalone_issue(certificate),
 		depends_on: ['nginx', 'certbot']
 	});
 
@@ -455,7 +463,7 @@ export default (zap: ZapBuilder): void => {
 	zap.script({
 		id: 'certbot-renewal-webroot',
 		name: 'Switch cert renewal to webroot',
-		...certbot_webroot_switch({ deploy_hook: certbot_reload_hook }),
+		...certbot_webroot_switch({ ...certificate, deploy_hook: certbot_reload_hook }),
 		depends_on: ['certbot-webroot-dir', 'nginx-service', 'certbot-deploy-hook']
 	});
 
@@ -479,7 +487,7 @@ export default (zap: ZapBuilder): void => {
 		id: 'nginx-ssl-params',
 		name: 'nginx shared SSL parameters',
 		path: SSL_PARAMS_PATH,
-		content: { type: 'inline', content: ssl_params() },
+		content: { type: 'inline', content: ssl_params({ session_cache_zone: 'fuz_app_SSL' }) },
 		validate: NGINX_VALIDATE,
 		depends_on: ['nginx']
 	});
@@ -502,6 +510,8 @@ export default (zap: ZapBuilder): void => {
 			port: PORT,
 			root: `${CURRENT_LINK}/build`,
 			csp: CSP,
+			// includeSubDomains on, which the recipe leaves off by default
+			hsts: { include_subdomains: true },
 			client_max_body_size: '1m',
 			client_max_body_size_comment: 'cordd takes no uploads; its JSON bodies stay small.',
 			spa_try_files: SPA_TRY_FILES,
