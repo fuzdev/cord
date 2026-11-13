@@ -15,7 +15,10 @@
 //! cargo test -p cord_server --test cords -- --ignored
 //! ```
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 mod common;
 

@@ -37,7 +37,7 @@ pub const CORD_SCOPE_KIND: &str = "cord";
 /// Never in practice: the cord role names are statically valid and distinct
 /// from the builtins, so [`RoleRegistry::new`] can't fail here.
 #[must_use]
-#[allow(
+#[expect(
     clippy::expect_used,
     reason = "the cord role names are statically valid and builtin-distinct"
 )]

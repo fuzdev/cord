@@ -5,7 +5,10 @@
 //! stderr — a blank `PORT` among them. None of these needs a database or
 //! binds a port.
 
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use std::process::{Command, Output};
 

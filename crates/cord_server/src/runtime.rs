@@ -51,9 +51,9 @@ pub fn startup_hint(error: &StartupError) -> Option<&'static str> {
 }
 
 /// Options for [`run_app`].
-#[allow(
+#[expect(
     missing_debug_implementations,
-    reason = "holds an `Arc<dyn PasswordHasher>`"
+    reason = "the spine run options and the boxed action-spec factory have no `Debug`"
 )]
 pub struct RunAppOptions {
     /// The spine's swap points. Production: [`fuz_auth::Argon2idHasher`],
@@ -144,10 +144,6 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "tests panic on assertion failure by design"
-)]
 mod tests {
     use std::collections::HashMap;
 

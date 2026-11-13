@@ -12,8 +12,6 @@
 //! cargo test -p cord_server --test transaction_isolation -- --ignored
 //! ```
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use std::sync::Arc;

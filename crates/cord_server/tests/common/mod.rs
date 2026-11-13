@@ -10,7 +10,13 @@
 //! at a time. That cycle and the identity seeding are the spine's shared ones
 //! in `fuz_testing` (`fresh_db`, `seed`); the cord steps are this module's.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
+// `allow`, not `expect`: this module is compiled into every test binary, and
+// which helpers go unused differs from one binary to the next.
+#![allow(dead_code, reason = "each test binary uses only part of this module")]
+#![expect(
+    clippy::expect_used,
+    reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
+)]
 
 use cord_server::cord_queries::{CordRow, query_cord_create};
 use cord_server::invite::queries::{
@@ -53,7 +59,11 @@ macro_rules! in_tx {
     }};
 }
 
-#[allow(unused_imports)]
+// `allow`, not `expect`: as for `dead_code` above; only some binaries call `in_tx!`.
+#[allow(
+    unused_imports,
+    reason = "each test binary uses only part of this module"
+)]
 pub(crate) use in_tx;
 
 /// A pool over a freshly reset and migrated database.
