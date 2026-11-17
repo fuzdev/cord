@@ -24,9 +24,9 @@
 
 	const signed_out = $derived(auth_state.session_checked && !auth_state.verified);
 
-	// selected on its own page and any page under it, as fuz_app's `MenuLink`
-	// selects; not `MenuLink` itself, whose server render marks every link
-	// selected until hydration, and these links render in every prerendered page
+	// selected on its own page and any page under it, as fuz_ui's `MenuLink`
+	// selects, except that `'/'` matches only itself (no path starts with `'//'`),
+	// which `MenuLink` does with `exact`; TODO consider `MenuLink`
 	const is_selected = (href: string): boolean =>
 		page.url.pathname === href || page.url.pathname.startsWith(href + '/');
 	const to_aria_current = (href: string): 'page' | undefined =>

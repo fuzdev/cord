@@ -220,7 +220,7 @@ fuz_app's `auth_state_context`), and `cords_state_context` (the signed-in
 account's `CordsState`, fetched when an account signs in and reset when it
 signs out), and checks the session on mount.
 
-Every page sits in fuz_app's `AppShell`, with `CordNav` as its left rail:
+Every page sits in fuz_ui's `AppShell`, with `CordNav` as its left rail:
 home, your cords (each selected on its page and any page under it), then
 account, admin for instance admins, a/v check, about, and log out; signed
 out, log in, sign up, a/v check, about, and the claim link while the

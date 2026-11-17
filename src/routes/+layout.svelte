@@ -5,7 +5,7 @@
 	import ThemeRoot from '@fuzdev/fuz_ui/ThemeRoot.svelte';
 	import { SiteState, site_context } from '@fuzdev/fuz_ui/site.svelte.ts';
 	import { auth_state_context } from '@fuzdev/fuz_app/ui/auth_state.svelte.ts';
-	import AppShell from '@fuzdev/fuz_app/ui/AppShell.svelte';
+	import AppShell from '@fuzdev/fuz_ui/AppShell.svelte';
 	import { onMount, type Snippet } from 'svelte';
 	import pkg_json from 'virtual:pkg.json';
 

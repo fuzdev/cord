@@ -8,8 +8,8 @@
 	 * on every sibling tab's page, and its layout passes an exact-only
 	 * override instead (the `/c/[cord_id]` overview tab).
 	 *
-	 * The `<a>` is inlined rather than wrapping `MenuLink`, which derives
-	 * `selected` itself with no override.
+	 * The `<a>` is inlined; fuz_ui's `MenuLink` has the same selection and a
+	 * `selected` override, so this could wrap it.
 	 *
 	 * @module
 	 */
