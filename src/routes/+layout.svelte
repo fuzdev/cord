@@ -11,6 +11,7 @@
 
 	import { create_cord_rpc, cord_rpc_context } from '#lib/ui/rpc.ts';
 	import { CordAuthState, cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
+	import { CordSocket } from '#lib/ui/cord_socket.svelte.ts';
 	import { cord_join_session_storage, forget_cord_join } from '#lib/ui/cord_join_state.svelte.ts';
 	import { CordsState, cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import { CordSpacesState, cord_spaces_state_context } from '#lib/ui/cord_spaces_state.svelte.ts';
@@ -34,9 +35,19 @@
 	// Pages prerender before any session exists; the browser checks it once
 	// on mount, and `session_checked` marks when that settles. The one auth
 	// state goes in both contexts: fuz_app's components read `auth_state_context`.
-	const { api } = cord_rpc_context.set(create_cord_rpc());
 	const auth_state = cord_auth_state_context.set(new CordAuthState());
 	auth_state_context.set(auth_state);
+	// the signed-in account's WebSocket, which carries all of its requests;
+	// when the server may have ended the session, it asks, and a session
+	// that's gone, or now someone else's, gets the check a reload would run
+	const signed_in_account_id = (): string | null =>
+		auth_state.signed_in ? (auth_state.account?.id ?? null) : null;
+	const socket = new CordSocket({
+		probe_session: (account_id, signal) => auth_state.probe_session(account_id, signal),
+		end_session: () => auth_state.check_session(),
+		get_account_id: signed_in_account_id
+	});
+	const { api } = cord_rpc_context.set(create_cord_rpc({ socket }));
 
 	// a join link and its redemption stored in this tab belong to whoever was
 	// signed in or signing up, so a logout through `auth_state.logout` on any
@@ -55,12 +66,24 @@
 	const space_tabs = cord_space_tabs_context.set(
 		new CordSpaceTabs({ get_storage: cord_space_tabs_local_storage })
 	);
-	const account_id = $derived(auth_state.signed_in ? auth_state.account?.id : undefined);
+	const account_id = $derived(signed_in_account_id());
+	// the socket is open while an account is signed in, replaced when another
+	// signs in; effects don't run while prerendering, so no socket opens there.
+	// It runs before the fetch below, though a request made first would open
+	// the socket itself (`get_account_id`).
+	$effect(() => {
+		socket.set_account(account_id);
+	});
 	$effect(() => {
 		cords_state.reset();
 		spaces_state.reset();
 		space_tabs.reset();
 		if (account_id) void cords_state.fetch();
+	});
+	// a 4001 close, or reconnects that keep failing: ask whether the session
+	// is still live
+	$effect(() => {
+		socket.recheck_session_if_in_doubt();
 	});
 
 	onMount(() => {

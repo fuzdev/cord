@@ -4,7 +4,11 @@
  *
  * The throwing RPC proxy throws an `Error` carrying the JSON-RPC `code` and
  * `data`; the cord verbs put their refusal's reason in `data.reason`. A rate
- * limit carries no reason, only its code and a `data.retry_after`.
+ * limit carries no reason, only its code and a `data.retry_after`. The
+ * socket adds reasons of its own (`ui/cord_socket.svelte.ts`): a request the
+ * connection dropped mid-answer, one that waited too long to send, and one
+ * dropped because another account signed in. Their words live beside them
+ * there, as the socket's errors' own messages too.
  *
  * @module
  */
@@ -41,6 +45,15 @@ import {
 	ERROR_CORD_SPACE_NOT_FOUND,
 	ERROR_CORD_UPDATE_FORBIDDEN
 } from '../cord_action_specs.ts';
+import {
+	CORD_SIGNED_OUT_MESSAGE,
+	CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE,
+	CORD_SOCKET_ACCOUNT_CHANGED_REASON,
+	CORD_SOCKET_LOST_MESSAGE,
+	CORD_SOCKET_LOST_REASON,
+	CORD_SOCKET_WAIT_TIMEOUT_MESSAGE,
+	CORD_SOCKET_WAIT_TIMEOUT_REASON
+} from './cord_socket.svelte.ts';
 
 /** The `data.reason` of a thrown RPC error, if it has one. */
 export const rpc_error_reason = (e: unknown): string | undefined => {
@@ -51,6 +64,10 @@ export const rpc_error_reason = (e: unknown): string | undefined => {
 /** Whether a thrown RPC error is the server's rate limit, which carries no reason. */
 export const is_rpc_rate_limited = (e: unknown): boolean =>
 	(e as { code?: unknown } | null)?.code === JSONRPC_ERROR_CODES.rate_limited;
+
+/** Whether a thrown RPC error says there's no session: signed out, or the session ended. */
+export const is_rpc_unauthenticated = (e: unknown): boolean =>
+	(e as { code?: unknown } | null)?.code === JSONRPC_ERROR_CODES.unauthenticated;
 
 /** The words for a rate limit, whichever action hit it. */
 export const CORD_RATE_LIMITED_MESSAGE =
@@ -91,18 +108,22 @@ export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_SPACE_NOT_FOUND]: "That space isn't here anymore.",
 	[ERROR_CORD_SPACE_FORBIDDEN]: "Only the cord's owners and admins can manage its spaces.",
 	[ERROR_CORD_SPACE_NAME_INVALID]: CORD_SPACE_NAME_RULE,
-	[ERROR_CORD_SPACE_LIMIT_REACHED]: `A cord holds up to ${CORD_SPACE_COUNT_MAX} spaces. Delete one to make room for another.`
+	[ERROR_CORD_SPACE_LIMIT_REACHED]: `A cord holds up to ${CORD_SPACE_COUNT_MAX} spaces. Delete one to make room for another.`,
+	[CORD_SOCKET_LOST_REASON]: CORD_SOCKET_LOST_MESSAGE,
+	[CORD_SOCKET_WAIT_TIMEOUT_REASON]: CORD_SOCKET_WAIT_TIMEOUT_MESSAGE,
+	[CORD_SOCKET_ACCOUNT_CHANGED_REASON]: CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE
 };
 
 /**
  * The words to show for a thrown RPC error: the cord copy for its reason
- * when there is some, the rate-limit copy for a rate limit, otherwise the
- * error's own message.
+ * when there is some, the rate-limit copy for a rate limit, the signed-out
+ * copy for a missing session, otherwise the error's own message.
  */
 export const to_cord_error_message = (e: unknown): string => {
 	const reason = rpc_error_reason(e);
 	if (reason && CORD_ERROR_MESSAGES[reason]) return CORD_ERROR_MESSAGES[reason];
 	if (is_rpc_rate_limited(e)) return CORD_RATE_LIMITED_MESSAGE;
+	if (is_rpc_unauthenticated(e)) return CORD_SIGNED_OUT_MESSAGE;
 	return to_error_message(e, 'Something went wrong.');
 };
 

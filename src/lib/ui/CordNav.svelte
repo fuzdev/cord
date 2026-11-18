@@ -9,6 +9,11 @@
 	 * shows only the links both shapes share; the rest arrive with the
 	 * session rather than one shape flashing before the other.
 	 *
+	 * Signed in, a quiet line under the home link says the socket is
+	 * reconnecting, once it has been down for `CORD_SOCKET_RECONNECTING_DELAY`;
+	 * requests wait for it meanwhile. A socket closed as superseded isn't
+	 * trying until the next request reopens it, so it gets no line.
+	 *
 	 * @module
 	 */
 
@@ -20,11 +25,14 @@
 	import { cords_state_context } from './cords_state.svelte.ts';
 	import { cord_spaces_state_context } from './cord_spaces_state.svelte.ts';
 	import { cord_space_tabs_context } from './cord_space_tabs.svelte.ts';
+	import { cord_rpc_context } from './rpc.ts';
+	import { CORD_SOCKET_RECONNECTING_DELAY } from './cord_socket.svelte.ts';
 
 	const auth_state = cord_auth_state_context.get();
 	const cords_state = cords_state_context.get();
 	const spaces_state = cord_spaces_state_context.get();
 	const space_tabs = cord_space_tabs_context.get();
+	const { socket } = cord_rpc_context.get();
 
 	const signed_out = $derived(auth_state.session_checked && !auth_state.verified);
 
@@ -35,6 +43,18 @@
 		page.url.pathname === href || page.url.pathname.startsWith(href + '/');
 	const to_aria_current = (href: string): 'page' | undefined =>
 		page.url.pathname === href ? 'page' : undefined;
+
+	// a blip passes unremarked; a socket down for longer gets a quiet line
+	const socket_down = $derived(auth_state.signed_in && !socket.connected && !socket.superseded);
+	let reconnecting_shown = $state.raw(false);
+	$effect(() => {
+		reconnecting_shown = false;
+		if (!socket_down) return;
+		const timer = setTimeout(() => {
+			reconnecting_shown = true;
+		}, CORD_SOCKET_RECONNECTING_DELAY);
+		return () => clearTimeout(timer);
+	});
 
 	let logging_out = $state.raw(false);
 
@@ -55,6 +75,9 @@
 <nav class="unstyled" aria-label="site">
 	{@render menu_link(resolve('/'), 'Cord', 'font_size_lg')}
 	{#if auth_state.signed_in}
+		<div class="px_xs text_50 font_size_sm" role="status">
+			{#if reconnecting_shown}reconnecting…{/if}
+		</div>
 		<div class="px_xs pt_sm text_50 font_size_sm">cords</div>
 		<ul class="unstyled pl_md">
 			{#each cords_state.cords as cord (cord.id)}

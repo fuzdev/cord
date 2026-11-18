@@ -42,6 +42,12 @@ export const ActionMethod = one_of([
 	'role_grant_offer_history',
 	'role_grant_revoke',
 	'role_grant_assign',
+	'role_grant_offer_received',
+	'role_grant_offer_retracted',
+	'role_grant_offer_accepted',
+	'role_grant_offer_declined',
+	'role_grant_offer_supersede',
+	'role_grant_revoked',
 	'cord_create',
 	'cord_list',
 	'cord_get',
@@ -124,7 +130,15 @@ export type RequestResponseActionMethod = Infer<typeof RequestResponseActionMeth
 /**
  * Names of all remote_notification actions.
  */
-export const RemoteNotificationActionMethod = one_of(['cancel']);
+export const RemoteNotificationActionMethod = one_of([
+	'cancel',
+	'role_grant_offer_received',
+	'role_grant_offer_retracted',
+	'role_grant_offer_accepted',
+	'role_grant_offer_declined',
+	'role_grant_offer_supersede',
+	'role_grant_revoked'
+]);
 export type RemoteNotificationActionMethod = Infer<typeof RemoteNotificationActionMethod>;
 
 /**
@@ -163,6 +177,12 @@ export const FrontendActionMethod = one_of([
 	'role_grant_offer_history',
 	'role_grant_revoke',
 	'role_grant_assign',
+	'role_grant_offer_received',
+	'role_grant_offer_retracted',
+	'role_grant_offer_accepted',
+	'role_grant_offer_declined',
+	'role_grant_offer_supersede',
+	'role_grant_revoked',
 	'cord_create',
 	'cord_list',
 	'cord_get',
@@ -221,6 +241,12 @@ export const BackendActionMethod = one_of([
 	'role_grant_offer_history',
 	'role_grant_revoke',
 	'role_grant_assign',
+	'role_grant_offer_received',
+	'role_grant_offer_retracted',
+	'role_grant_offer_accepted',
+	'role_grant_offer_declined',
+	'role_grant_offer_supersede',
+	'role_grant_revoked',
 	'cord_create',
 	'cord_list',
 	'cord_get',
@@ -297,6 +323,19 @@ export const BackendRequestResponseMethod = one_of([
 	'cord_space_delete'
 ]);
 export type BackendRequestResponseMethod = Infer<typeof BackendRequestResponseMethod>;
+
+/**
+ * Names of remote_notification actions exposed by the broadcast API (backend-initiated, excluding request-scoped progress notifications named by another action's `streams`).
+ */
+export const BroadcastActionMethod = one_of([
+	'role_grant_offer_received',
+	'role_grant_offer_retracted',
+	'role_grant_offer_accepted',
+	'role_grant_offer_declined',
+	'role_grant_offer_supersede',
+	'role_grant_revoked'
+]);
+export type BroadcastActionMethod = Infer<typeof BroadcastActionMethod>;
 
 /**
  * Typed dispatch surface for the frontend's RPC client. Symmetric counterpart

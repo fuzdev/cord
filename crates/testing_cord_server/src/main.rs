@@ -28,7 +28,10 @@
 //!
 //! Beside the spine's `_testing_reset` it registers `_testing_drain_effects`,
 //! the barrier that awaits in-flight fire-and-forget audit writes (a
-//! signup's, or a failure audit from an RPC verb), and cord's own test seams
+//! signup's, or a failure audit from an RPC verb),
+//! `_testing_shorten_credential_expiry`, which pulls an account's session and
+//! token expiries close so a test can watch its open socket and audit stream
+//! close when they lapse, and cord's own test seams
 //! ([`cord_testing_actions`]), all under the same daemon-token gate. The
 //! drain is a real barrier because this binary builds the app's audit
 //! emitter with in-flight tracking (`SpineBackendOptions::audit_inflight_tracking`,
@@ -96,6 +99,7 @@ async fn main() -> ExitCode {
                 &[fuz_cell::CELL_DROP_TABLES, CORD_TABLES].concat(),
             )),
         )?;
+        specs.push(fuz_testing::create_testing_shorten_credential_expiry_action_spec());
         specs.push(cord_testing_actions::create_testing_cord_invite_expire_action_spec());
         Ok(specs)
     });

@@ -85,7 +85,11 @@ export const rust_backend_config = (): BackendConfig => ({
 			ws_role_gated: false,
 			// the spine backdoors `testing_cordd` mounts; cord's own
 			// `_testing_cord_invite_expire` is the spine suites' `extra_methods`
-			testing_backdoors: ['_testing_reset', '_testing_drain_effects']
+			testing_backdoors: [
+				'_testing_reset',
+				'_testing_drain_effects',
+				'_testing_shorten_credential_expiry'
+			]
 		},
 		start_command: [resolve_cargo_binary_path(CORD_CARGO_BINARY)],
 		database_url: process.env.CORD_CROSS_BACKEND_TEST_URL || CORD_CROSS_BACKEND_DEFAULT_URL,

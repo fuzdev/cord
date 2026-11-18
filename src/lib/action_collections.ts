@@ -7,6 +7,7 @@ import * as account_specs from '@fuzdev/fuz_app/auth/account_action_specs.ts';
 import * as admin_specs from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 import * as role_grant_offer_specs from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 import * as cord_specs from './cord_action_specs.ts';
+import * as role_grant_notifications from '@fuzdev/fuz_app/auth/role_grant_offer_notifications.ts';
 import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
 import type { Infer, InferInput } from '@fuzdev/fuz_schema/schema.ts';
 import type {
@@ -69,7 +70,13 @@ export const ActionSpecs: ActionSpecs = {
 	cord_space_list: cord_specs.cord_space_list_action_spec,
 	cord_space_create: cord_specs.cord_space_create_action_spec,
 	cord_space_update: cord_specs.cord_space_update_action_spec,
-	cord_space_delete: cord_specs.cord_space_delete_action_spec
+	cord_space_delete: cord_specs.cord_space_delete_action_spec,
+	role_grant_offer_received: role_grant_notifications.role_grant_offer_received_notification_spec,
+	role_grant_offer_retracted: role_grant_notifications.role_grant_offer_retracted_notification_spec,
+	role_grant_offer_accepted: role_grant_notifications.role_grant_offer_accepted_notification_spec,
+	role_grant_offer_declined: role_grant_notifications.role_grant_offer_declined_notification_spec,
+	role_grant_offer_supersede: role_grant_notifications.role_grant_offer_supersede_notification_spec,
+	role_grant_revoked: role_grant_notifications.role_grant_revoked_notification_spec
 };
 export type ActionSpecs = {
 	readonly heartbeat: typeof heartbeat_specs.heartbeat_action_spec;
@@ -123,6 +130,12 @@ export type ActionSpecs = {
 	readonly cord_space_create: typeof cord_specs.cord_space_create_action_spec;
 	readonly cord_space_update: typeof cord_specs.cord_space_update_action_spec;
 	readonly cord_space_delete: typeof cord_specs.cord_space_delete_action_spec;
+	readonly role_grant_offer_received: typeof role_grant_notifications.role_grant_offer_received_notification_spec;
+	readonly role_grant_offer_retracted: typeof role_grant_notifications.role_grant_offer_retracted_notification_spec;
+	readonly role_grant_offer_accepted: typeof role_grant_notifications.role_grant_offer_accepted_notification_spec;
+	readonly role_grant_offer_declined: typeof role_grant_notifications.role_grant_offer_declined_notification_spec;
+	readonly role_grant_offer_supersede: typeof role_grant_notifications.role_grant_offer_supersede_notification_spec;
+	readonly role_grant_revoked: typeof role_grant_notifications.role_grant_revoked_notification_spec;
 };
 
 export const action_specs: Array<ActionSpecUnion> = Object.values(ActionSpecs);
@@ -199,6 +212,24 @@ export interface ActionInputs {
 	cord_space_create: Infer<typeof cord_specs.cord_space_create_action_spec.input>;
 	cord_space_update: Infer<typeof cord_specs.cord_space_update_action_spec.input>;
 	cord_space_delete: Infer<typeof cord_specs.cord_space_delete_action_spec.input>;
+	role_grant_offer_received: Infer<
+		typeof role_grant_notifications.role_grant_offer_received_notification_spec.input
+	>;
+	role_grant_offer_retracted: Infer<
+		typeof role_grant_notifications.role_grant_offer_retracted_notification_spec.input
+	>;
+	role_grant_offer_accepted: Infer<
+		typeof role_grant_notifications.role_grant_offer_accepted_notification_spec.input
+	>;
+	role_grant_offer_declined: Infer<
+		typeof role_grant_notifications.role_grant_offer_declined_notification_spec.input
+	>;
+	role_grant_offer_supersede: Infer<
+		typeof role_grant_notifications.role_grant_offer_supersede_notification_spec.input
+	>;
+	role_grant_revoked: Infer<
+		typeof role_grant_notifications.role_grant_revoked_notification_spec.input
+	>;
 }
 
 /**
@@ -275,6 +306,24 @@ export interface ActionCallInputs {
 	cord_space_create: InferInput<typeof cord_specs.cord_space_create_action_spec.input>;
 	cord_space_update: InferInput<typeof cord_specs.cord_space_update_action_spec.input>;
 	cord_space_delete: InferInput<typeof cord_specs.cord_space_delete_action_spec.input>;
+	role_grant_offer_received: InferInput<
+		typeof role_grant_notifications.role_grant_offer_received_notification_spec.input
+	>;
+	role_grant_offer_retracted: InferInput<
+		typeof role_grant_notifications.role_grant_offer_retracted_notification_spec.input
+	>;
+	role_grant_offer_accepted: InferInput<
+		typeof role_grant_notifications.role_grant_offer_accepted_notification_spec.input
+	>;
+	role_grant_offer_declined: InferInput<
+		typeof role_grant_notifications.role_grant_offer_declined_notification_spec.input
+	>;
+	role_grant_offer_supersede: InferInput<
+		typeof role_grant_notifications.role_grant_offer_supersede_notification_spec.input
+	>;
+	role_grant_revoked: InferInput<
+		typeof role_grant_notifications.role_grant_revoked_notification_spec.input
+	>;
 }
 
 /**
@@ -349,6 +398,24 @@ export interface ActionOutputs {
 	cord_space_create: Infer<typeof cord_specs.cord_space_create_action_spec.output>;
 	cord_space_update: Infer<typeof cord_specs.cord_space_update_action_spec.output>;
 	cord_space_delete: Infer<typeof cord_specs.cord_space_delete_action_spec.output>;
+	role_grant_offer_received: Infer<
+		typeof role_grant_notifications.role_grant_offer_received_notification_spec.output
+	>;
+	role_grant_offer_retracted: Infer<
+		typeof role_grant_notifications.role_grant_offer_retracted_notification_spec.output
+	>;
+	role_grant_offer_accepted: Infer<
+		typeof role_grant_notifications.role_grant_offer_accepted_notification_spec.output
+	>;
+	role_grant_offer_declined: Infer<
+		typeof role_grant_notifications.role_grant_offer_declined_notification_spec.output
+	>;
+	role_grant_offer_supersede: Infer<
+		typeof role_grant_notifications.role_grant_offer_supersede_notification_spec.output
+	>;
+	role_grant_revoked: Infer<
+		typeof role_grant_notifications.role_grant_revoked_notification_spec.output
+	>;
 }
 
 /**
@@ -607,6 +674,30 @@ export interface ActionEventDatas {
 		'cord_space_delete',
 		ActionInputs['cord_space_delete'],
 		ActionOutputs['cord_space_delete']
+	>;
+	role_grant_offer_received: ActionEventRemoteNotificationData<
+		'role_grant_offer_received',
+		ActionInputs['role_grant_offer_received']
+	>;
+	role_grant_offer_retracted: ActionEventRemoteNotificationData<
+		'role_grant_offer_retracted',
+		ActionInputs['role_grant_offer_retracted']
+	>;
+	role_grant_offer_accepted: ActionEventRemoteNotificationData<
+		'role_grant_offer_accepted',
+		ActionInputs['role_grant_offer_accepted']
+	>;
+	role_grant_offer_declined: ActionEventRemoteNotificationData<
+		'role_grant_offer_declined',
+		ActionInputs['role_grant_offer_declined']
+	>;
+	role_grant_offer_supersede: ActionEventRemoteNotificationData<
+		'role_grant_offer_supersede',
+		ActionInputs['role_grant_offer_supersede']
+	>;
+	role_grant_revoked: ActionEventRemoteNotificationData<
+		'role_grant_revoked',
+		ActionInputs['role_grant_revoked']
 	>;
 }
 

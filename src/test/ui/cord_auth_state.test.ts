@@ -191,4 +191,42 @@ describe('CordAuthState', () => {
 		await auth_state.logout();
 		assert.deepEqual(calls, ['a', 'b:false', 'b:false']);
 	});
+
+	test('probe_session tells a 401 apart from an unreachable server and another account, changing nothing', async () => {
+		const cases: Array<[() => Promise<Response>, string]> = [
+			[() => Promise.resolve(json_response(200, { account: { id: 'a' } })), 'valid'],
+			[() => Promise.resolve(json_response(200, { account: { id: 'b' } })), 'changed'],
+			[() => Promise.resolve(json_response(200, { account: null })), 'unknown'],
+			[() => Promise.resolve(new Response('not json', { status: 200 })), 'unknown'],
+			[() => Promise.resolve(json_response(401, { error: 'authentication_required' })), 'invalid'],
+			[() => Promise.resolve(json_response(503, { error: 'unavailable' })), 'unknown'],
+			[() => Promise.reject(new TypeError('fetch failed')), 'unknown']
+		];
+		for (const [respond, expected] of cases) {
+			const urls: Array<string> = [];
+			vi.stubGlobal('fetch', (url: string) => {
+				urls.push(url);
+				return respond();
+			});
+			const auth_state = new CordAuthState();
+			assert.strictEqual(await auth_state.probe_session('a'), expected);
+			assert.deepEqual(urls, ['/api/account/status']);
+			assert.isFalse(auth_state.session_checked);
+			assert.isFalse(auth_state.verified);
+			assert.isNull(auth_state.account);
+		}
+	});
+
+	test('probe_session passes its signal to the request, and an aborted one is unknown', async () => {
+		const signals: Array<AbortSignal | undefined> = [];
+		vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
+			signals.push(init?.signal ?? undefined);
+			return Promise.reject(new DOMException('aborted', 'AbortError'));
+		});
+		const controller = new AbortController();
+		controller.abort();
+		const auth_state = new CordAuthState();
+		assert.strictEqual(await auth_state.probe_session('a', controller.signal), 'unknown');
+		assert.deepEqual(signals, [controller.signal]);
+	});
 });

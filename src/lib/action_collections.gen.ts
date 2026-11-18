@@ -1,4 +1,5 @@
 import type { Gen } from '@fuzdev/gro/gen.ts';
+import type { ActionSpecUnion } from '@fuzdev/fuz_app/actions/action_spec.ts';
 import {
 	ImportBuilder,
 	compose_gen_file,
@@ -15,6 +16,16 @@ import { all_admin_action_specs } from '@fuzdev/fuz_app/auth/admin_action_specs.
 import { all_role_grant_offer_action_specs } from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 
 import { all_cord_domain_action_specs } from './cord_action_specs.ts';
+import { role_grant_offer_notification_action_specs } from './action_specs.ts';
+
+/**
+ * The module fuz_app's role-grant notification specs live in, and the
+ * namespace the generated file imports it as. Those specs are exported as
+ * `<method>_notification_spec`, not the `<method>_action_spec` that
+ * `create_namespace_qualifier` names every spec by, so they are qualified here.
+ */
+const NOTIFICATION_SPECS_MODULE = '@fuzdev/fuz_app/auth/role_grant_offer_notifications.ts';
+const NOTIFICATION_SPECS_NS = 'role_grant_notifications';
 
 /**
  * Generates `action_collections.ts`: the spec record, input/output types, and
@@ -24,13 +35,14 @@ import { all_cord_domain_action_specs } from './cord_action_specs.ts';
  * identifier resolves from the module that defines it. The protocol specs are
  * one source per module because fuz_app's `actions/protocol.ts` exports them
  * only bundled. `include_protocol_actions: true` keeps them in the typed maps.
- * Add a row when the server mounts a new spec group.
+ * The role-grant notifications sit outside the qualifier, which can't name
+ * them. Add a row when the server mounts a new spec group.
  *
  * @nodocs
  */
 export const gen: Gen = ({ origin_path }) => {
 	const imports = new ImportBuilder();
-	const { qualify_spec, all_specs } = create_namespace_qualifier(
+	const { qualify_spec: qualify_source_spec, all_specs: source_specs } = create_namespace_qualifier(
 		[
 			{
 				ns: 'heartbeat_specs',
@@ -70,6 +82,15 @@ export const gen: Gen = ({ origin_path }) => {
 		],
 		imports
 	);
+	imports.add(NOTIFICATION_SPECS_MODULE, `* as ${NOTIFICATION_SPECS_NS}`);
+	const notification_methods = new Set(
+		role_grant_offer_notification_action_specs.map((spec) => spec.method)
+	);
+	const qualify_spec = (spec: ActionSpecUnion): string =>
+		notification_methods.has(spec.method)
+			? `${NOTIFICATION_SPECS_NS}.${spec.method}_notification_spec`
+			: qualify_source_spec(spec);
+	const all_specs = [...source_specs, ...role_grant_offer_notification_action_specs];
 	const options = { qualify_spec, include_protocol_actions: true };
 	return compose_gen_file({
 		origin_path,

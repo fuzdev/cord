@@ -133,8 +133,13 @@ const CSP = spa_csp({ wasm_unsafe_eval: true });
 // headers.
 //
 // `/api/ws` stays on the recipe's `/api` block, which carries the upgrade
-// headers; its 60s read timeout needs revisiting once the frontend holds a
-// WebSocket open.
+// headers. Its 60s read and send timeouts hold an idle socket open: the
+// frontend's client sends a heartbeat once either direction has been idle for
+// fuz_app's `DEFAULT_HEARTBEAT_INTERVAL`, and `cordd` answers it, so a frame
+// passes each way well inside them (`src/test/ui/cord_socket.test.ts` pins
+// the relation). A signed-in frontend sends every request over the socket,
+// so the block's rate limit counts its upgrade, not those requests; the
+// server's own per-action limits count them.
 const EXTRA_LOCATIONS = `    # Admin audit log stream (server-sent events): unbuffered, long-lived.
     location = /api/admin/audit/stream {
         limit_req zone=${RATE_LIMIT_ZONE} burst=5 nodelay;

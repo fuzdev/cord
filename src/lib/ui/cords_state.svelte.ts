@@ -7,10 +7,10 @@
  * through `cords_state_context`, which the rail and the home page share;
  * pages construct the others with the `api` from `cord_rpc_context`
  * (`CordState` through a cord's `CordPageState`).
- * The create and rename slots map a refusal through `cord_errors.ts`, so a
- * name the server refuses shows the name rules; the read slots keep
- * `AsyncSlot`'s default error message, and `CordPageState` reads a load's
- * refusal reason with `rpc_error_reason`.
+ * Every slot maps its error through `cord_errors.ts`, so a name the server
+ * refuses shows the name rules and a dropped connection reads in cord's
+ * words; `CordPageState` reads a load's refusal reason from its
+ * `error_data` with `rpc_error_reason`.
  *
  * @module
  */
@@ -40,7 +40,10 @@ export class CordsState {
 	readonly #api: ThrowingApi<FrontendActionsApi>;
 
 	/** Keeps its error through a retry, so a retry control stays mounted. */
-	readonly list: AsyncSlot = new AsyncSlot({ preserve_error_on_retry: true });
+	readonly list: AsyncSlot = new AsyncSlot({
+		preserve_error_on_retry: true,
+		map_error: to_cord_error_message
+	});
 	readonly create: AsyncSlot<CordCreateOutput> = new AsyncSlot({
 		map_error: to_cord_error_message
 	});
@@ -122,7 +125,7 @@ export const cords_state_context = create_context<CordsState>();
 export class CordState {
 	readonly #api: ThrowingApi<FrontendActionsApi>;
 
-	readonly load: AsyncSlot = new AsyncSlot();
+	readonly load: AsyncSlot = new AsyncSlot({ map_error: to_cord_error_message });
 	readonly rename: AsyncSlot<CordUpdateOutput> = new AsyncSlot({
 		map_error: to_cord_error_message
 	});
@@ -175,7 +178,7 @@ export class CordState {
 export class AdminCordsState {
 	readonly #api: ThrowingApi<FrontendActionsApi>;
 
-	readonly list: AsyncSlot = new AsyncSlot();
+	readonly list: AsyncSlot = new AsyncSlot({ map_error: to_cord_error_message });
 
 	/** Every cord, newest first. */
 	cords: Array<CordAdminJson> = $state.raw([]);

@@ -17,7 +17,19 @@
  */
 
 import { AuthState } from '@fuzdev/fuz_app/ui/auth_state.svelte.ts';
+import { ui_fetch } from '@fuzdev/fuz_app/ui/ui_fetch.ts';
 import { create_context } from '@fuzdev/fuz_ui/context_helpers.ts';
+
+/** The account status route `check_session` reads: 200 with a live session, 401 without. */
+export const ACCOUNT_STATUS_PATH = '/api/account/status';
+
+/**
+ * What a session probe learned: `valid` (200, naming the account asked
+ * about), `changed` (200, naming another account: this browser signed in as
+ * someone else), `invalid` (401), or `unknown` (a network failure, any other
+ * status, or a body naming no account, which says nothing about the session).
+ */
+export type SessionProbe = 'valid' | 'changed' | 'invalid' | 'unknown';
 
 /**
  * `AuthState` that records when its first `check_session` settles. The root
@@ -76,6 +88,31 @@ export class CordAuthState extends AuthState {
 				this.role_grants = [];
 			}
 			this.session_checked = true;
+		}
+	}
+
+	/**
+	 * Ask the server whether the session is live, and whose it is, changing
+	 * nothing. Unlike `check_session`, which reads a failed request as signed
+	 * out, this tells a 401 apart from an unreachable server, so a caller
+	 * that only suspects the session ended can act on a definitive answer
+	 * alone. The session cookie is the browser's, not the tab's, so a live
+	 * session may belong to another account than the one this tab shows.
+	 *
+	 * @param expected_account_id - the account this tab is signed in as
+	 * @param signal - aborts the request, which then reads as `unknown`
+	 */
+	async probe_session(expected_account_id: string, signal?: AbortSignal): Promise<SessionProbe> {
+		try {
+			const response = await ui_fetch(ACCOUNT_STATUS_PATH, { signal });
+			if (response.status === 401) return 'invalid';
+			if (!response.ok) return 'unknown';
+			const body: unknown = await response.json();
+			const account_id = (body as { account?: { id?: unknown } | null } | null)?.account?.id;
+			if (typeof account_id !== 'string') return 'unknown';
+			return account_id === expected_account_id ? 'valid' : 'changed';
+		} catch {
+			return 'unknown';
 		}
 	}
 

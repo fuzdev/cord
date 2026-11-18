@@ -187,7 +187,9 @@ The server's routes:
 - `POST /api/account/signup`: invite-gated signup
 - `/api/rpc` (GET and POST): JSON-RPC 2.0 with the account, admin,
   role-grant offer, and cord actions
-- `/api/ws`: the WebSocket for realtime actions
+- `/api/ws`: the same actions over a WebSocket, and the notifications the
+  server pushes; the frontend holds it open while signed in and sends every
+  signed-in request over it, using `/api/rpc` only while signed out
 - `GET /api/admin/audit/stream`: the audit log as a live server-sent event
   stream, for admins signed in with a session
 

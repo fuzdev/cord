@@ -49,8 +49,10 @@ Skill(fuz-stack).
 - `src/routes/` — SvelteKit routes (see Frontend)
 - `src/lib/` — `cord_action_specs.ts` (the cord wire's TS twin),
   `cord_roles.ts` (the roles and member rules' twin), `action_specs.ts` and
-  the generated `action_*` modules; `ui/` holds `rpc.ts`, `cord_errors.ts`
-  (refusal reasons to words), the `*_state.svelte.ts` classes, and the
+  the generated `action_*` and `frontend_action_types` modules; `ui/` holds
+  `rpc.ts`, `cord_socket.svelte.ts` (the signed-in account's WebSocket),
+  `cord_errors.ts` (refusal reasons to words), the `*_state.svelte.ts`
+  classes, and the
   components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs, a
   cord's space tabs among them; `CordNameForm`, for cord and space names;
   `CordMembers`, `CordInvites`, `CordInviteForm`,
@@ -194,6 +196,27 @@ The load-bearing rules. Each module named holds the full reasoning.
   `verifying` (true mid-submit, so the form would unmount and lose input);
   admin UI gates on `auth_state.is_admin`, fuz_app's global-grant check.
   (`ui/cord_auth_state.svelte.ts`)
+- **Signed-in requests go only over the socket.** While an account is
+  signed in, `CordSocket.will_reconnect` holds, so fuz_app's transport
+  queues every request for the socket and never falls back to HTTP; a
+  request waits for a down socket at most `CORD_SOCKET_WAIT_TIMEOUT`, a
+  sign-out or account change rejects what's waiting (never sent on the next
+  account's socket; a reconnect, like HTTP, goes as whoever the browser's
+  cookie now names), and one on the wire at a drop, a 4001's included,
+  fails as `connection_lost`, its outcome unknown. Signed out, requests go
+  over HTTP. (`ui/rpc.ts`,
+  `ui/cord_socket.svelte.ts`)
+- **The socket ends a session only on a 401.** A 4001 close or reconnects
+  that keep failing put the session in doubt; the re-check probes
+  `/api/account/status` and runs `check_session` only on a definitive 401
+  or a live session naming another account, never on a network failure or
+  a 5xx, so a server restart or an outage signs no one out. A 4001 isn't
+  always this tab's session (a logout elsewhere closes every socket of the
+  account), so a live session reopens the socket on a fresh client (a
+  client closed as revoked never reopens), on a backoff when it's revoked
+  again soon after. A re-check answers only for the client it began on,
+  and its probe gives up as unknown after `CORD_SOCKET_WAIT_TIMEOUT`.
+  (`ui/cord_socket.svelte.ts`)
 - **Twins and their pins**: `cord_action_specs.ts` twins the Rust specs,
   error reasons, and limits, and `src/test/cord_action_specs.test.ts` sweeps
   the Rust sources so the reasons, the numeric `CORD_*` limits, and the
@@ -230,12 +253,16 @@ that has shipped); give it a `*_COLUMNS` const and register it in
 **A test seam**: a `RunAppOptions` field, which `cordd` passes as `None`
 (or `false`).
 
+**A pushed notification**: the `remote_notification` spec
+(`initiator: 'backend'`) in `all_cord_action_specs`, so a push is parsed
+rather than warned about as an unknown method; `gro gen`; then a `receive`
+handler in the `FrontendActionHandlers` passed to `create_cord_rpc`.
+
 ## Frontend
 
 A static SvelteKit build over `cordd`'s API, using `@fuzdev/fuz_app` for the
 auth UI and the RPC client. The root `+layout.svelte` provides
-`cord_rpc_context` (`ui/rpc.ts`: the throwing `api` over `/api/rpc`, HTTP
-only, reads as `GET` unless their input is sensitive),
+`cord_rpc_context` (`ui/rpc.ts`: the throwing `api`, and the `socket`),
 `cord_auth_state_context` (`CordAuthState`, also set on
 fuz_app's `auth_state_context`), `cords_state_context` (the signed-in
 account's `CordsState`, fetched when an account signs in and reset when it
@@ -243,6 +270,45 @@ signs out), and, reset with it, `cord_spaces_state_context` (the one
 `CordSpacesState`) and `cord_space_tabs_context` (the one `CordSpaceTabs`),
 which live at the root rather than in the cord layout because the rail
 nests them; and it checks the session on mount.
+
+Signed in, every request goes over the account's WebSocket on `/api/ws`,
+never over HTTP: while the socket is down (connecting after sign-in, a
+restart, a dropped connection) a request waits in fuz_app's queue for it to
+open, failing after `CORD_SOCKET_WAIT_TIMEOUT` as unsent; a sign-out or an
+account change rejects what's waiting; and a request on the wire when the
+connection drops fails as `connection_lost`, which `ui/cord_errors.ts` words
+as maybe gone through. Signed out (an invite link's preview and redemption),
+requests go over HTTP on `/api/rpc`, where reads go as `GET` unless their
+input is sensitive. Both carry the session cookie and answer alike, and the
+server's per-action rate limits count both; nginx's per-IP request limit
+sees a socket only as its upgrade. The root layout drives the `CordSocket`
+(`ui/cord_socket.svelte.ts`) from the same account id as the reset effect:
+it opens once an account is signed in, closes on sign-out, and is replaced
+on an account change; a request made before that effect runs opens it
+itself (`get_account_id`); effects don't run while prerendering, so no
+socket opens there. fuz_app's client sends a `heartbeat` once either
+direction has been idle for `DEFAULT_HEARTBEAT_INTERVAL`, and reconnects
+with backoff after a close, except a 4001 (terminal) or the per-account
+connection limit's 4004, which leaves it closed until the tab's next
+request reopens it (the role gate's 4006 can't come: `/api/ws` mounts no
+required roles). A 4001 (the session revoked or expired while
+open), or reconnects that keep failing, make the layout re-check the
+session (`recheck_session_if_in_doubt`): a 401, or a live session naming
+another account, runs `check_session`, which signs the tab out as a logout
+would (the cords, spaces, and tabs reset, the rail signed out), or moves it
+to that account, without reconnecting, though the `on_logout` listeners
+don't run; anything else keeps the session and reopens a revoked socket. A
+request made while the socket is closed as revoked waits on that re-check,
+and is dropped unsent if the session ends meanwhile, even when the same
+account signs back in; one the socket already held when the 4001 came was
+sent (a 4001 closes only an opened socket, and opening sends the queue), so
+it fails as lost, never resent. The rail shows a quiet
+"reconnecting…" line once the socket has been down for
+`CORD_SOCKET_RECONNECTING_DELAY`, except while it's closed as superseded,
+which isn't trying. The server pushes notifications over
+the socket, dispatched by method to the `receive` handlers passed to
+`create_cord_rpc`; today it pushes only the spine's role-grant and offer
+notifications, which cord lists but doesn't handle.
 
 Every page sits in fuz_ui's `AppShell`, with `CordNav` as its left rail:
 home, your cords (each selected on its page and any page under it, the one
@@ -270,9 +336,9 @@ but no link lists of their own.
 
 The state classes hold fuz_app `AsyncSlot`s (`KeyedAsyncSlot` for per-row
 writes) over the `api`. The member, invite, space, and join states map errors
-through `ui/cord_errors.ts`; `cords_state.svelte.ts` maps its create and
-rename refusals through it too (`map_error: to_cord_error_message`), while
-its read slots keep `AsyncSlot`'s default messages. Per-cord states drop
+through `ui/cord_errors.ts`, and so does every slot in
+`cords_state.svelte.ts` (`map_error: to_cord_error_message`); the socket's
+own errors carry cord's words as their messages too. Per-cord states drop
 responses for a cord they've moved off, and their `fetch` is safe to call
 from an `$effect`; so is a `reset`, which reads nothing trackably (a keyed
 slot's reset reads its entries, and the root layout's reset effect would
@@ -318,9 +384,11 @@ spaces the cord no longer has drop whenever its list loads or changes. The
 overview refreshes the space list when it opens.
 
 The typed surface is generated: `action_specs.ts` lists every spec the
-server mounts (the protocol actions work only over `/api/ws`), and
-`action_collections.gen.ts` / `action_metatypes.gen.ts` generate the typed
-modules. A new spec group goes in `action_specs.ts` and as a source row in
+server mounts (the protocol actions work only over `/api/ws`) and the
+notifications it pushes, and `action_collections.gen.ts` /
+`action_metatypes.gen.ts` / `frontend_action_types.gen.ts` generate the
+typed modules, the last the `FrontendActionHandlers` map. A new spec group
+goes in `action_specs.ts` and as a source row in
 `action_collections.gen.ts`, then `gro gen`.
 
 Routes, prerendered anonymous and filled in client-side:
@@ -437,8 +505,13 @@ What's cord-specific, beyond the stock fuz_app recipes:
   `/c/<cord_id>` and its tabs, and the SPA's 404.
   `/api/admin/audit/stream` gets its own exact-match location, unbuffered
   with an hour's read timeout, since the `/api` block's 60s timeout would
-  cut the idle stream. `/api/ws` rides the `/api` block and its 60s
-  timeout, to revisit when the frontend holds a WebSocket open.
+  cut the idle stream. `/api/ws` rides the `/api` block, whose upgrade
+  headers carry it; the client's heartbeat, sent once either direction has
+  been idle for `DEFAULT_HEARTBEAT_INTERVAL` (checked every half interval),
+  keeps a frame each way inside its 60s read and send timeouts, and inside
+  `cordd`'s own receive timeout (`cord_socket.test.ts` pins both). The
+  `/api` rate limit counts the upgrade, not the requests sent over the
+  socket after it.
 - **The deploy** builds locally (`cargo xtask check-release`, the release
   `cordd`, `gro build`, then the binary into `dist_artifacts/`, after
   `gro build` since it deletes `dist_*`) and gates on `/ready`. A rollback
@@ -450,7 +523,9 @@ The same `run_app` with the test-only pieces: `fuz_testing`'s fast hasher,
 disabled rate limiters, a daemon token under `CORD_DAEMON_TOKEN_DIR`
 (required), `_testing_reset` (a fresh keeper, then a truncate of cord's
 tables and the cell tables), `_testing_drain_effects` (a real barrier, since
-it builds the audit emitter with in-flight tracking), cord's
+it builds the audit emitter with in-flight tracking),
+`_testing_shorten_credential_expiry` (an account's credentials expiring
+seconds from now, for the spine's credential-deadline suite), cord's
 `_testing_cord_invite_expire`, and a schema wipe on boot when
 `FUZ_TESTING_RESET_DB_ON_STARTUP` is true. It binds `127.0.0.1:4161`. **Every
 cord table goes in the `_testing_reset` truncate**, or rows outlive a test. Never ship it: it is the only runtime
@@ -463,7 +538,10 @@ dev-dependency for its Postgres suites, an edge the audit ignores).
 
 `gro test` runs the in-process vitest `unit` project: the twins
 (`cord_action_specs.test.ts`, `cord_roles.test.ts`), the generated surface
-(`action_specs.test.ts`), and the state classes (`src/test/ui/`).
+(`action_specs.test.ts`), and the state classes, the socket (its
+re-checks, reopens, and waiting requests), and the RPC client's routing and
+push dispatch (`src/test/ui/`, the socket over `FakeSocketClient` and
+`FakeTimers`).
 
 Rust unit tests live in `#[cfg(test)]` modules and need no database,
 except `router.rs`'s `#[ignore]`d redeem-budget test, which drives the
@@ -500,7 +578,9 @@ skips it. `spine_suites` runs fuz_app's shipped spine suites in one
 their reasons; `auth` covers what those leave out (the one-shot bootstrap, the
 admin RPC and audit stream gates for a member and a bearer token), `cords` the
 cord verbs, `cord_members` invite links and members, `cord_newcomers`
-newcomer links, and `cord_spaces` the space verbs, end to end. The config
+newcomer links, `cord_spaces` the space verbs, and `cord_socket` cord verbs
+over `/api/ws`, end to end (the socket itself, its upgrade and every 4001
+close, revocation and expiry alike, is the spine suites'). The config
 is `cord_backend_config.ts`, the declared surface `cord_surface_spec.ts`,
 the shared steps `cord_cross_helpers.ts`.
 

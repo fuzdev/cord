@@ -1,7 +1,9 @@
 import { assert, describe, test } from 'vitest';
+import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import { ERROR_CORD_NAME_INVALID, type CordJson } from '#lib/cord_action_specs.ts';
-import { CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
+import { AdminCordsState, CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
+import { CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_REASON } from '#lib/ui/cord_socket.svelte.ts';
 
 import { rpc_error, stub_api } from './stub_api.ts';
 
@@ -253,5 +255,23 @@ describe('CordState', () => {
 		resolve_update({ cord: cord('the stoop') });
 		assert.isFalse(await renaming);
 		assert.strictEqual(state.cord?.name, 'the yard', 'the porch’s rename stays off the yard');
+	});
+});
+
+describe('the cord read slots', () => {
+	test('show a dropped connection in cord’s words, not the error’s own text', async () => {
+		const lost = () =>
+			Promise.reject(rpc_error(CORD_SOCKET_LOST_REASON, JSONRPC_ERROR_CODES.service_unavailable));
+		const api = stub_api({ cord_list: lost, cord_get: lost, cord_admin_list: lost });
+		const cords = new CordsState({ api });
+		await cords.fetch();
+		const one = new CordState({ api });
+		await one.fetch(cord('x').id);
+		const admin = new AdminCordsState({ api });
+		await admin.fetch();
+		assert.deepEqual(
+			[cords.list.error, one.load.error, admin.list.error],
+			[CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_MESSAGE]
+		);
 	});
 });

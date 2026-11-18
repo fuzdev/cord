@@ -34,7 +34,8 @@ const HANDLER_NARROW_KINDS: ReadonlySet<ActionMethodEnumKind> = new Set([
 /**
  * Generates `action_metatypes.ts`: the method enums and the typed
  * `FrontendActionsApi` over `all_cord_action_specs`, which types the RPC
- * client and satisfies fuz_app's admin RPC adapters.
+ * client and satisfies fuz_app's admin RPC adapters. The API leaves out the
+ * notifications the server pushes, which the client receives but never sends.
  *
  * @nodocs
  */
@@ -52,7 +53,8 @@ export const gen: Gen = ({ origin_path }) => {
 				emit: HANDLER_NARROW_KINDS
 			}),
 			generate_frontend_actions_api(all_cord_action_specs, imports, {
-				include_protocol_actions: true
+				include_protocol_actions: true,
+				method_filter: (spec) => spec.initiator !== 'backend'
 			})
 		]
 	});
