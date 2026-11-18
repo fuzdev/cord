@@ -18,10 +18,22 @@
 	 * matching would keep it lit on every other tab's page; it takes an
 	 * exact-only `selected` from `page.route.id`.
 	 *
+	 * The cord's spaces load with the cord, into the root layout's
+	 * `CordSpacesState` (the rail nests them), and this layout keys the
+	 * root's `CordSpaceTabs` to the viewer's account and the route's cord.
+	 * After the management tabs, the strip shows the permanent space tabs,
+	 * then the preview tab: a space opened by URL or a single click takes
+	 * the preview tab unless it's permanent, a double click on the preview
+	 * tab keeps it, and the space page offers the same from the keyboard.
+	 * Closing the selected tab goes to its neighbour, else the overview, and
+	 * focus follows to the selected tab. Tabs of spaces the loaded list
+	 * lacks drop whenever it loads.
+	 *
 	 * @module
 	 */
 
-	import { untrack, type Snippet } from 'svelte';
+	import { tick, untrack, type Snippet } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
@@ -32,6 +44,8 @@
 	import { cord_rpc_context } from '#lib/ui/rpc.ts';
 	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import { CordPageState, cord_page_state_context } from '#lib/ui/cord_page_state.svelte.ts';
+	import { cord_spaces_state_context } from '#lib/ui/cord_spaces_state.svelte.ts';
+	import { cord_space_tabs_context } from '#lib/ui/cord_space_tabs.svelte.ts';
 	import Tabs from '#lib/ui/Tabs.svelte';
 	import Tab from '#lib/ui/Tab.svelte';
 
@@ -86,6 +100,79 @@
 		untrack(() => cords_state.put_cord(current));
 	});
 
+	// the cord's spaces load with it; `refresh` reads nothing trackably and
+	// skips a load already running, as the overview's own refresh may be
+	const spaces_state = cord_spaces_state_context.get();
+	$effect(() => {
+		if (loaded_cord_id) void spaces_state.refresh(loaded_cord_id);
+	});
+
+	// the space tabs are the viewer's in this cord; `load` is a no-op for the
+	// pair it already holds, and reads the store only on a change
+	const space_tabs = cord_space_tabs_context.get();
+	$effect(() => {
+		if (account_id && loaded_cord_id) space_tabs.load(account_id, loaded_cord_id);
+	});
+
+	// tabs for spaces this cord no longer has drop whenever its list loads or changes
+	const loaded_spaces = $derived(
+		loaded_cord_id ? spaces_state.loaded_spaces(loaded_cord_id) : null
+	);
+	$effect(() => {
+		if (loaded_cord_id && loaded_spaces) {
+			space_tabs.retain(
+				loaded_cord_id,
+				loaded_spaces.map((s) => s.id)
+			);
+		}
+	});
+
+	// a space opened by URL (a link, a reload, the rail, the overview) takes
+	// the preview tab unless it's permanent; only a space the loaded list has,
+	// so a missing one gets no tab, and keyed on the id alone, so a rename
+	// doesn't reopen a tab closed meanwhile
+	const route_space_id = $derived.by(() => {
+		const parsed = parse(Uuid, page.params.space_id);
+		return parsed.ok ? parsed.value : undefined;
+	});
+	const opened_space_id = $derived(
+		loaded_cord_id && route_space_id
+			? spaces_state.get_space(loaded_cord_id, route_space_id)?.id
+			: undefined
+	);
+	$effect(() => {
+		if (loaded_cord_id && opened_space_id) {
+			space_tabs.open(loaded_cord_id, opened_space_id, 'preview');
+		}
+	});
+
+	// the space tabs in strip order, once the list they name has loaded
+	const tab_spaces = $derived.by(() => {
+		if (!loaded_spaces || space_tabs.cord_id !== loaded_cord_id) return [];
+		const by_id = new Map(loaded_spaces.map((s) => [s.id, s]));
+		return space_tabs.tab_ids.flatMap((id) => by_id.get(id) ?? []);
+	});
+
+	const strip_id = $props.id();
+
+	// closing the selected tab goes to its neighbour, else the overview; focus,
+	// which the close control took with it, lands on the selected tab
+	const close_space_tab = async (space_id: Uuid): Promise<void> => {
+		const cord_id = loaded_cord_id;
+		if (!cord_id) return;
+		const was_selected = route_space_id === space_id;
+		const neighbour = space_tabs.close(cord_id, space_id);
+		if (was_selected) {
+			await goto(
+				neighbour
+					? resolve('/c/[cord_id]/s/[space_id]', { cord_id, space_id: neighbour })
+					: resolve('/c/[cord_id]', { cord_id })
+			);
+		}
+		await tick();
+		document.getElementById(strip_id)?.querySelector<HTMLElement>('.selected a')?.focus();
+	};
+
 	// whether a tab page renders, rather than one of this layout's own states
 	const signed_in = $derived(auth_state.session_checked && auth_state.signed_in);
 	const signed_in_not_found = $derived(signed_in && cord_page.not_found);
@@ -106,7 +193,7 @@
 	{/if}
 </svelte:head>
 
-<main class="width_atmost_sm mx_auto p_lg">
+<main class="width_atmost_md mx_auto p_lg">
 	{#if !auth_state.session_checked}
 		<p class="text_50">checking session...</p>
 	{:else if !auth_state.signed_in}
@@ -121,7 +208,7 @@
 	{:else if cord_page.role}
 		{@const cord_id = cord_page.cord.id}
 		<h1>{cord_page.cord.name}</h1>
-		<Tabs label="cord pages">
+		<Tabs label="cord pages" id={strip_id}>
 			<Tab href={resolve('/c/[cord_id]', { cord_id })} selected={page.route.id === '/c/[cord_id]'}>
 				overview
 			</Tab>
@@ -130,6 +217,21 @@
 				<Tab href={resolve('/c/[cord_id]/invites', { cord_id })}>invites</Tab>
 				<Tab href={resolve('/c/[cord_id]/settings', { cord_id })}>settings</Tab>
 			{/if}
+			{#each tab_spaces as space (space.id)}
+				{@const preview = space.id === space_tabs.preview_id}
+				<Tab
+					href={resolve('/c/[cord_id]/s/[space_id]', { cord_id, space_id: space.id })}
+					{preview}
+					title={preview
+						? `${space.name} (preview; double-click to keep it as a permanent tab)`
+						: space.name}
+					ondblclick={preview ? () => space_tabs.promote() : undefined}
+					onclose={() => close_space_tab(space.id)}
+					close_label="close {space.name}"
+				>
+					{space.name}
+				</Tab>
+			{/each}
 		</Tabs>
 		{@render children()}
 	{/if}

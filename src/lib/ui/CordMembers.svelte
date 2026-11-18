@@ -177,6 +177,7 @@
 							{@const pending = members_state.role_changing(member.actor_id)}
 							{@const draft = draft_of(member)}
 							<select
+								class="width:auto"
 								aria-label="role for {name_of(member)}"
 								value={draft}
 								aria-disabled={pending}

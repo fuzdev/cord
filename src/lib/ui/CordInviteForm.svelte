@@ -71,7 +71,7 @@
 </script>
 
 <form
-	class="width_atmost_md"
+	class="width_atmost_sm"
 	oninput={() => {
 		invalid = null;
 	}}

@@ -63,9 +63,10 @@ database.
   ones that welcome someone new to the instance, and the cord's members
   can be given roles, removed, or leave, as long as the cord keeps an
   owner
-- spaces, on the server so far: a cord's owners and admins add lines to it,
-  rename them, and delete them, and its members list them. Their pages,
-  and the live room inside a line, come next
+- spaces: a cord's owners and admins add lines to it, rename them, and
+  delete them; its members see them in the rail and open them as tabs on
+  the cord's page, a preview tab and the ones they keep (remembered in the
+  browser). The live room inside a line comes next
 - an a/v check page, for anyone: your camera, mic, and output, a
   recording, and a WebRTC call to itself, all local to the browser
 - the server, `crates/cord_server` (the `cordd` binary): accounts and

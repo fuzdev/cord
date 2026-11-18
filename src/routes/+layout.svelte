@@ -13,6 +13,12 @@
 	import { CordAuthState, cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cord_join_session_storage, forget_cord_join } from '#lib/ui/cord_join_state.svelte.ts';
 	import { CordsState, cords_state_context } from '#lib/ui/cords_state.svelte.ts';
+	import { CordSpacesState, cord_spaces_state_context } from '#lib/ui/cord_spaces_state.svelte.ts';
+	import {
+		CordSpaceTabs,
+		cord_space_tabs_context,
+		cord_space_tabs_local_storage
+	} from '#lib/ui/cord_space_tabs.svelte.ts';
 	import CordNav from '#lib/ui/CordNav.svelte';
 
 	const {
@@ -42,9 +48,18 @@
 	// the signed-in account's cords, shared by the rail and the home page:
 	// forgotten whenever the account changes, then loaded for whoever signed in
 	const cords_state = cords_state_context.set(new CordsState({ api }));
+	// the spaces of the cord you're on, and its space tabs, live here rather
+	// than in the cord layout because the rail nests them; the cord layout
+	// keys both to the route's cord
+	const spaces_state = cord_spaces_state_context.set(new CordSpacesState({ api }));
+	const space_tabs = cord_space_tabs_context.set(
+		new CordSpaceTabs({ get_storage: cord_space_tabs_local_storage })
+	);
 	const account_id = $derived(auth_state.signed_in ? auth_state.account?.id : undefined);
 	$effect(() => {
 		cords_state.reset();
+		spaces_state.reset();
+		space_tabs.reset();
 		if (account_id) void cords_state.fetch();
 	});
 

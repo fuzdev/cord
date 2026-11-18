@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
-	 * A one-field form for a cord's name, shared by creating a cord and
-	 * renaming one. Checks the name against `CordName` before calling
+	 * A one-field form for a name, shared by creating and renaming a cord
+	 * or a space. Checks the name against its schema (`CordName` unless
+	 * given another, as `CordSpaceName` for a space) before calling
 	 * `onsubmit`, and clears the field after a successful create. While a
 	 * submit runs the field is `readonly` and the button `aria-disabled`, so
 	 * focus stays put and a failed attempt keeps its input.
@@ -10,13 +11,15 @@
 	 */
 
 	import PendingButton from '@fuzdev/fuz_ui/PendingButton.svelte';
-	import { parse } from '@fuzdev/fuz_schema/schema.ts';
+	import { parse, type Schema } from '@fuzdev/fuz_schema/schema.ts';
 
 	import { CordName } from '../cord_action_specs.ts';
 
 	const {
 		onsubmit,
 		submit_label,
+		schema = CordName,
+		placeholder = 'cord name',
 		initial_name = '',
 		clear_on_success = false,
 		pending = false,
@@ -26,6 +29,10 @@
 		onsubmit: (name: string) => Promise<boolean>;
 		/** The submit button's label. */
 		submit_label: string;
+		/** The name's rules, checked before submitting; `CordName` by default. */
+		schema?: Schema<string>;
+		/** The field's placeholder. */
+		placeholder?: string;
 		/** The field's starting value. */
 		initial_name?: string;
 		/** Empty the field after a successful submit. */
@@ -42,7 +49,7 @@
 
 	const submit = async (): Promise<void> => {
 		if (pending) return;
-		const parsed = parse(CordName, name);
+		const parsed = parse(schema, name);
 		if (!parsed.ok) {
 			invalid = parsed.issues[0]?.message ?? 'invalid name';
 			return;
@@ -54,7 +61,7 @@
 </script>
 
 <form
-	class="width_atmost_md"
+	class="width_atmost_sm"
 	oninput={() => {
 		invalid = null;
 	}}
@@ -65,7 +72,7 @@
 >
 	<label>
 		<div class="title">name</div>
-		<input name="name" type="text" bind:value={name} placeholder="cord name" readonly={pending} />
+		<input name="name" type="text" bind:value={name} {placeholder} readonly={pending} />
 	</label>
 	<div class="row gap_sm">
 		<PendingButton {pending} disabled={false} aria-disabled={pending} onclick={submit}>

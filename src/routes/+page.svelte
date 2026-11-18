@@ -33,7 +33,7 @@
 		A self-hosted place for a friend group or small community to hang out: voice, video, and
 		screenshare rooms, live chat, forums, and your Bluesky feeds, in one instance you run yourself.
 	</p>
-	<p>Cord is early: cords exist, but there's nothing to do inside one yet.</p>
+	<p>Cord is early: cords and their spaces exist, but nothing happens inside a space yet.</p>
 	{#if !auth_state.session_checked}
 		<p class="text_50">checking session...</p>
 	{:else if auth_state.signed_in}

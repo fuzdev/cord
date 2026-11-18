@@ -7,9 +7,10 @@
 **Status: early.** The design is settled and implementation is underway: a
 SvelteKit static frontend over `cordd`, an API-only Rust server on the fuz
 spine, with accounts, cords, their members, and invite links (including ones
-that bring someone new onto the instance). The server keeps a cord's spaces
-(each a line, by kind), but no page shows them yet and nothing happens inside
-one: no live room. Don't describe planned features as working.
+that bring someone new onto the instance), and a cord's spaces (each a line,
+by kind), which its owners and admins add, rename, and delete, shown in the
+rail and as tabs. Nothing happens inside a space yet: no live room. Don't
+describe planned features as working.
 
 ## Vocabulary and voice
 
@@ -50,8 +51,9 @@ Skill(fuz-stack).
   `cord_roles.ts` (the roles and member rules' twin), `action_specs.ts` and
   the generated `action_*` modules; `ui/` holds `rpc.ts`, `cord_errors.ts`
   (refusal reasons to words), the `*_state.svelte.ts` classes, and the
-  components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs;
-  `CordNameForm`, `CordMembers`, `CordInvites`, `CordInviteForm`,
+  components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs, a
+  cord's space tabs among them; `CordNameForm`, for cord and space names;
+  `CordMembers`, `CordInvites`, `CordInviteForm`,
   `CordNewcomerForm`; `MediaCheck` and its `Media*` parts, the a/v check,
   with `media_output.ts` routing sound to a chosen output)
 - `src/test/` — vitest tests; `cross_backend/` holds the end-to-end suites
@@ -235,18 +237,24 @@ auth UI and the RPC client. The root `+layout.svelte` provides
 `cord_rpc_context` (`ui/rpc.ts`: the throwing `api` over `/api/rpc`, HTTP
 only, reads as `GET` unless their input is sensitive),
 `cord_auth_state_context` (`CordAuthState`, also set on
-fuz_app's `auth_state_context`), and `cords_state_context` (the signed-in
+fuz_app's `auth_state_context`), `cords_state_context` (the signed-in
 account's `CordsState`, fetched when an account signs in and reset when it
-signs out), and checks the session on mount.
+signs out), and, reset with it, `cord_spaces_state_context` (the one
+`CordSpacesState`) and `cord_space_tabs_context` (the one `CordSpaceTabs`),
+which live at the root rather than in the cord layout because the rail
+nests them; and it checks the session on mount.
 
 Every page sits in fuz_ui's `AppShell`, with `CordNav` as its left rail:
-home, your cords (each selected on its page and any page under it), then
+home, your cords (each selected on its page and any page under it, the one
+you're on with its spaces nested under it once they've loaded, the others
+collapsed), then
 account, admin for instance admins, a/v check, about, and log out; signed
 out, log in, sign up, a/v check, about, and the claim link while the
 instance has no accounts.
 Until the first session check settles, and while a login's account loads,
 the rail shows only the links both shapes share. Its log out goes through
-`auth_state.logout` and then home. The rail and the home page read the one
+`auth_state.logout` and then home. A click on a nested space opens it, and a
+double click keeps its tab (below). The rail and the home page read the one
 `CordsState`, loaded on sign-in and refetched each time the home page
 mounts after that. A cord created, left, or joined here shows in the rail at
 once; a cord's layout puts its own view of the cord (its name, renamed there,
@@ -261,12 +269,17 @@ but no link lists of their own.
 `/admin` nests its own section list in a `ColumnLayout` beside the rail.
 
 The state classes hold fuz_app `AsyncSlot`s (`KeyedAsyncSlot` for per-row
-writes) over the `api`. The member, invite, and join states map errors
+writes) over the `api`. The member, invite, space, and join states map errors
 through `ui/cord_errors.ts`; `cords_state.svelte.ts` maps its create and
 rename refusals through it too (`map_error: to_cord_error_message`), while
 its read slots keep `AsyncSlot`'s default messages. Per-cord states drop
 responses for a cord they've moved off, and their `fetch` is safe to call
-from an `$effect`.
+from an `$effect`; so is a `reset`, which reads nothing trackably (a keyed
+slot's reset reads its entries, and the root layout's reset effect would
+otherwise rerun on every write). `CordSpacesState`
+(`ui/cord_spaces_state.svelte.ts`) answers by cord (`loaded_spaces`,
+`get_space`), so a list left from another cord answers for none; a delete
+of a space the server no longer has counts as done.
 
 A cord's pages share a layout that owns one `CordPageState`
 (`ui/cord_page_state.svelte.ts`: the cord, its members, and the viewer's
@@ -283,6 +296,27 @@ builds its own `CordInvitesState`. The invites and settings tabs show only
 to owners and admins, and their pages guard themselves too, fetching
 nothing for anyone else.
 
+The layout also loads the cord's spaces with the cord, and keys
+`CordSpaceTabs` (`ui/cord_space_tabs.svelte.ts`) to the viewer's account
+and the route's cord. The space tabs work as an editor's file tabs, with
+its words: one `preview` tab, which opening another space replaces, and
+`permanent` tabs that stay until closed; the `selected` tab, the one
+showing, is the route's. The strip is the management tabs (overview,
+members, then invites and settings for managers), the permanent tabs in
+the order kept, then the preview tab (italic); it never wraps, scrolling
+sideways with the selected tab scrolled into view, and an edge fades
+while tabs are hidden past it. Opening a space by URL
+(a link, a reload, a single click in the rail or the overview) puts it in
+the preview tab unless it's permanent; a double click on the preview tab,
+or on a space in the rail, keeps it, and the space page's
+"keep as a permanent tab" button is the keyboard path. Closing the selected
+tab goes to its neighbour (the next, else the previous), else the
+overview, and focus lands on the selected tab. Permanent tabs are
+remembered in `localStorage` per account and cord (every read and write
+guarded; a blocked store keeps them for the page's life), and tabs of
+spaces the cord no longer has drop whenever its list loads or changes. The
+overview refreshes the space list when it opens.
+
 The typed surface is generated: `action_specs.ts` lists every spec the
 server mounts (the protocol actions work only over `/api/ws`), and
 `action_collections.gen.ts` / `action_metatypes.gen.ts` generate the typed
@@ -297,10 +331,14 @@ Routes, prerendered anonymous and filled in client-side:
   and test tone, a recording, a WebRTC call to itself with its stats, and
   what the browser offers; all local, no server
 - `/c/[cord_id]` — a cord's pages, as tabs: the overview (your role, and
-  where spaces will go), `members` (the members, and leaving), and for
-  owners and admins `invites` (invite links) and `settings` (rename); the
-  one section not prerendered, so the web server must fall back to the
-  build's `spa.html` for all of it
+  the cord's spaces, with an add-a-line form for owners and admins),
+  `members` (the members, and leaving), for owners and admins `invites`
+  (invite links) and `settings` (rename), and the space tabs, each
+  `/c/[cord_id]/s/[space_id]` (the space's name and kind, saying the room
+  isn't here yet, and renaming and deleting it for owners and admins; an id
+  the loaded list lacks shows the not-found view); the one section not
+  prerendered, so the web server must fall back to the build's `spa.html`
+  for all of it
 - `/join` — where an invite link lands (`/join#<token>`)
 - `/login`, `/signup` — fuz_app's forms; signup is invite-gated by default
 - `/account` — your account and sessions

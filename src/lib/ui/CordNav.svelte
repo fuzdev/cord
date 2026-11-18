@@ -18,9 +18,13 @@
 
 	import { cord_auth_state_context } from './cord_auth_state.svelte.ts';
 	import { cords_state_context } from './cords_state.svelte.ts';
+	import { cord_spaces_state_context } from './cord_spaces_state.svelte.ts';
+	import { cord_space_tabs_context } from './cord_space_tabs.svelte.ts';
 
 	const auth_state = cord_auth_state_context.get();
 	const cords_state = cords_state_context.get();
+	const spaces_state = cord_spaces_state_context.get();
+	const space_tabs = cord_space_tabs_context.get();
 
 	const signed_out = $derived(auth_state.session_checked && !auth_state.verified);
 
@@ -65,6 +69,39 @@
 					>
 						<span class="ellipsis min-width:0">{cord.name}</span>
 					</a>
+					{#if is_selected(href)}
+						{@const spaces = spaces_state.loaded_spaces(cord.id)}
+						{#if spaces?.length}
+							<ul class="unstyled pl_md">
+								{#each spaces as space (space.id)}
+									{@const space_href = resolve('/c/[cord_id]/s/[space_id]', {
+										cord_id: cord.id,
+										space_id: space.id
+									})}
+									<li>
+										<a
+											href={space_href}
+											class="menuitem"
+											class:selected={is_selected(space_href)}
+											aria-current={to_aria_current(space_href)}
+											title={space.name}
+											onmousedown={(e) => {
+												// a double click keeps the tab rather than selecting words; unlike
+												// `user-select: none`, this leaves the name selectable
+												if (e.detail > 1) e.preventDefault();
+											}}
+											ondblclick={(e) => {
+												e.preventDefault();
+												space_tabs.open(cord.id, space.id, 'permanent');
+											}}
+										>
+											<span class="ellipsis min-width:0">{space.name}</span>
+										</a>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					{/if}
 				</li>
 			{:else}
 				<!-- the slot keeps its error through a retry, so the button stays
