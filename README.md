@@ -62,13 +62,16 @@ database.
 - invites and members: owners and admins share invite links, including
   ones that welcome someone new to the instance, and the cord's members
   can be given roles, removed, or leave, as long as the cord keeps an
-  owner. A cord's spaces and everything inside them come next
+  owner
+- spaces, on the server so far: a cord's owners and admins add lines to it,
+  rename them, and delete them, and its members list them. Their pages,
+  and the live room inside a line, come next
 - an a/v check page, for anyone: your camera, mic, and output, a
   recording, and a WebRTC call to itself, all local to the browser
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
   sessions, invite-gated signup, first-account bootstrap, the cord,
-  invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,
-  and health and readiness checks
+  invite, member, and space actions, a JSON-RPC endpoint, a WebSocket
+  endpoint, and health and readiness checks
 
 The live room comes first, since hanging out is the point; chat, forums, and
 Bluesky feeds layer on after it.
@@ -197,13 +200,13 @@ and each wipes the `public` schema of its database, so give them throwaway
 ones:
 
 ```bash
-# end-to-end tests of auth, cords, members, invites, and newcomer links,
-# plus fuz_app's shared spine suites: build testing_cordd, create its
-# database (cord_test_rust) when missing, and drive it over HTTP
+# end-to-end tests of auth, cords, members, invites, newcomer links, and
+# spaces, plus fuz_app's shared spine suites: build testing_cordd, create
+# its database (cord_test_rust) when missing, and drive it over HTTP
 npm run test:cross
 
-# the schema fixture, column guards, and the cord, member, invite, and
-# newcomer queries
+# the schema fixture, column guards, and the cord, member, invite,
+# newcomer, and space queries
 createdb cord_schema_ready_test
 cargo test -p cord_server -- --ignored
 ```

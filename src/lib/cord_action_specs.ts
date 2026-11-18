@@ -1,10 +1,12 @@
 /**
  * Action specs for the cord actions `cordd` defines: creating, listing,
  * reading, and renaming cords, the instance admins' ops list, a cord's invite
- * links (including newcomer links and their redemption), and its members.
+ * links (including newcomer links and their redemption), its members, and its
+ * spaces.
  *
  * The server's handlers are in `crates/cord_server/src/cord_actions.rs`,
- * `invite/actions.rs`, and `cord_member_actions.rs`; these specs are
+ * `invite/actions.rs`, `cord_member_actions.rs`, and
+ * `cord_space_actions.rs`; these specs are
  * their wire contract, which the frontend RPC client and the generated action
  * types read. Authorization beyond the spec-level gates (cord membership and
  * role, the global admin grant) is the server's.
@@ -99,6 +101,19 @@ export const ERROR_CORD_MEMBER_FORBIDDEN = 'cord_member_forbidden';
 export const ERROR_CORD_LAST_OWNER = 'cord_last_owner';
 /** Error reason: `cord_member_remove` named the caller; a member takes themself out with `cord_leave`. */
 export const ERROR_CORD_MEMBER_REMOVE_SELF = 'cord_member_remove_self';
+/** Error reason: no live space under the cord has that id. */
+export const ERROR_CORD_SPACE_NOT_FOUND = 'cord_space_not_found';
+/** Error reason: only the cord's owner or admins manage its spaces. */
+export const ERROR_CORD_SPACE_FORBIDDEN = 'cord_space_forbidden';
+/**
+ * Error reason: the space name is missing, not a string, empty, too long, or
+ * has a forbidden or misplaced character. The `name` field of
+ * `cord_space_create` and `cord_space_update` declares it, so every refusal
+ * of the field carries it.
+ */
+export const ERROR_CORD_SPACE_NAME_INVALID = 'cord_space_name_invalid';
+/** Error reason: the cord already holds `CORD_SPACE_COUNT_MAX` live spaces. */
+export const ERROR_CORD_SPACE_LIMIT_REACHED = 'cord_space_limit_reached';
 
 /** The shortest expiry an invite link may be given, in seconds; the twin of the server's constant. */
 export const CORD_INVITE_EXPIRES_IN_SECONDS_MIN = 60;
@@ -127,6 +142,12 @@ export const CORD_INVITE_REDEEM_RATE_LIMIT_WINDOW_MS = 15 * 60_000;
 
 /** The longest cord name, in characters; the twin of the server's constant. */
 export const CORD_NAME_LENGTH_MAX = 100;
+
+/** The longest space name, in characters; the twin of the server's constant. */
+export const CORD_SPACE_NAME_LENGTH_MAX = 100;
+
+/** The most live spaces a cord may hold; the twin of the server's constant. */
+export const CORD_SPACE_COUNT_MAX = 50;
 
 /**
  * Characters refused anywhere in a cord name beside the control characters,
@@ -219,36 +240,45 @@ export const has_stray_cord_name_joiner = (chars: ReadonlyArray<string>): boolea
 };
 
 /**
- * A cord's name, validated as the server does and in the same order: no
- * forbidden character anywhere (checked before trimming, so the twins agree
- * even where JS and Rust trim different characters: JS strips U+FEFF and
- * Rust strips U+0085, and both are forbidden), then trimmed and non-empty,
- * then no stray join character, then at most `CORD_NAME_LENGTH_MAX`
- * characters counted by code point.
+ * A name under the cord name rules, validated as the server does and in the
+ * same order: no forbidden character anywhere (checked before trimming, so
+ * the twins agree even where JS and Rust trim different characters: JS
+ * strips U+FEFF and Rust strips U+0085, and both are forbidden), then trimmed
+ * and non-empty, then no stray join character, then at most `length_max`
+ * characters counted by code point. The twin of the server's
+ * `validate_name_under_cord_rules`.
  */
-export const CordName = pipe(
+const create_cord_name_schema = (length_max: number) =>
 	pipe(
-		string,
-		message(
-			check((s: string) => !Array.from(s).some(is_forbidden_cord_name_char)),
-			'name must not contain invisible, control, or line-breaking characters'
+		pipe(
+			string,
+			message(
+				check((s: string) => !Array.from(s).some(is_forbidden_cord_name_char)),
+				'name must not contain invisible, control, or line-breaking characters'
+			),
+			transform((s: string) => s.trim()),
+			message(
+				check((s: string) => s.length > 0),
+				'name is required'
+			),
+			message(
+				check((s: string) => !has_stray_cord_name_joiner(Array.from(s))),
+				'name must not have a joining character at an edge, by a space, or doubled'
+			)
 		),
-		transform((s: string) => s.trim()),
 		message(
-			check((s: string) => s.length > 0),
-			'name is required'
-		),
-		message(
-			check((s: string) => !has_stray_cord_name_joiner(Array.from(s))),
-			'name must not have a joining character at an edge, by a space, or doubled'
+			check((s: string) => Array.from(s).length <= length_max),
+			`name must be at most ${length_max} characters`
 		)
-	),
-	message(
-		check((s: string) => Array.from(s).length <= CORD_NAME_LENGTH_MAX),
-		`name must be at most ${CORD_NAME_LENGTH_MAX} characters`
-	)
-);
+	);
+
+/** A cord's name: the cord name rules, at most `CORD_NAME_LENGTH_MAX` characters. */
+export const CordName = create_cord_name_schema(CORD_NAME_LENGTH_MAX);
 export type CordName = Infer<typeof CordName>;
+
+/** A space's name: the cord name rules, at most `CORD_SPACE_NAME_LENGTH_MAX` characters. */
+export const CordSpaceName = create_cord_name_schema(CORD_SPACE_NAME_LENGTH_MAX);
+export type CordSpaceName = Infer<typeof CordSpaceName>;
 
 const Int = pipe(number, safe_integer);
 
@@ -311,6 +341,23 @@ export const CordMemberJson = object({
 	role: CordRole
 });
 export type CordMemberJson = Infer<typeof CordMemberJson>;
+
+/**
+ * What a space is; the twin of the server's `CordSpaceKind`. A `line` is a
+ * live room: voice, video, screenshare, and text that isn't kept.
+ */
+export const CordSpaceKind = one_of(['line']);
+export type CordSpaceKind = Infer<typeof CordSpaceKind>;
+
+/** A space in a cord, as the cord's members see it. */
+export const CordSpaceJson = object({
+	id: Uuid,
+	cord_id: Uuid,
+	kind: CordSpaceKind,
+	name: string,
+	created_at: Timestamp
+});
+export type CordSpaceJson = Infer<typeof CordSpaceJson>;
 
 /**
  * An invite link's token, as it appears in the link.
@@ -529,6 +576,53 @@ export type CordLeaveInput = Infer<typeof CordLeaveInput>;
 export const CordLeaveOutput = object({ ok: literal(true) });
 export type CordLeaveOutput = Infer<typeof CordLeaveOutput>;
 
+export const CordSpaceListInput = object({
+	cord_id: meta(Uuid, { description: 'The cord whose spaces to list.' }),
+	acting: ActingActor
+});
+export type CordSpaceListInput = Infer<typeof CordSpaceListInput>;
+
+export const CordSpaceListOutput = object({ spaces: array(CordSpaceJson) });
+export type CordSpaceListOutput = Infer<typeof CordSpaceListOutput>;
+
+export const CordSpaceCreateInput = object({
+	cord_id: meta(Uuid, { description: 'The cord to add the space to.' }),
+	kind: meta(CordSpaceKind, { description: 'What the space is.' }),
+	name: meta(CordSpaceName, {
+		description: "The new space's name.",
+		invalid_reason: ERROR_CORD_SPACE_NAME_INVALID
+	}),
+	acting: ActingActor
+});
+export type CordSpaceCreateInput = Infer<typeof CordSpaceCreateInput>;
+
+export const CordSpaceCreateOutput = object({ space: CordSpaceJson });
+export type CordSpaceCreateOutput = Infer<typeof CordSpaceCreateOutput>;
+
+export const CordSpaceUpdateInput = object({
+	cord_id: meta(Uuid, { description: "The space's cord." }),
+	space_id: meta(Uuid, { description: 'The space to rename.' }),
+	name: meta(CordSpaceName, {
+		description: "The space's new name.",
+		invalid_reason: ERROR_CORD_SPACE_NAME_INVALID
+	}),
+	acting: ActingActor
+});
+export type CordSpaceUpdateInput = Infer<typeof CordSpaceUpdateInput>;
+
+export const CordSpaceUpdateOutput = object({ space: CordSpaceJson });
+export type CordSpaceUpdateOutput = Infer<typeof CordSpaceUpdateOutput>;
+
+export const CordSpaceDeleteInput = object({
+	cord_id: meta(Uuid, { description: "The space's cord." }),
+	space_id: meta(Uuid, { description: 'The space to delete.' }),
+	acting: ActingActor
+});
+export type CordSpaceDeleteInput = Infer<typeof CordSpaceDeleteInput>;
+
+export const CordSpaceDeleteOutput = object({ ok: literal(true) });
+export type CordSpaceDeleteOutput = Infer<typeof CordSpaceDeleteOutput>;
+
 export const cord_create_action_spec = {
 	method: 'cord_create',
 	kind: 'request_response',
@@ -720,6 +814,54 @@ export const cord_leave_action_spec = {
 	description: "Leave a cord. Anyone but the cord's last owner."
 } satisfies RequestResponseActionSpec;
 
+export const cord_space_list_action_spec = {
+	method: 'cord_space_list',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: false,
+	input: CordSpaceListInput,
+	output: CordSpaceListOutput,
+	async: true,
+	description: "A cord's spaces, oldest first. Members only."
+} satisfies RequestResponseActionSpec;
+
+export const cord_space_create_action_spec = {
+	method: 'cord_space_create',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordSpaceCreateInput,
+	output: CordSpaceCreateOutput,
+	async: true,
+	description: `Add a space to a cord. The cord's owner or admins only; a cord holds at most ${CORD_SPACE_COUNT_MAX} spaces.`
+} satisfies RequestResponseActionSpec;
+
+export const cord_space_update_action_spec = {
+	method: 'cord_space_update',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordSpaceUpdateInput,
+	output: CordSpaceUpdateOutput,
+	async: true,
+	description: "Rename a space. The cord's owner or admins only."
+} satisfies RequestResponseActionSpec;
+
+export const cord_space_delete_action_spec = {
+	method: 'cord_space_delete',
+	kind: 'request_response',
+	initiator: 'frontend',
+	auth: { account: 'required', actor: 'required' },
+	side_effects: true,
+	input: CordSpaceDeleteInput,
+	output: CordSpaceDeleteOutput,
+	async: true,
+	description: "Delete a space. The cord's owner or admins only."
+} satisfies RequestResponseActionSpec;
+
 /** The cord actions, in the order the server registers them. */
 export const all_cord_domain_action_specs: Array<ActionSpecUnion> = [
 	cord_create_action_spec,
@@ -736,5 +878,9 @@ export const all_cord_domain_action_specs: Array<ActionSpecUnion> = [
 	cord_member_list_action_spec,
 	cord_member_role_set_action_spec,
 	cord_member_remove_action_spec,
-	cord_leave_action_spec
+	cord_leave_action_spec,
+	cord_space_list_action_spec,
+	cord_space_create_action_spec,
+	cord_space_update_action_spec,
+	cord_space_delete_action_spec
 ];

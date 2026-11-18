@@ -126,9 +126,12 @@ fn to_cord_member_json(member: &CordMember, role: CordRole) -> Value {
 
 // -- Helpers ------------------------------------------------------------------
 
-/// The snapshot check every member verb starts with: anyone outside the cord
-/// gets `cord_not_found`, as for a cord that doesn't exist.
-fn require_member(auth: &RequestActorContext, cord_id: Uuid) -> Result<(), JsonrpcError> {
+/// The snapshot check every member and space verb starts with: anyone
+/// outside the cord gets `cord_not_found`, as for a cord that doesn't exist.
+pub(crate) fn require_member(
+    auth: &RequestActorContext,
+    cord_id: Uuid,
+) -> Result<(), JsonrpcError> {
     if is_cord_member(&auth.role_grants, cord_id) {
         Ok(())
     } else {

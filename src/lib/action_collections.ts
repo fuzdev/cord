@@ -65,7 +65,11 @@ export const ActionSpecs: ActionSpecs = {
 	cord_member_list: cord_specs.cord_member_list_action_spec,
 	cord_member_role_set: cord_specs.cord_member_role_set_action_spec,
 	cord_member_remove: cord_specs.cord_member_remove_action_spec,
-	cord_leave: cord_specs.cord_leave_action_spec
+	cord_leave: cord_specs.cord_leave_action_spec,
+	cord_space_list: cord_specs.cord_space_list_action_spec,
+	cord_space_create: cord_specs.cord_space_create_action_spec,
+	cord_space_update: cord_specs.cord_space_update_action_spec,
+	cord_space_delete: cord_specs.cord_space_delete_action_spec
 };
 export type ActionSpecs = {
 	readonly heartbeat: typeof heartbeat_specs.heartbeat_action_spec;
@@ -115,6 +119,10 @@ export type ActionSpecs = {
 	readonly cord_member_role_set: typeof cord_specs.cord_member_role_set_action_spec;
 	readonly cord_member_remove: typeof cord_specs.cord_member_remove_action_spec;
 	readonly cord_leave: typeof cord_specs.cord_leave_action_spec;
+	readonly cord_space_list: typeof cord_specs.cord_space_list_action_spec;
+	readonly cord_space_create: typeof cord_specs.cord_space_create_action_spec;
+	readonly cord_space_update: typeof cord_specs.cord_space_update_action_spec;
+	readonly cord_space_delete: typeof cord_specs.cord_space_delete_action_spec;
 };
 
 export const action_specs: Array<ActionSpecUnion> = Object.values(ActionSpecs);
@@ -187,6 +195,10 @@ export interface ActionInputs {
 	cord_member_role_set: Infer<typeof cord_specs.cord_member_role_set_action_spec.input>;
 	cord_member_remove: Infer<typeof cord_specs.cord_member_remove_action_spec.input>;
 	cord_leave: Infer<typeof cord_specs.cord_leave_action_spec.input>;
+	cord_space_list: Infer<typeof cord_specs.cord_space_list_action_spec.input>;
+	cord_space_create: Infer<typeof cord_specs.cord_space_create_action_spec.input>;
+	cord_space_update: Infer<typeof cord_specs.cord_space_update_action_spec.input>;
+	cord_space_delete: Infer<typeof cord_specs.cord_space_delete_action_spec.input>;
 }
 
 /**
@@ -259,6 +271,10 @@ export interface ActionCallInputs {
 	cord_member_role_set: InferInput<typeof cord_specs.cord_member_role_set_action_spec.input>;
 	cord_member_remove: InferInput<typeof cord_specs.cord_member_remove_action_spec.input>;
 	cord_leave: InferInput<typeof cord_specs.cord_leave_action_spec.input>;
+	cord_space_list: InferInput<typeof cord_specs.cord_space_list_action_spec.input>;
+	cord_space_create: InferInput<typeof cord_specs.cord_space_create_action_spec.input>;
+	cord_space_update: InferInput<typeof cord_specs.cord_space_update_action_spec.input>;
+	cord_space_delete: InferInput<typeof cord_specs.cord_space_delete_action_spec.input>;
 }
 
 /**
@@ -329,6 +345,10 @@ export interface ActionOutputs {
 	cord_member_role_set: Infer<typeof cord_specs.cord_member_role_set_action_spec.output>;
 	cord_member_remove: Infer<typeof cord_specs.cord_member_remove_action_spec.output>;
 	cord_leave: Infer<typeof cord_specs.cord_leave_action_spec.output>;
+	cord_space_list: Infer<typeof cord_specs.cord_space_list_action_spec.output>;
+	cord_space_create: Infer<typeof cord_specs.cord_space_create_action_spec.output>;
+	cord_space_update: Infer<typeof cord_specs.cord_space_update_action_spec.output>;
+	cord_space_delete: Infer<typeof cord_specs.cord_space_delete_action_spec.output>;
 }
 
 /**
@@ -567,6 +587,26 @@ export interface ActionEventDatas {
 		'cord_leave',
 		ActionInputs['cord_leave'],
 		ActionOutputs['cord_leave']
+	>;
+	cord_space_list: ActionEventRequestResponseData<
+		'cord_space_list',
+		ActionInputs['cord_space_list'],
+		ActionOutputs['cord_space_list']
+	>;
+	cord_space_create: ActionEventRequestResponseData<
+		'cord_space_create',
+		ActionInputs['cord_space_create'],
+		ActionOutputs['cord_space_create']
+	>;
+	cord_space_update: ActionEventRequestResponseData<
+		'cord_space_update',
+		ActionInputs['cord_space_update'],
+		ActionOutputs['cord_space_update']
+	>;
+	cord_space_delete: ActionEventRequestResponseData<
+		'cord_space_delete',
+		ActionInputs['cord_space_delete'],
+		ActionOutputs['cord_space_delete']
 	>;
 }
 

@@ -26,8 +26,10 @@
 //! `fuz_cell` tables, [`roles`] declares the cord-scoped membership roles,
 //! [`cord_authz`] checks them with exact scope, and [`cord_actions`] exposes
 //! the `cord_*` verbs. Membership changes live in [`cord_member_queries`]
-//! and [`cord_member_actions`]; invite links, in [`invite`], over cord's own
-//! `cord_invite` and `cord_invite_redemption` tables ([`migrations`]).
+//! and [`cord_member_actions`]; a cord's spaces, child cells of the cord's,
+//! in [`cord_space_queries`] and [`cord_space_actions`]; invite links, in
+//! [`invite`], over cord's own `cord_invite` and `cord_invite_redemption`
+//! tables ([`migrations`]).
 
 pub mod app;
 pub mod cord_actions;
@@ -35,6 +37,8 @@ pub mod cord_authz;
 pub mod cord_member_actions;
 pub mod cord_member_queries;
 pub mod cord_queries;
+pub mod cord_space_actions;
+pub mod cord_space_queries;
 pub mod invite;
 pub mod migrations;
 pub mod roles;

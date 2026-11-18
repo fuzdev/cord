@@ -7,8 +7,9 @@
 **Status: early.** The design is settled and implementation is underway: a
 SvelteKit static frontend over `cordd`, an API-only Rust server on the fuz
 spine, with accounts, cords, their members, and invite links (including ones
-that bring someone new onto the instance). Nothing happens inside a cord yet
-(no spaces); don't describe planned features as working.
+that bring someone new onto the instance). The server keeps a cord's spaces
+(each a line, by kind), but no page shows them yet and nothing happens inside
+one: no live room. Don't describe planned features as working.
 
 ## Vocabulary and voice
 
@@ -87,6 +88,8 @@ Skill(fuz-stack).
   action modules share (audit, the fresh manager-role gate)
 - `cord_member_queries.rs`, `cord_member_actions.rs` — membership, the
   live-grant SQL builders, the cord lock
+- `cord_space_queries.rs`, `cord_space_actions.rs` — a cord's spaces and
+  their cap
 - `invite/` — `queries.rs` (links), `redemption_queries.rs` (newcomer
   redemptions), `sweep.rs` (the expiry sweep), `actions.rs` (the verbs)
 - `migrations.rs` — the `cord` namespace and its column projections
@@ -125,6 +128,16 @@ The load-bearing rules. Each module named holds the full reasoning.
   globally; the spine refuses a scoped one on every grant path, ahead of
   the offer gate (the spine's `AdminOfferAuthorize`, which requires a
   global admin).
+- **Spaces are cells too.** A space is a cell with `kind = "space"`, a
+  private child of the cord's cell (`parent_id` and `root_id` the cord),
+  `created_by = NULL`, its own kind and name in `data` (`kind` a closed
+  set, only `line` so far). The cord's three role-shaped grants are stamped
+  on it, scoped to the cord; per-space visibility will narrow the member
+  one. Owners and admins create, rename, and delete; members list. A space
+  is always named with its cord, and one that isn't a live space of that
+  cord is `cord_space_not_found`, but only after the IDOR mask. Space names
+  share the cord name rules and validator, with their own length.
+  (`cord_space_queries.rs`)
 - **Serialization.** Every membership change (role set, remove, leave,
   accept) locks the cord's cell row, then re-reads membership and applies
   the rules to that read, never the request's snapshot; this relies on
@@ -136,8 +149,12 @@ The load-bearing rules. Each module named holds the full reasoning.
   cord, then redemption; revoke must not take the cord lock, or it would
   deadlock against accept. Redeem takes the link lock and, for a new
   reservation, share-locks the minter's global `admin` grant. The sweep
-  takes the link lock with `SKIP LOCKED`. The read-only verbs trust the
-  snapshot. (`cord_member_queries.rs`, `invite/queries.rs`)
+  takes the link lock with `SKIP LOCKED`. Space create takes the cord lock
+  alone, then reads the role and counts live spaces against
+  `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete take
+  no cord lock, read the role afresh, and lock only the space's row. The
+  read-only verbs trust the snapshot. (`cord_member_queries.rs`,
+  `invite/queries.rs`, `cord_space_queries.rs`)
 - **Live grants.** A member is a live grant on a live actor and account;
   soft-deleted ones keep their grants but aren't listed, targeted, or
   counted. `live_role_grant_sql` and `live_cord_grant_sql` are the one
@@ -191,6 +208,8 @@ The load-bearing rules. Each module named holds the full reasoning.
 - `invite/actions.rs`: `cord_invite_create`, `cord_invite_list`,
   `cord_invite_revoke`, `cord_invite_preview`, `cord_invite_redeem`,
   `cord_invite_accept`
+- `cord_space_actions.rs`: `cord_space_list`, `cord_space_create`,
+  `cord_space_update`, `cord_space_delete`
 
 ## Recipes
 
@@ -414,9 +433,10 @@ dispatcher over a live connection but no schema. The Postgres suites in
 `crates/cord_server/tests/` are `#[ignore]`d and reset the `public` schema
 of their database: `schema_ready.rs` (the fixture's drift guard),
 `columns.rs` (the column projections), `cords.rs`, `cord_members.rs`,
-`cord_invites.rs`, and `cord_newcomers.rs`, sharing `tests/common/` (the
-reset-and-migrate cycle, the actor seeding, and the `columns.rs` assertion
-come from the spine's `fuz_testing`); each module doc lists what it covers.
+`cord_invites.rs`, `cord_newcomers.rs`, and `cord_spaces.rs`, sharing
+`tests/common/` (the reset-and-migrate cycle, the actor seeding, and the
+`columns.rs` assertion come from the spine's `fuz_testing`); each module
+doc lists what it covers.
 `transaction_isolation.rs` resets no schema: it boots `cordd`'s router on
 its own scratch database set to `repeatable read` and asserts the refusal
 comes before any migration. `cordd_args.rs` runs unignored with no
@@ -441,10 +461,10 @@ skips it. `spine_suites` runs fuz_app's shipped spine suites in one
 `cord_backend_config.ts` states, with the suites cord can't run excluded with
 their reasons; `auth` covers what those leave out (the one-shot bootstrap, the
 admin RPC and audit stream gates for a member and a bearer token), `cords` the
-cord verbs, `cord_members` invite links and members, and `cord_newcomers`
-newcomer links end to end. The config is `cord_backend_config.ts`, the
-declared surface `cord_surface_spec.ts`, the shared steps
-`cord_cross_helpers.ts`.
+cord verbs, `cord_members` invite links and members, `cord_newcomers`
+newcomer links, and `cord_spaces` the space verbs, end to end. The config
+is `cord_backend_config.ts`, the declared surface `cord_surface_spec.ts`,
+the shared steps `cord_cross_helpers.ts`.
 
 ```bash
 npm run test:cross   # FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust

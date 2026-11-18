@@ -71,8 +71,7 @@ impl CordRole {
     }
 
     /// Whether the role may manage the cord (rename it, manage its invite
-    /// links, remove plain members, and later manage its spaces): the owner
-    /// and admins.
+    /// links and its spaces, remove plain members): the owner and admins.
     #[must_use]
     pub const fn can_manage(self) -> bool {
         match self {

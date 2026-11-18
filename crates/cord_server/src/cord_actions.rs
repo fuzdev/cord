@@ -1,7 +1,8 @@
 //! Cord's RPC actions: creating, listing, reading, and renaming cords.
 //!
-//! This module also holds the helpers the invite and member actions share
-//! ([`crate::invite::actions`], [`crate::cord_member_actions`]), and
+//! This module also holds the helpers the invite, member, and space actions
+//! share ([`crate::invite::actions`], [`crate::cord_member_actions`],
+//! [`crate::cord_space_actions`]), and
 //! [`cord_action_specs`] returns all of them.
 //!
 //! - `cord_create`: instance admins only. Creates the cord cell, grants the
@@ -45,8 +46,8 @@ use uuid::Uuid;
 use crate::cord_authz::{CordRole, cord_memberships, cord_role_in};
 use crate::cord_member_queries::{CordMemberError, query_cord_manager_role};
 use crate::cord_queries::{
-    CordAdminRow, CordCreated, CordRow, query_cord_admin_list, query_cord_create, query_cord_get,
-    query_cord_rename, query_cords_by_ids, validate_cord_name,
+    CordAdminRow, CordCreated, CordNameError, CordRow, query_cord_admin_list, query_cord_create,
+    query_cord_get, query_cord_rename, query_cords_by_ids, validate_cord_name,
 };
 use crate::roles::CORD_SCOPE_KIND;
 
@@ -194,10 +195,6 @@ pub(crate) fn cord_not_found() -> JsonrpcError {
     not_found("cord", Some(ERROR_CORD_NOT_FOUND))
 }
 
-fn name_invalid(detail: impl std::fmt::Display) -> JsonrpcError {
-    invalid_input_params(&detail.to_string(), Some(ERROR_CORD_NAME_INVALID))
-}
-
 fn update_forbidden() -> JsonrpcError {
     forbidden(
         "only the cord's owner or admins may change it",
@@ -230,8 +227,9 @@ pub(crate) async fn require_cord_manager_fresh<C: GenericClient + ?Sized>(
 // -- Audit --------------------------------------------------------------------
 
 /// Audit one of Cord's own events (`cord_create`, `cord_update`,
-/// `cord_invite_*`) in the action's transaction: in the caller's name, or,
-/// for an anonymous caller (`auth` of `None`), with the request's IP alone.
+/// `cord_invite_*`, `cord_space_*`) in the action's transaction: in the
+/// caller's name, or, for an anonymous caller (`auth` of `None`), with the
+/// request's IP alone.
 pub(crate) async fn audit_cord_event<C: GenericClient + ?Sized>(
     client: &C,
     ctx: &ActionContext<'_>,
@@ -327,11 +325,25 @@ fn parse_cord_update_params(params: &Value) -> Result<CordUpdateInput, JsonrpcEr
 /// missing, `null`, not a string, or breaking a rule of
 /// [`validate_cord_name`].
 fn parse_cord_name_param(params: &Value) -> Result<String, JsonrpcError> {
+    parse_name_param(params, validate_cord_name, ERROR_CORD_NAME_INVALID)
+}
+
+/// Read `name` through `validate` (a validator under the cord name rules,
+/// [`validate_cord_name`] or
+/// [`validate_cord_space_name`](crate::cord_space_queries::validate_cord_space_name)),
+/// returning it trimmed. Every refusal carries `reason`, the one the twin's
+/// field declares: missing, `null`, not a string, or breaking a rule.
+pub(crate) fn parse_name_param(
+    params: &Value,
+    validate: fn(&str) -> Result<String, CordNameError>,
+    reason: &'static str,
+) -> Result<String, JsonrpcError> {
+    let invalid = |detail: &str| invalid_input_params(detail, Some(reason));
     let name = params
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| name_invalid("name must be a string"))?;
-    validate_cord_name(name).map_err(name_invalid)
+        .ok_or_else(|| invalid("name must be a string"))?;
+    validate(name).map_err(|e| invalid(&e.to_string()))
 }
 
 // -- Handlers -----------------------------------------------------------------
@@ -452,7 +464,8 @@ async fn handle_cord_admin_list<C: GenericClient + ?Sized>(
 // -- Specs --------------------------------------------------------------------
 
 /// Cord's action specs, folded into the registry beside the spine's: the
-/// cord verbs, then the invite verbs, then the member verbs.
+/// cord verbs, then the invite verbs, then the member verbs, then the space
+/// verbs.
 ///
 /// `invite_redeem_rate_limiter` is `cord_invite_redeem`'s own per-IP limiter
 /// ([`crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT`]); `None`, as
@@ -466,6 +479,7 @@ pub fn cord_action_specs(
         invite_redeem_rate_limiter,
     ));
     specs.extend(crate::cord_member_actions::cord_member_action_specs());
+    specs.extend(crate::cord_space_actions::cord_space_action_specs());
     specs
 }
 

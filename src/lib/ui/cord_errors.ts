@@ -15,6 +15,8 @@ import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import {
 	CORD_NAME_LENGTH_MAX,
+	CORD_SPACE_COUNT_MAX,
+	CORD_SPACE_NAME_LENGTH_MAX,
 	ERROR_CORD_INVITE_EXHAUSTED,
 	ERROR_CORD_INVITE_EXPIRED,
 	ERROR_CORD_INVITE_FORBIDDEN,
@@ -33,6 +35,10 @@ import {
 	ERROR_CORD_MEMBER_REMOVE_SELF,
 	ERROR_CORD_NAME_INVALID,
 	ERROR_CORD_NOT_FOUND,
+	ERROR_CORD_SPACE_LIMIT_REACHED,
+	ERROR_CORD_SPACE_FORBIDDEN,
+	ERROR_CORD_SPACE_NAME_INVALID,
+	ERROR_CORD_SPACE_NOT_FOUND,
 	ERROR_CORD_UPDATE_FORBIDDEN
 } from '../cord_action_specs.ts';
 
@@ -56,6 +62,9 @@ export const CORD_USERNAME_RULE = `A username is ${USERNAME_LENGTH_MIN} to ${USE
 /** The cord name rules, in words, for the server's refusal of a name. */
 export const CORD_NAME_RULE = `A cord name is 1 to ${CORD_NAME_LENGTH_MAX} characters, with no invisible, control, or line-breaking characters, and no joining character at an edge, by a space, or doubled.`;
 
+/** The space name rules, in words, for the server's refusal of a name. */
+export const CORD_SPACE_NAME_RULE = `A space name is 1 to ${CORD_SPACE_NAME_LENGTH_MAX} characters, with no invisible, control, or line-breaking characters, and no joining character at an edge, by a space, or doubled.`;
+
 /** The words for the cord refusals a person can run into, by reason. */
 export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_NOT_FOUND]: "There's no cord here, or you're not in it.",
@@ -78,7 +87,11 @@ export const CORD_ERROR_MESSAGES: Partial<Record<string, string>> = {
 	[ERROR_CORD_INVITE_NOT_FOR_NEWCOMERS]: "This link doesn't work anymore.",
 	[ERROR_CORD_INVITE_NEWCOMERS_CLOSED]: "This link doesn't work anymore.",
 	[ERROR_CORD_INVITE_USERNAME_INVALID]: CORD_USERNAME_RULE,
-	[ERROR_CORD_INVITE_USERNAME_UNAVAILABLE]: "That username's taken. Try another."
+	[ERROR_CORD_INVITE_USERNAME_UNAVAILABLE]: "That username's taken. Try another.",
+	[ERROR_CORD_SPACE_NOT_FOUND]: "That space isn't here anymore.",
+	[ERROR_CORD_SPACE_FORBIDDEN]: "Only the cord's owners and admins can manage its spaces.",
+	[ERROR_CORD_SPACE_NAME_INVALID]: CORD_SPACE_NAME_RULE,
+	[ERROR_CORD_SPACE_LIMIT_REACHED]: `A cord holds up to ${CORD_SPACE_COUNT_MAX} spaces. Delete one to make room for another.`
 };
 
 /**

@@ -36,8 +36,14 @@ import {
 	CordJson,
 	CordMemberJson,
 	CordUpdateInput,
+	CORD_SPACE_NAME_LENGTH_MAX,
+	CordSpaceCreateInput,
+	CordSpaceJson,
+	CordSpaceName,
+	CordSpaceUpdateInput,
 	ERROR_CORD_INVITE_USERNAME_INVALID,
-	ERROR_CORD_NAME_INVALID
+	ERROR_CORD_NAME_INVALID,
+	ERROR_CORD_SPACE_NAME_INVALID
 } from '#lib/cord_action_specs.ts';
 import * as cord_action_specs from '#lib/cord_action_specs.ts';
 import { all_cord_action_specs } from '#lib/action_specs.ts';
@@ -182,6 +188,18 @@ describe('CordName', () => {
 	});
 });
 
+describe('CordSpaceName', () => {
+	test('keeps the cord name rules, bounded by its own length', () => {
+		assert.strictEqual(parse_or_throw(CordSpaceName, '  the den  '), 'the den');
+		for (const name of ['', '   ', 'two\nlines', '\u200B', 'a\u200D\u200Db', '\uFEFFx']) {
+			assert.isFalse(is(CordSpaceName, name), JSON.stringify(name));
+		}
+		assert.strictEqual(parse_or_throw(CordSpaceName, '🧑\u200D💻 desk'), '🧑\u200D💻 desk');
+		assert.isTrue(is(CordSpaceName, '🌙'.repeat(CORD_SPACE_NAME_LENGTH_MAX)));
+		assert.isFalse(is(CordSpaceName, 'a'.repeat(CORD_SPACE_NAME_LENGTH_MAX + 1)));
+	});
+});
+
 describe('cord action specs', () => {
 	test('are all in the frontend surface', () => {
 		for (const spec of all_cord_domain_action_specs) {
@@ -208,7 +226,10 @@ describe('cord action specs', () => {
 			'cord_invite_accept',
 			'cord_member_role_set',
 			'cord_member_remove',
-			'cord_leave'
+			'cord_leave',
+			'cord_space_create',
+			'cord_space_update',
+			'cord_space_delete'
 		]);
 	});
 
@@ -465,7 +486,12 @@ describe('the output shapes', () => {
 			value: { actor_id: id, username: 'alice', display_name: 'Al', role: 'cord_admin' },
 			nullable: ['display_name']
 		},
-		{ schema: CordInviteCreateOutput, value: { invite, token: 't' }, nullable: none }
+		{ schema: CordInviteCreateOutput, value: { invite, token: 't' }, nullable: none },
+		{
+			schema: CordSpaceJson,
+			value: { id, cord_id: id, kind: 'line', name: 'the den', created_at: AT },
+			nullable: none
+		}
 	];
 
 	test('require every field, and take null exactly where the server sends it', () => {
@@ -487,6 +513,12 @@ describe('the output shapes', () => {
 			{ role: 'cord_guest' }
 		]) {
 			assert.ok(!is(CordInviteJson, { ...invite, ...bad }), JSON.stringify(bad));
+		}
+		for (const kind of ['chat', 'Line', '']) {
+			assert.ok(
+				!is(CordSpaceJson, { id, cord_id: id, kind, name: 'n', created_at: AT }),
+				JSON.stringify(kind)
+			);
 		}
 		assert.ok(!is(CordAdminJson, { id, name: 'n', member_count: 0.5, created_at: AT }));
 		// a timestamp is the wire's, UTC seconds with a `Z`
@@ -516,12 +548,36 @@ describe('the input contracts', () => {
 				{ cord_id: '11111111-1111-4111-8111-111111111111', name: '' },
 				ERROR_CORD_NAME_INVALID
 			],
-			[CordInviteRedeemInput, { token: 't', username: 'ab' }, ERROR_CORD_INVITE_USERNAME_INVALID]
+			[CordInviteRedeemInput, { token: 't', username: 'ab' }, ERROR_CORD_INVITE_USERNAME_INVALID],
+			[
+				CordSpaceCreateInput,
+				{ cord_id: '11111111-1111-4111-8111-111111111111', kind: 'line', name: '' },
+				ERROR_CORD_SPACE_NAME_INVALID
+			],
+			[
+				CordSpaceUpdateInput,
+				{
+					cord_id: '11111111-1111-4111-8111-111111111111',
+					space_id: '11111111-1111-4111-8111-111111111111',
+					name: '\u200B'
+				},
+				ERROR_CORD_SPACE_NAME_INVALID
+			]
 		] as const) {
 			const parsed = parse(schema, input);
 			assert.ok(!parsed.ok);
 			assert.strictEqual(resolve_issues_invalid_reason(schema, parsed.issues, input), reason);
 		}
+	});
+
+	test('owe no reason for a bad space kind, which comes before the name', () => {
+		const input = { cord_id: '11111111-1111-4111-8111-111111111111', kind: 'chat', name: '' };
+		const parsed = parse(CordSpaceCreateInput, input);
+		assert.ok(!parsed.ok);
+		assert.strictEqual(
+			resolve_issues_invalid_reason(CordSpaceCreateInput, parsed.issues, input),
+			undefined
+		);
 	});
 
 	test('take an acting actor everywhere but redemption', () => {

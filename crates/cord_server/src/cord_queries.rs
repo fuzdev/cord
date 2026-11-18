@@ -47,8 +47,11 @@ pub const CORD_CELL_KIND: &str = "cord";
 /// `CORD_NAME_LENGTH_MAX` in `cord_action_specs.ts`.
 pub const CORD_NAME_LENGTH_MAX: usize = 100;
 
-/// The role-shaped `cell_grant` rows stamped on every cord cell, one per
-/// cord role (never one per member): members view, owners and admins edit.
+/// The role-shaped `cell_grant` rows stamped on every cord cell and space
+/// cell: members view, owners and admins edit.
+///
+/// One per cord role, never one per member, each scoped to the cord, on the
+/// cord and on each of its spaces ([`crate::cord_space_queries`]).
 pub const CORD_STAMPED_GRANTS: [(&str, CellGrantLevel); 3] = [
     (CORD_MEMBER, CellGrantLevel::Viewer),
     (CORD_ADMIN, CellGrantLevel::Editor),
@@ -61,16 +64,18 @@ pub struct CordData {
     pub name: String,
 }
 
-/// Why a cord name was refused.
+/// Why a name was refused: a cord's ([`validate_cord_name`]) or a space's
+/// (`validate_cord_space_name` in [`crate::cord_space_queries`]), which keep
+/// the same rules and differ only in their longest length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CordNameError {
-    #[error("cord name is empty")]
+    #[error("name is empty")]
     Empty,
-    #[error("cord name is longer than {CORD_NAME_LENGTH_MAX} characters")]
-    TooLong,
-    #[error("cord name contains an invisible, control, or line-breaking character")]
+    #[error("name is longer than {length_max} characters")]
+    TooLong { length_max: usize },
+    #[error("name contains an invisible, control, or line-breaking character")]
     ForbiddenCharacter,
-    #[error("cord name has a joining character at an edge, by a space, or doubled")]
+    #[error("name has a joining character at an edge, by a space, or doubled")]
     StrayJoiner,
 }
 
@@ -157,23 +162,30 @@ pub(crate) fn has_stray_cord_name_joiner(chars: &[char]) -> bool {
     })
 }
 
-/// Validate and normalize a cord name, in this order:
+/// Validate and normalize a name under the cord name rules, in this order:
 ///
 /// 1. no forbidden character anywhere (`is_forbidden_cord_name_char`)
 /// 2. trimmed, then non-empty
 /// 3. no join character at either end or beside whitespace or another join
 ///    character (`has_stray_cord_name_joiner`)
-/// 4. at most [`CORD_NAME_LENGTH_MAX`] characters (code points)
+/// 4. at most `length_max` characters (code points)
 ///
 /// The forbidden-character check runs on the untrimmed input so the TS twin
 /// agrees exactly: JS `trim` strips U+FEFF and Rust's doesn't, and Rust's
 /// strips U+0085 and JS's doesn't, but both are forbidden anywhere, so what
 /// remains trims the same in both.
 ///
+/// Cord names ([`validate_cord_name`]) and space names
+/// (`validate_cord_space_name`) both go through this. The TS twin is
+/// `create_cord_name_schema` in `cord_action_specs.ts`.
+///
 /// # Errors
 ///
 /// [`CordNameError`] naming the first rule the name breaks.
-pub fn validate_cord_name(name: &str) -> Result<String, CordNameError> {
+pub fn validate_name_under_cord_rules(
+    name: &str,
+    length_max: usize,
+) -> Result<String, CordNameError> {
     if name.chars().any(is_forbidden_cord_name_char) {
         return Err(CordNameError::ForbiddenCharacter);
     }
@@ -185,10 +197,21 @@ pub fn validate_cord_name(name: &str) -> Result<String, CordNameError> {
     if has_stray_cord_name_joiner(&chars) {
         return Err(CordNameError::StrayJoiner);
     }
-    if chars.len() > CORD_NAME_LENGTH_MAX {
-        return Err(CordNameError::TooLong);
+    if chars.len() > length_max {
+        return Err(CordNameError::TooLong { length_max });
     }
     Ok(name.to_owned())
+}
+
+/// Validate and normalize a cord name: the cord name rules
+/// ([`validate_name_under_cord_rules`]), at most [`CORD_NAME_LENGTH_MAX`]
+/// characters.
+///
+/// # Errors
+///
+/// [`CordNameError`] naming the first rule the name breaks.
+pub fn validate_cord_name(name: &str) -> Result<String, CordNameError> {
+    validate_name_under_cord_rules(name, CORD_NAME_LENGTH_MAX)
 }
 
 /// A cord, read from its cell.
@@ -276,25 +299,41 @@ pub async fn query_cord_create<C: GenericClient + ?Sized>(
         Some(owner_actor_id),
     )
     .await?;
-    for (role, level) in CORD_STAMPED_GRANTS {
-        query_cell_grant_create(
-            client,
-            cell.id,
-            level,
-            &CellGrantPrincipalInput::Role {
-                role: role.to_owned(),
-                scope_id: Some(cell.id),
-            },
-            None,
-        )
-        .await?;
-    }
+    query_cord_cell_grants_stamp(client, cell.id, cell.id).await?;
     let cord = CordRow::from_cell(&cell)
         .ok_or_else(|| CellError::Decode("a created cord cell didn't read back".to_owned()))?;
     Ok(CordCreated {
         cord,
         owner_role_grant_id,
     })
+}
+
+/// Stamp [`CORD_STAMPED_GRANTS`] on the cell `cell_id`, a cord or one of
+/// its spaces: one role-shaped `cell_grant` per cord role, each scoped to the
+/// cord `cord_id`, never one per member.
+///
+/// # Errors
+///
+/// [`CellError`] on a driver failure.
+pub(crate) async fn query_cord_cell_grants_stamp<C: GenericClient + ?Sized>(
+    client: &C,
+    cell_id: Uuid,
+    cord_id: Uuid,
+) -> Result<(), CellError> {
+    for (role, level) in CORD_STAMPED_GRANTS {
+        query_cell_grant_create(
+            client,
+            cell_id,
+            level,
+            &CellGrantPrincipalInput::Role {
+                role: role.to_owned(),
+                scope_id: Some(cord_id),
+            },
+            None,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Fetch a cord by id; `None` when no active cord cell has that id.
@@ -424,7 +463,9 @@ mod tests {
         assert_eq!(validate_cord_name(&longest).unwrap(), longest);
         assert_eq!(
             validate_cord_name(&"a".repeat(CORD_NAME_LENGTH_MAX + 1)),
-            Err(CordNameError::TooLong)
+            Err(CordNameError::TooLong {
+                length_max: CORD_NAME_LENGTH_MAX
+            })
         );
     }
 
