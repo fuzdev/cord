@@ -63,6 +63,8 @@ database.
   ones that welcome someone new to the instance, and the cord's members
   can be given roles, removed, or leave, as long as the cord keeps an
   owner. A cord's spaces and everything inside them come next
+- an a/v check page, for anyone: your camera, mic, and output, a
+  recording, and a WebRTC call to itself, all local to the browser
 - the server, `crates/cord_server` (the `cordd` binary): accounts and
   sessions, invite-gated signup, first-account bootstrap, the cord,
   invite, and member actions, a JSON-RPC endpoint, a WebSocket endpoint,
@@ -148,7 +150,7 @@ cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
 
 | Variable                           | Purpose                                                                 |
 | ---------------------------------- | ----------------------------------------------------------------------- |
-| `DATABASE_URL`                     | Postgres connection; unset runs a boot-only server with just `/health`  |
+| `DATABASE_URL`                     | Postgres connection; unset runs a boot-only server (`/health` and `/`)  |
 | `FUZ_ALLOWED_ORIGINS`              | always required: comma-separated origins (`http://localhost:*`)         |
 | `FUZ_ALLOW_ORIGIN_WILDCARDS`       | `true` lets a wildcard origin boot (refused otherwise); `true`/`false`  |
 | `SECRET_FUZ_COOKIE_KEYS`           | required with a database: cookie-signing keys, 32+ characters each      |
@@ -157,6 +159,7 @@ cargo run -p cord_server                       # cordd, on 127.0.0.1:4061
 | `FUZ_DB_AUDIT_CHECKOUT_TIMEOUT_MS` | an audit write's pool checkout bound in ms (default 30000)              |
 | `HOST`, `PORT`                     | bind address, default `127.0.0.1:4061`                                  |
 | `CORD_TRUSTED_PROXIES`             | proxy IPs/CIDRs trusted for `X-Forwarded-For`; default loopback         |
+| `NO_COLOR`                         | set, logs are plain text (production sets it for journald)              |
 
 It runs its migrations on start. With the server up, the frontend dev
 server proxies `/api` (WebSocket included) and `/health` to port 4061, so

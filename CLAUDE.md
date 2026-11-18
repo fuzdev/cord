@@ -30,9 +30,9 @@ that bring someone new onto the instance). Nothing happens inside a cord yet
   feed columns and posting, linked to their account, never a way to log in.
   Members control their own presence visibility, and the instance is honest
   about what it can see.
-- **Backend**: the API-only server, this frontend served by nginx (no
-  GitHub Pages deploy), Postgres, and coturn for WebRTC TURN (full mesh).
-  The live room is built first; persisted spaces layer on it.
+- **Backend**: the API-only server, this frontend served by nginx,
+  Postgres, and, once the live room lands, coturn for WebRTC TURN (full
+  mesh). The live room is built first; persisted spaces layer on it.
 - **Self-hosting**: one instance hosts several cords; deployed by docker
   compose or zap. Not federation, not a hosted service, not
   engagement-driven: never streaks, scores, or reputation, and no push
@@ -311,9 +311,8 @@ cargo test --workspace
 cargo xtask check-release
 ```
 
-`git add` and `git commit` are pre-approved here: short one-line messages
-at sensible stopping points (`fix:` / `docs:` / `test:` / `feat:` /
-`refactor:` / `chore:`), no body, no trailers.
+`git add` and `git commit` are pre-approved here, at sensible stopping
+points and following the ecosystem's commit conventions.
 
 ## Server runtime
 
@@ -420,7 +419,8 @@ reset-and-migrate cycle, the actor seeding, and the `columns.rs` assertion
 come from the spine's `fuz_testing`); each module doc lists what it covers.
 `transaction_isolation.rs` resets no schema: it boots `cordd`'s router on
 its own scratch database set to `repeatable read` and asserts the refusal
-comes before any migration.
+comes before any migration. `cordd_args.rs` runs unignored with no
+database: the real binary's command line and its start-failure exit codes.
 
 ```bash
 createdb cord_schema_ready_test
