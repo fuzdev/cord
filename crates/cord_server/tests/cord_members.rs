@@ -27,36 +27,20 @@
 
 mod common;
 
-use common::{create_cord, fresh_db_pool, in_tx, mint, seed_actor};
+use common::{add_member, assert_refused, create_cord, fresh_db_pool, in_tx, mint, seed_actor};
 use cord_server::cord_authz::{CordRole, cord_role_in};
 use cord_server::cord_member_queries::{
     CORD_REVOKE_REASON_LEAVE, CORD_REVOKE_REASON_REMOVE, CORD_REVOKE_REASON_ROLE_SET,
-    CordMemberChange, CordMemberError, query_cord_leave, query_cord_manager_role,
-    query_cord_member_remove, query_cord_member_role_set, query_cord_members,
+    CordMemberError, query_cord_leave, query_cord_manager_role, query_cord_member_remove,
+    query_cord_member_role_set, query_cord_members,
 };
 use cord_server::cord_queries::CordRow;
 use cord_server::invite::queries::{
     CordInviteError, hash_cord_invite_token, query_cord_invite_accept,
 };
 use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
-use fuz_auth::query_create_role_grant;
 use fuz_db::Pool;
 use uuid::Uuid;
-
-async fn add_member(pool: &Pool, cord_id: Uuid, actor_id: Uuid, role: CordRole) {
-    let client = pool.get().await.expect("pool.get");
-    query_create_role_grant(
-        &client,
-        &actor_id,
-        role.as_str(),
-        Some(CORD_SCOPE_KIND),
-        Some(&cord_id),
-        None,
-        None,
-    )
-    .await
-    .expect("grant");
-}
 
 /// The members as (actor, role), owners first.
 async fn roster(pool: &Pool, cord_id: Uuid) -> Vec<(Uuid, CordRole)> {
@@ -102,13 +86,6 @@ async fn revoke_reasons(pool: &Pool, cord_id: Uuid, actor_id: Uuid) -> Vec<Strin
         .iter()
         .map(|r| r.get(0))
         .collect()
-}
-
-fn assert_refused(result: Result<CordMemberChange, CordMemberError>, expected: &str) {
-    match result {
-        Err(e) => assert_eq!(format!("{e:?}"), expected),
-        Ok(change) => panic!("expected {expected}, got {change:?}"),
-    }
 }
 
 /// The first cord and the people in and around it.

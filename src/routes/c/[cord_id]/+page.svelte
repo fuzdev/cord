@@ -24,7 +24,7 @@
 	});
 
 	const spaces = $derived(cord_id ? spaces_state.loaded_spaces(cord_id) : null);
-	const list_error = $derived(spaces_state.cord_id === cord_id ? spaces_state.list.error : null);
+	const list_error = $derived(cord_id ? spaces_state.list_error_for(cord_id) : null);
 
 	// a new line opens in the preview tab, by its URL, unless the route has
 	// moved on while the create ran

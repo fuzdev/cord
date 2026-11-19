@@ -1,19 +1,34 @@
 /**
  * cord's WebSocket on `/api/ws`: open while an account is signed in, the only
  * way that account's requests reach the server, and the session re-check when
- * the server closes it.
+ * the server closes it. This module doc is where the socket's whole story
+ * lives; `ui/rpc.ts`, the root layout, and the repo's docs point here.
  *
- * `CordSocket` is the connection `ui/rpc.ts` hands fuz_app's WebSocket
- * transport. It holds one `FrontendWebsocketClient` per signed-in account
- * and swaps it rather than reusing it: a client closed as revoked
+ * **Routing.** `CordSocket` is the connection `ui/rpc.ts` hands fuz_app's
+ * WebSocket transport (with `queue: true`), which takes a request while the
+ * connection is open or `will_reconnect`, and hands the rest to HTTP. While
+ * an account is signed in, in a browser, `will_reconnect` holds, so every
+ * request comes here and none falls back to HTTP, even while the socket is
+ * down; signed out, it's false, and requests go over HTTP.
+ *
+ * **Lifecycle.** The root layout calls `set_account` from the same account
+ * id its reset effect follows: the socket opens once an account is signed
+ * in, closes on sign-out, and is replaced on an account change. A request
+ * made before that effect runs opens it itself (`get_account_id`). Effects
+ * don't run while prerendering, and off the browser nothing connects, so no
+ * socket opens there. It holds one `FrontendWebsocketClient` per signed-in
+ * account and swaps it rather than reusing it: a client closed as revoked
  * (`WS_CLOSE_SESSION_REVOKED`, 4001) never opens again, so a later sign-in,
  * or a session found still good, needs a fresh one. The transport registers
- * its handlers here once, and they follow each client.
+ * its handlers here once, and they follow each client. fuz_app's client
+ * sends a `heartbeat` once either direction has been idle for
+ * `DEFAULT_HEARTBEAT_INTERVAL`, and reconnects with backoff after any close
+ * but a 4001 (terminal) or a 4004 (below).
  *
- * While an account is signed in, `will_reconnect` holds, so the transport
- * hands every request here rather than to HTTP, even while the socket is
- * down. A request made while it's down waits, in the client's own queue, for
- * the socket to open, at most `CORD_SOCKET_WAIT_TIMEOUT`
+ * **Waiting requests.** A request made while the socket is down
+ * (connecting after a sign-in, a server restart, a dropped connection)
+ * waits, in the client's own queue, for the socket to open, at most
+ * `CORD_SOCKET_WAIT_TIMEOUT`, then fails as a `timeout`, unsent
  * (`CORD_SOCKET_WAIT_TIMEOUT_REASON`); one made while the socket is closed
  * as revoked waits on the re-check first. A sign-out or an account change
  * (`CORD_SOCKET_ACCOUNT_CHANGED_REASON`), even a sign-out and back in as the
@@ -23,30 +38,45 @@
  * sign-out's or an account change's included, fails with
  * `CORD_SOCKET_LOST_REASON`: the server may or may not have run it,
  * whatever the close. That includes a 4001, which can
- * only close a socket that opened, and opening sends everything queued.
+ * only close a socket that opened, and opening sends everything queued. The
+ * reasons and their words live in `ui/cord_errors.ts`, and these errors
+ * carry the words as their own messages.
  *
- * A socket the server closed to admit a newer one on the account
- * (`WS_CLOSE_CONNECTION_LIMIT`, 4004, `superseded`) stays closed until
- * something calls `connect`. The next request does, since a request is the
- * user acting; reopening may close another tab's oldest socket in turn,
+ * **Superseded.** A socket the server closed to admit a newer one on the
+ * account (`WS_CLOSE_CONNECTION_LIMIT`, 4004, `superseded`) stays closed
+ * until something calls `connect`. The next request does, since a request is
+ * the user acting; reopening may close another tab's oldest socket in turn,
  * which likewise reopens only on its own next request, so the tabs never
  * close each other in a loop. The role gate's close
  * (`WS_CLOSE_PERMISSION_REVOKED`, 4006) can't reach cord: `/api/ws` mounts
  * no required roles.
  *
- * A 4001 means the session was revoked or expired while the socket was open,
- * but not always this tab's session: a revocation that ends every session of
- * the account closes every socket on it, whichever session is still live
- * elsewhere. And an upgrade the server refuses for a dead session reads to
- * the browser as a dropped connection, so a session that expired while the
- * socket was down shows only as reconnects that keep failing. Either one
- * puts the session in doubt (`recheck_session_if_in_doubt`), and
- * `recheck_session` settles it: a 401, or a live session for another
- * account, runs the session check, which moves the tab to whoever the
- * browser is now signed in as; anything else keeps the session, reopening a
- * revoked socket. A network failure or a 5xx is not a 401, so an unreachable
- * server never signs anyone out. A socket revoked again soon after such a
- * reopen reopens on a backoff, never in a tight loop.
+ * **The session re-check.** A 4001 means the session was revoked or expired
+ * while the socket was open, but not always this tab's session: a
+ * revocation that ends every session of the account (a logout elsewhere)
+ * closes every socket on it, whichever session is still live elsewhere. And
+ * an upgrade the server refuses for a dead session reads to the browser as a
+ * dropped connection, so a session that expired while the socket was down
+ * shows only as reconnects that keep failing
+ * (`CORD_SOCKET_RECHECK_RECONNECTS`). Either one puts the session in doubt,
+ * and the root layout calls `recheck_session_if_in_doubt` from an `$effect`;
+ * `recheck_session` settles it by probing `/api/account/status`. Only a
+ * definitive 401, or a live session for another account, runs the session
+ * check (`end_session`, the auth state's `check_session`), which signs the
+ * tab out as a logout would (the root layout's reset: the cords, spaces, and
+ * tabs, and the rail signed out), or moves it to whoever the browser is now
+ * signed in as, without reconnecting, though the `on_logout` listeners don't
+ * run; the socket follows the account it leaves. Anything else keeps the session,
+ * reopening a revoked socket on a fresh client. A network failure or a 5xx
+ * is not a 401, so a server restart or an outage never signs anyone out. A
+ * re-check answers only for the client it began on, and its probe gives up
+ * as unknown after `CORD_SOCKET_WAIT_TIMEOUT`. A socket revoked again soon
+ * after such a reopen (`CORD_SOCKET_REOPEN_WINDOW`) reopens on a backoff,
+ * never in a tight loop.
+ *
+ * **What shows.** The rail (`CordNav`) says the socket is reconnecting once
+ * it has been down for `CORD_SOCKET_RECONNECTING_DELAY`, except while it's
+ * closed as superseded, which isn't trying.
  *
  * @module
  */
@@ -64,10 +94,21 @@ import {
 	to_same_origin_ws_url,
 	type WebsocketRpcConnection
 } from '@fuzdev/fuz_app/actions/transports_ws.ts';
-import type { JsonrpcRequestId } from '@fuzdev/fuz_app/http/jsonrpc.ts';
 import { JSONRPC_ERROR_CODES, jsonrpc_errors } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import type { SessionProbe } from './cord_auth_state.svelte.ts';
+import {
+	CORD_SIGNED_OUT_MESSAGE,
+	CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE,
+	CORD_SOCKET_ACCOUNT_CHANGED_REASON,
+	CORD_SOCKET_CANCELLED_MESSAGE,
+	CORD_SOCKET_LOST_MESSAGE,
+	CORD_SOCKET_LOST_REASON,
+	CORD_SOCKET_NO_SOCKET_MESSAGE,
+	CORD_SOCKET_WAIT_TIMEOUT_MESSAGE,
+	CORD_SOCKET_WAIT_TIMEOUT_REASON,
+	rpc_error_code
+} from './cord_errors.ts';
 
 /** The WebSocket endpoint `cordd` mounts, beside `/api/rpc`. */
 export const CORD_WS_PATH = '/api/ws';
@@ -95,39 +136,10 @@ export const CORD_SOCKET_REOPEN_WINDOW = 30_000;
 /** How long the socket is down, in ms, before the rail says it's reconnecting. */
 export const CORD_SOCKET_RECONNECTING_DELAY = 2_000;
 
-/**
- * The `data.reason` of a request that was on the wire when the connection
- * dropped, before the server answered: it may or may not have run.
- */
-export const CORD_SOCKET_LOST_REASON = 'connection_lost';
-
-/** The words for `CORD_SOCKET_LOST_REASON`. */
-export const CORD_SOCKET_LOST_MESSAGE =
-	'The connection dropped before the server answered, so this may or may not have gone through. Check before trying again.';
-
-/** The `data.reason` of a request that waited out `CORD_SOCKET_WAIT_TIMEOUT` unsent. */
-export const CORD_SOCKET_WAIT_TIMEOUT_REASON = 'connection_wait_timeout';
-
-/** The words for `CORD_SOCKET_WAIT_TIMEOUT_REASON`. */
-export const CORD_SOCKET_WAIT_TIMEOUT_MESSAGE =
-	"The server's out of reach for now, so this wasn't sent. Try again in a little while.";
-
-/**
- * The `data.reason` of a request dropped unsent because another account
- * signed in on this browser while it waited.
- */
-export const CORD_SOCKET_ACCOUNT_CHANGED_REASON = 'account_changed';
-
-/** The words for `CORD_SOCKET_ACCOUNT_CHANGED_REASON`. */
-export const CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE =
-	"You're signed in as someone else now, so this didn't go through.";
-
-/** The words for a request with no session behind it, whichever action it was. */
-export const CORD_SIGNED_OUT_MESSAGE = "You're signed out now, so this didn't go through.";
-
-const CORD_SOCKET_CANCELLED_MESSAGE = 'This was cancelled before it was sent.';
-const CORD_SOCKET_NO_SOCKET_MESSAGE =
-	"There's no connection to the server here, so this wasn't sent.";
+/** The options a socket request takes: `WebsocketRpcConnection`'s. */
+export type CordSocketRequestOptions = NonNullable<
+	Parameters<WebsocketRpcConnection['request']>[2]
+>;
 
 /** What `CordSocket` needs of a WebSocket client: `FrontendWebsocketClient`'s surface. */
 export type CordSocketClient = Omit<WebsocketRpcConnection, 'will_reconnect'> &
@@ -177,6 +189,15 @@ export interface CordSocketOptions {
 	wait_timeout?: number;
 }
 
+/** One sign-in's session, and its reopens after a revoke. */
+interface CordSocketSession {
+	readonly account_id: string;
+	/** When the socket last reopened after a revoke, or `null` if it hasn't. */
+	reopened_at: number | null;
+	/** How many reopens after a revoke came quickly in a row. */
+	reopen_streak: number;
+}
+
 const create_default_client = (): CordSocketClient =>
 	new FrontendWebsocketClient(to_same_origin_ws_url(CORD_WS_PATH));
 
@@ -190,8 +211,6 @@ const to_reopen_delay = (streak: number): number =>
 					DEFAULT_RECONNECT_DELAY * DEFAULT_BACKOFF_FACTOR ** (streak - 1)
 				)
 			);
-
-const to_error_code = (error: unknown): unknown => (error as { code?: unknown } | null)?.code;
 
 const to_lost_error = (): Error =>
 	jsonrpc_errors.service_unavailable(CORD_SOCKET_LOST_MESSAGE, { reason: CORD_SOCKET_LOST_REASON });
@@ -210,20 +229,17 @@ export class CordSocket implements WebsocketRpcConnection {
 	readonly #wait_timeout: number;
 
 	#client: CordSocketClient | null = $state.raw(null);
-	#account_id: string | null = null;
 	/**
-	 * Bumped by each real `set_account` change, a sign-out included, so a
-	 * request can tell its session ended even when the same account is back.
+	 * The signed-in account's session, `null` signed out. Each real
+	 * `set_account` change replaces it, a sign-out included, so a request can
+	 * tell its session ended even when the same account is back.
 	 */
-	#session_epoch = 0;
+	#session: CordSocketSession | null = null;
 	#unsubscribe_client: (() => void) | null = null;
 	/** The recheck in flight, and the client it's for: only a recheck for the current client is shared. */
 	#recheck: { client: CordSocketClient; promise: Promise<void> } | null = null;
 	/** A fresh client's `connect`, held back on a backoff. */
 	#connect_timer: unknown = null;
-	/** When the socket last reopened after a revoke, and how many of those came quickly in a row. */
-	#reopened_at: number | null = null;
-	#reopen_streak = 0;
 
 	/** Clients a sign-out or account change dropped while open: all they held was sent. */
 	readonly #dropped_open: WeakSet<CordSocketClient> = new WeakSet();
@@ -277,11 +293,9 @@ export class CordSocket implements WebsocketRpcConnection {
 	 * @mutates this - replaces or drops the client
 	 */
 	set_account(account_id: string | null): void {
-		if (account_id === this.#account_id) return;
-		this.#account_id = account_id;
-		this.#session_epoch++;
-		this.#reopened_at = null;
-		this.#reopen_streak = 0;
+		if (account_id === (this.#session?.account_id ?? null)) return;
+		this.#session =
+			account_id === null ? null : { account_id, reopened_at: null, reopen_streak: 0 };
 		untrack(() => {
 			this.#close();
 			if (account_id !== null) this.#open(0);
@@ -327,8 +341,8 @@ export class CordSocket implements WebsocketRpcConnection {
 	}
 
 	async #run_recheck(client: CordSocketClient): Promise<void> {
-		const account_id = this.#account_id;
-		if (account_id === null) return;
+		const session = this.#session;
+		if (!session) return;
 		// bounded, so a hung probe can't leave a revoked socket unreopened
 		const controller = new AbortController();
 		const timer = this.#timers.set_timeout(() => controller.abort(), this.#wait_timeout);
@@ -337,7 +351,10 @@ export class CordSocket implements WebsocketRpcConnection {
 		});
 		let probe: SessionProbe;
 		try {
-			probe = await Promise.race([this.#probe_session(account_id, controller.signal), gave_up]);
+			probe = await Promise.race([
+				this.#probe_session(session.account_id, controller.signal),
+				gave_up
+			]);
 		} catch {
 			probe = 'unknown';
 		} finally {
@@ -358,21 +375,22 @@ export class CordSocket implements WebsocketRpcConnection {
 		// Still live, or the server couldn't say: a revoked client never opens
 		// again, so replace it. If the session is in fact gone, the new upgrade
 		// is refused, the reconnects fail, and the doubt comes back.
-		if (client.revoked) this.#reopen_after_revoke();
+		if (client.revoked) this.#reopen_after_revoke(session);
 	}
 
-	#reopen_after_revoke(): void {
+	/** @mutates session - counts the reopen toward its quick-revoke streak */
+	#reopen_after_revoke(session: CordSocketSession): void {
 		const now = this.#timers.now();
-		this.#reopen_streak =
-			this.#reopened_at !== null && now - this.#reopened_at < CORD_SOCKET_REOPEN_WINDOW
-				? this.#reopen_streak + 1
+		session.reopen_streak =
+			session.reopened_at !== null && now - session.reopened_at < CORD_SOCKET_REOPEN_WINDOW
+				? session.reopen_streak + 1
 				: 0;
-		this.#reopened_at = now;
-		this.#open(to_reopen_delay(this.#reopen_streak));
+		session.reopened_at = now;
+		this.#open(to_reopen_delay(session.reopen_streak));
 	}
 
 	#current_account_id(): string | null {
-		return this.#get_account_id ? this.#get_account_id() : this.#account_id;
+		return this.#get_account_id ? this.#get_account_id() : (this.#session?.account_id ?? null);
 	}
 
 	#follow_account(): void {
@@ -438,17 +456,17 @@ export class CordSocket implements WebsocketRpcConnection {
 	async request(
 		method: string,
 		params: unknown,
-		options: { signal?: AbortSignal; queue?: boolean; id?: JsonrpcRequestId } = {}
+		options: CordSocketRequestOptions = {}
 	): Promise<unknown> {
 		this.#follow_account();
-		const account_id = this.#account_id;
-		const epoch = this.#session_epoch;
+		const session = this.#session;
 		let client = this.#client;
-		if (!client || account_id === null) {
-			throw this.#browser && account_id === null
+		if (!client || !session) {
+			throw this.#browser && !session
 				? jsonrpc_errors.unauthenticated(CORD_SIGNED_OUT_MESSAGE)
 				: jsonrpc_errors.service_unavailable(CORD_SOCKET_NO_SOCKET_MESSAGE);
 		}
+		const { account_id } = session;
 		if (client.connected) {
 			return this.#send(client, account_id, method, params, options);
 		}
@@ -485,7 +503,7 @@ export class CordSocket implements WebsocketRpcConnection {
 				const next: CordSocketClient | null = this.#client;
 				// the session it was made in ended meanwhile, even if the same
 				// account is back: never send it in the session after
-				if (!next || this.#session_epoch !== epoch || next.revoked) {
+				if (!next || this.#session !== session || next.revoked) {
 					throw this.#to_session_ended_error(account_id);
 				}
 				client = next;
@@ -510,12 +528,12 @@ export class CordSocket implements WebsocketRpcConnection {
 		account_id: string,
 		method: string,
 		params: unknown,
-		options: { signal?: AbortSignal; queue?: boolean; id?: JsonrpcRequestId }
+		options: CordSocketRequestOptions
 	): Promise<unknown> {
 		try {
 			return await client.request(method, params, options);
 		} catch (error) {
-			const code = to_error_code(error);
+			const code = rpc_error_code(error);
 			if (code === JSONRPC_ERROR_CODES.service_unavailable) {
 				// the client was dropped on a sign-out or an account change: what
 				// an open one held was sent, and what a closed one held never was
@@ -541,7 +559,7 @@ export class CordSocket implements WebsocketRpcConnection {
 
 	/** Signed out, or, when another account is signed in now, the account changed. */
 	#to_session_ended_error(account_id: string): Error {
-		const current = this.#account_id;
+		const current = this.#session?.account_id ?? null;
 		return current !== null && current !== account_id
 			? jsonrpc_errors.unauthenticated(CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE, {
 					reason: CORD_SOCKET_ACCOUNT_CHANGED_REASON

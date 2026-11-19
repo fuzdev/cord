@@ -15,9 +15,10 @@
 	 * bar's scroll padding matches the fade, so a tab scrolled into view,
 	 * by selection or by focus, lands clear of it.
 	 *
-	 * A parallel local copy of visiones' route tabs, pending a shared one in
-	 * fuz_app; unlike visiones, cord has no global stylesheet, so the look
-	 * lives here and in `Tab.svelte`.
+	 * Began from visiones' route tabs and grew editor-style tabs (`Tab`'s
+	 * preview, double click, and close), pending a shared one in fuz_app;
+	 * unlike visiones, cord has no global stylesheet, so the look lives here
+	 * and in `Tab.svelte`.
 	 *
 	 * @module
 	 */

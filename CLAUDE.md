@@ -51,10 +51,12 @@ Skill(fuz-stack).
   `cord_roles.ts` (the roles and member rules' twin), `action_specs.ts` and
   the generated `action_*` and `frontend_action_types` modules; `ui/` holds
   `rpc.ts`, `cord_socket.svelte.ts` (the signed-in account's WebSocket),
-  `cord_errors.ts` (refusal reasons to words), the `*_state.svelte.ts`
-  classes, and the
+  `cord_errors.ts` (refusal reasons to words, the socket's included),
+  `route_params.ts`, `double_click.ts`, the `*_state.svelte.ts` classes,
+  and the
   components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs, a
-  cord's space tabs among them; `CordNameForm`, for cord and space names;
+  cord's space tabs among them, which `CordSpaceTabStrip` renders;
+  `CordNameForm`, for cord and space names;
   `CordMembers`, `CordInvites`, `CordInviteForm`,
   `CordNewcomerForm`; `MediaCheck` and its `Media*` parts, the a/v check,
   with `media_output.ts` routing sound to a chosen output)
@@ -196,26 +198,18 @@ The load-bearing rules. Each module named holds the full reasoning.
   `verifying` (true mid-submit, so the form would unmount and lose input);
   admin UI gates on `auth_state.is_admin`, fuz_app's global-grant check.
   (`ui/cord_auth_state.svelte.ts`)
-- **Signed-in requests go only over the socket.** While an account is
-  signed in, `CordSocket.will_reconnect` holds, so fuz_app's transport
-  queues every request for the socket and never falls back to HTTP; a
-  request waits for a down socket at most `CORD_SOCKET_WAIT_TIMEOUT`, a
-  sign-out or account change rejects what's waiting (never sent on the next
-  account's socket; a reconnect, like HTTP, goes as whoever the browser's
-  cookie now names), and one on the wire at a drop, a 4001's included,
-  fails as `connection_lost`, its outcome unknown. Signed out, requests go
-  over HTTP. (`ui/rpc.ts`,
-  `ui/cord_socket.svelte.ts`)
+- **Signed-in requests go only over the socket**, never falling back to
+  HTTP: a request waits for a down socket at most
+  `CORD_SOCKET_WAIT_TIMEOUT`, nothing waiting is ever sent in the next
+  session, and one on the wire at a drop fails as `connection_lost`, its
+  outcome unknown. Signed out, requests go over HTTP.
+  (`ui/cord_socket.svelte.ts` tells the socket's whole story; `ui/rpc.ts`
+  the HTTP side)
 - **The socket ends a session only on a 401.** A 4001 close or reconnects
-  that keep failing put the session in doubt; the re-check probes
-  `/api/account/status` and runs `check_session` only on a definitive 401
-  or a live session naming another account, never on a network failure or
-  a 5xx, so a server restart or an outage signs no one out. A 4001 isn't
-  always this tab's session (a logout elsewhere closes every socket of the
-  account), so a live session reopens the socket on a fresh client (a
-  client closed as revoked never reopens), on a backoff when it's revoked
-  again soon after. A re-check answers only for the client it began on,
-  and its probe gives up as unknown after `CORD_SOCKET_WAIT_TIMEOUT`.
+  that keep failing only put the session in doubt; a definitive 401, or a
+  live session naming another account, is the one answer that runs
+  `check_session`, so a server restart or an outage signs no one out. A live
+  session reopens a revoked socket on a fresh client.
   (`ui/cord_socket.svelte.ts`)
 - **Twins and their pins**: `cord_action_specs.ts` twins the Rust specs,
   error reasons, and limits, and `src/test/cord_action_specs.test.ts` sweeps
@@ -271,44 +265,13 @@ signs out), and, reset with it, `cord_spaces_state_context` (the one
 which live at the root rather than in the cord layout because the rail
 nests them; and it checks the session on mount.
 
-Signed in, every request goes over the account's WebSocket on `/api/ws`,
-never over HTTP: while the socket is down (connecting after sign-in, a
-restart, a dropped connection) a request waits in fuz_app's queue for it to
-open, failing after `CORD_SOCKET_WAIT_TIMEOUT` as unsent; a sign-out or an
-account change rejects what's waiting; and a request on the wire when the
-connection drops fails as `connection_lost`, which `ui/cord_errors.ts` words
-as maybe gone through. Signed out (an invite link's preview and redemption),
-requests go over HTTP on `/api/rpc`, where reads go as `GET` unless their
-input is sensitive. Both carry the session cookie and answer alike, and the
-server's per-action rate limits count both; nginx's per-IP request limit
-sees a socket only as its upgrade. The root layout drives the `CordSocket`
-(`ui/cord_socket.svelte.ts`) from the same account id as the reset effect:
-it opens once an account is signed in, closes on sign-out, and is replaced
-on an account change; a request made before that effect runs opens it
-itself (`get_account_id`); effects don't run while prerendering, so no
-socket opens there. fuz_app's client sends a `heartbeat` once either
-direction has been idle for `DEFAULT_HEARTBEAT_INTERVAL`, and reconnects
-with backoff after a close, except a 4001 (terminal) or the per-account
-connection limit's 4004, which leaves it closed until the tab's next
-request reopens it (the role gate's 4006 can't come: `/api/ws` mounts no
-required roles). A 4001 (the session revoked or expired while
-open), or reconnects that keep failing, make the layout re-check the
-session (`recheck_session_if_in_doubt`): a 401, or a live session naming
-another account, runs `check_session`, which signs the tab out as a logout
-would (the cords, spaces, and tabs reset, the rail signed out), or moves it
-to that account, without reconnecting, though the `on_logout` listeners
-don't run; anything else keeps the session and reopens a revoked socket. A
-request made while the socket is closed as revoked waits on that re-check,
-and is dropped unsent if the session ends meanwhile, even when the same
-account signs back in; one the socket already held when the 4001 came was
-sent (a 4001 closes only an opened socket, and opening sends the queue), so
-it fails as lost, never resent. The rail shows a quiet
-"reconnecting…" line once the socket has been down for
-`CORD_SOCKET_RECONNECTING_DELAY`, except while it's closed as superseded,
-which isn't trying. The server pushes notifications over
-the socket, dispatched by method to the `receive` handlers passed to
-`create_cord_rpc`; today it pushes only the spine's role-grant and offer
-notifications, which cord lists but doesn't handle.
+Signed in, every request goes over the account's WebSocket on `/api/ws`;
+signed out (an invite link's preview and redemption), over HTTP on
+`/api/rpc`. The root layout drives the `CordSocket` from the same account
+id as its reset effect and calls its `recheck_session_if_in_doubt`; how the
+socket opens, waits, fails, re-checks the session, and reopens, and what
+the rail shows meanwhile, is `ui/cord_socket.svelte.ts`'s module doc, and
+the HTTP side and pushed notifications are `ui/rpc.ts`'s.
 
 Every page sits in fuz_ui's `AppShell`, with `CordNav` as its left rail:
 home, your cords (each selected on its page and any page under it, the one
@@ -338,7 +301,8 @@ The state classes hold fuz_app `AsyncSlot`s (`KeyedAsyncSlot` for per-row
 writes) over the `api`. The member, invite, space, and join states map errors
 through `ui/cord_errors.ts`, and so does every slot in
 `cords_state.svelte.ts` (`map_error: to_cord_error_message`); the socket's
-own errors carry cord's words as their messages too. Per-cord states drop
+reasons and words live there too, and its errors carry the words as their
+messages. Per-cord states drop
 responses for a cord they've moved off, and their `fetch` is safe to call
 from an `$effect`; so is a `reset`, which reads nothing trackably (a keyed
 slot's reset reads its entries, and the root layout's reset effect would
@@ -362,9 +326,10 @@ builds its own `CordInvitesState`. The invites and settings tabs show only
 to owners and admins, and their pages guard themselves too, fetching
 nothing for anyone else.
 
-The layout also loads the cord's spaces with the cord, and keys
-`CordSpaceTabs` (`ui/cord_space_tabs.svelte.ts`) to the viewer's account
-and the route's cord. The space tabs work as an editor's file tabs, with
+The layout also loads the cord's spaces with the cord, and its
+`CordSpaceTabStrip` renders the space tabs and keys `CordSpaceTabs`
+(`ui/cord_space_tabs.svelte.ts`) to the viewer's account and the route's
+cord. The space tabs work as an editor's file tabs, with
 its words: one `preview` tab, which opening another space replaces, and
 `permanent` tabs that stay until closed; the `selected` tab, the one
 showing, is the route's. The strip is the management tabs (overview,

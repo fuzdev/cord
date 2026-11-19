@@ -3,20 +3,14 @@
  *
  * `create_cord_rpc` builds a JSON-RPC client over two transports, typed by
  * the generated `FrontendActionsApi`, and routes by session. Signed in, every
- * request goes over the account's WebSocket on `/api/ws`
- * (`ui/cord_socket.svelte.ts`) and never over HTTP: while the socket is down
- * (connecting after a sign-in, a server restart, a dropped connection), a
- * request waits for it to open, at most `CORD_SOCKET_WAIT_TIMEOUT`, then
- * fails as a `timeout`, unsent; a sign-out or an account change drops what's
- * waiting, and a request on the wire when the connection drops fails with
- * `CORD_SOCKET_LOST_REASON`, its outcome unknown. Signed out, there's no
- * socket, so the calls made then (an invite link's preview and redemption)
- * go over HTTP on `/api/rpc`, where fuz_app derives each call's method from
- * its spec: a read goes as a `GET` (a `POST` when its input carries a secret
- * or personal value, or its URL runs too long), everything else as a `POST`.
- * The routing is fuz_app's: the WebSocket transport takes each request while
- * the connection is open or `will_reconnect`, which `CordSocket` holds true
- * exactly while an account is signed in, and HTTP takes the rest.
+ * request goes over the account's WebSocket on `/api/ws` and never over
+ * HTTP; how a request waits for a down socket, and how it fails when it
+ * can't be sent or the connection drops under it, is the socket's story
+ * (`ui/cord_socket.svelte.ts`). Signed out, there's no socket, so the calls
+ * made then (an invite link's preview and redemption) go over HTTP on
+ * `/api/rpc`, where fuz_app derives each call's method from its spec: a read
+ * goes as a `GET` (a `POST` when its input carries a secret or personal
+ * value, or its URL runs too long), everything else as a `POST`.
  *
  * Both carry the same session cookie and answer with the same JSON-RPC
  * envelopes, and the server's per-action rate limits count calls from both
@@ -26,7 +20,8 @@
  * The server pushes notifications over the socket. Each dispatches to the
  * `receive` handler for its method in `handlers`, the generated
  * `FrontendActionHandlers` map; a listed notification with no handler is
- * parsed and dropped.
+ * parsed and dropped. Today the server pushes only the spine's role-grant
+ * and offer notifications, which cord lists but doesn't handle.
  *
  * The handle is `api`, the throwing Proxy: `await api.foo(input)` returns the
  * value or throws an `Error` carrying the JSON-RPC `{code, data}`, whose

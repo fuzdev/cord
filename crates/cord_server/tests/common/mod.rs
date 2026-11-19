@@ -15,9 +15,13 @@
 #![allow(dead_code, reason = "each test binary uses only part of this module")]
 #![expect(
     clippy::expect_used,
+    clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
+use std::fmt::Debug;
+
+use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CordRow, query_cord_create};
 use cord_server::invite::queries::{
     CordInviteAccepted, CordInviteError, CordInviteStatus, generate_cord_invite_token,
@@ -28,7 +32,9 @@ use cord_server::invite::redemption_queries::{
     CORD_INVITE_REDEMPTION_COLUMNS, CordInviteRedeemed, CordInviteRedemptionRow,
     query_cord_invite_redeem,
 };
+use cord_server::roles::CORD_SCOPE_KIND;
 use cord_server::router::cord_migration_namespaces;
+use fuz_auth::query_create_role_grant;
 use fuz_db::{Pool, col, iso8601_timestamp_expr, qualify_columns};
 use fuz_testing::{TestingDbOptions, fresh_test_db_pool, seed_account_actor};
 use uuid::Uuid;
@@ -78,6 +84,31 @@ pub async fn create_cord(pool: &Pool, name: &str, owner: Uuid) -> CordRow {
         .await
         .expect("create cord")
         .cord
+}
+
+/// Give `actor_id` the cord role `role` on the cord `cord_id`, as a direct
+/// grant rather than through Cord's verbs.
+pub async fn add_member(pool: &Pool, cord_id: Uuid, actor_id: Uuid, role: CordRole) {
+    let client = pool.get().await.expect("pool.get");
+    query_create_role_grant(
+        &client,
+        &actor_id,
+        role.as_str(),
+        Some(CORD_SCOPE_KIND),
+        Some(&cord_id),
+        None,
+        None,
+    )
+    .await
+    .expect("grant");
+}
+
+/// Assert `result` was refused with the error whose `Debug` is `expected`.
+pub fn assert_refused<T: Debug, E: Debug>(result: Result<T, E>, expected: &str) {
+    match result {
+        Err(e) => assert_eq!(format!("{e:?}"), expected),
+        Ok(ok) => panic!("expected {expected}, got {ok:?}"),
+    }
 }
 
 /// Mint a link on the cord `cord_id` as `by`, returning its raw token and id.

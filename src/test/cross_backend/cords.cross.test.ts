@@ -1,12 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import type { TestAccount } from '@fuzdev/fuz_app/testing/app_server.ts';
-import { inject_backend_handle } from '@fuzdev/fuz_app/testing/cross_backend/provided_context.ts';
-import { default_cross_process_setup } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
-import {
-	cross_rpc_call,
-	error_reason,
-	expect_output
-} from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
+import { error_reason, expect_output } from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 import {
 	ERROR_INSUFFICIENT_PERMISSIONS,
@@ -19,20 +12,27 @@ import {
 	RoleGrantOfferCreateOutput
 } from '@fuzdev/fuz_app/auth/role_grant_offer_action_specs.ts';
 import { ROLE_ADMIN } from '@fuzdev/fuz_app/auth/role_schema.ts';
-import { AuditLogListOutput } from '@fuzdev/fuz_app/auth/admin_action_specs.ts';
 
 import {
 	CordAdminListOutput,
-	CordCreateOutput,
 	CordGetOutput,
 	CordInviteAcceptOutput,
-	CordInviteCreateOutput,
 	CordListOutput,
 	CordUpdateOutput,
 	ERROR_CORD_NAME_INVALID,
 	ERROR_CORD_NOT_FOUND
 } from '#lib/cord_action_specs.ts';
 import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
+
+import {
+	assert_refused,
+	audit_events,
+	call,
+	create_cord,
+	mint,
+	setup_test,
+	type Fixture
+} from './cord_cross_helpers.ts';
 
 /**
  * The cord actions end to end against a spawned `testing_cordd`: an instance
@@ -42,12 +42,6 @@ import { CORD_MEMBER, CORD_OWNER } from '#lib/cord_roles.ts';
  * (`_testing_reset`); `create_account` signs members up through a
  * production invite.
  */
-
-const handle = inject_backend_handle();
-const setup_test = default_cross_process_setup(handle);
-const { rpc_path } = handle.config;
-
-type Fixture = Awaited<ReturnType<typeof setup_test>>;
 
 /** The account's role grants, from `/api/account/status`. */
 const read_role_grants = async (
@@ -61,33 +55,6 @@ const read_role_grants = async (
 	return ((await res.json()) as { role_grants: Array<any> }).role_grants;
 };
 
-/** Call `method` as `account` on a clean cookie jar. */
-const call_as = (
-	fixture: Fixture,
-	account: TestAccount,
-	method: string,
-	params: unknown
-): ReturnType<typeof cross_rpc_call> =>
-	cross_rpc_call(
-		fixture.fresh_transport(),
-		rpc_path,
-		method,
-		params,
-		account.create_session_headers()
-	);
-
-/** Create a cord as the keeper, asserting the output's wire shape. */
-const create_cord = async (fixture: Fixture, name: string) => {
-	const res = await cross_rpc_call(
-		fixture.transport,
-		rpc_path,
-		'cord_create',
-		{ name },
-		fixture.create_session_headers()
-	);
-	return expect_output(res, CordCreateOutput).cord;
-};
-
 describe('cord_create', () => {
 	test('an instance admin creates a cord and becomes its owner', async () => {
 		const fixture = await setup_test();
@@ -96,20 +63,8 @@ describe('cord_create', () => {
 		assert.strictEqual(cord.role, CORD_OWNER);
 
 		// the owner grant is a spine role grant scoped exactly to the cord
-		const status = await fixture.transport('/api/account/status', {
-			method: 'GET',
-			headers: fixture.create_session_headers()
-		});
-		assert.strictEqual(status.status, 200);
-		const body = (await status.json()) as {
-			role_grants: Array<{
-				id: string;
-				role: string;
-				scope_kind: string | null;
-				scope_id: string | null;
-			}>;
-		};
-		const cord_grants = body.role_grants.filter((g) => g.scope_id === cord.id);
+		const grants = await read_role_grants(fixture, fixture.create_session_headers());
+		const cord_grants = grants.filter((g) => g.scope_id === cord.id);
 		assert.deepEqual(
 			cord_grants.map((g) => [g.role, g.scope_kind]),
 			[[CORD_OWNER, 'cord']]
@@ -117,14 +72,7 @@ describe('cord_create', () => {
 
 		// the audit event names the cord and the owner grant; the cell itself
 		// records no creator
-		const audit = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'audit_log_list',
-			{ event_type: 'cord_create' },
-			fixture.create_session_headers()
-		);
-		const events = expect_output(audit, AuditLogListOutput).events;
+		const events = await audit_events(fixture, 'cord_create');
 		assert.deepEqual(
 			events.map((e) => e.metadata),
 			[{ cord_id: cord.id, name: 'the porch', owner_role_grant_id: cord_grants[0]!.id }]
@@ -134,24 +82,10 @@ describe('cord_create', () => {
 	test('a member who is not an instance admin cannot create one', async () => {
 		const fixture = await setup_test();
 		const member = await fixture.create_account({ username: 'member' });
-		const res = await cross_rpc_call(
-			fixture.fresh_transport(),
-			rpc_path,
-			'cord_create',
-			{ name: 'mine' },
-			member.create_session_headers()
-		);
-		assert.ok(!res.ok);
-		assert.strictEqual(res.error?.code, JSONRPC_ERROR_CODES.forbidden);
-		assert.strictEqual(error_reason(res), ERROR_INSUFFICIENT_PERMISSIONS);
+		const res = await call(fixture, member, 'cord_create', { name: 'mine' });
+		assert_refused(res, ERROR_INSUFFICIENT_PERMISSIONS, JSONRPC_ERROR_CODES.forbidden);
 
-		const admin_list = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'cord_admin_list',
-			{},
-			fixture.create_session_headers()
-		);
+		const admin_list = await call(fixture, fixture, 'cord_admin_list', {});
 		assert.deepEqual(expect_output(admin_list, CordAdminListOutput).cords, [], 'no cord was made');
 	});
 
@@ -167,16 +101,9 @@ describe('cord_create', () => {
 			'a\u200D\u200Db',
 			'x'.repeat(101)
 		]) {
-			const res = await cross_rpc_call(
-				fixture.transport,
-				rpc_path,
-				'cord_create',
-				{ name },
-				fixture.create_session_headers()
-			);
+			const res = await call(fixture, fixture, 'cord_create', { name });
 			assert.ok(!res.ok, JSON.stringify(name));
-			assert.strictEqual(res.error?.code, JSONRPC_ERROR_CODES.invalid_params);
-			assert.strictEqual(error_reason(res), ERROR_CORD_NAME_INVALID);
+			assert_refused(res, ERROR_CORD_NAME_INVALID, JSONRPC_ERROR_CODES.invalid_params);
 		}
 	});
 });
@@ -197,22 +124,10 @@ describe('reading cords', () => {
 		const first = await create_cord(fixture, 'the porch');
 		const second = await create_cord(fixture, 'the stoop');
 
-		const list = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'cord_list',
-			{},
-			fixture.create_session_headers()
-		);
+		const list = await call(fixture, fixture, 'cord_list', {});
 		assert.deepEqual(expect_output(list, CordListOutput).cords, [first, second]);
 
-		const get = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'cord_get',
-			{ cord_id: first.id },
-			fixture.create_session_headers()
-		);
+		const get = await call(fixture, fixture, 'cord_get', { cord_id: first.id });
 		assert.deepEqual(expect_output(get, CordGetOutput).cord, first);
 	});
 
@@ -220,39 +135,17 @@ describe('reading cords', () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
-		const headers = member.create_session_headers();
 
-		const list = await cross_rpc_call(
-			fixture.fresh_transport(),
-			rpc_path,
-			'cord_list',
-			{},
-			headers
-		);
+		const list = await call(fixture, member, 'cord_list', {});
 		assert.deepEqual(expect_output(list, CordListOutput).cords, []);
 
 		// the cord and a random id answer the same
 		for (const cord_id of [cord.id, crypto.randomUUID()]) {
-			const get = await cross_rpc_call(
-				fixture.fresh_transport(),
-				rpc_path,
-				'cord_get',
-				{ cord_id },
-				headers
-			);
-			assert.ok(!get.ok);
-			assert.strictEqual(get.error?.code, JSONRPC_ERROR_CODES.not_found);
-			assert.strictEqual(error_reason(get), ERROR_CORD_NOT_FOUND);
+			const get = await call(fixture, member, 'cord_get', { cord_id });
+			assert_refused(get, ERROR_CORD_NOT_FOUND, JSONRPC_ERROR_CODES.not_found);
 
-			const update = await cross_rpc_call(
-				fixture.fresh_transport(),
-				rpc_path,
-				'cord_update',
-				{ cord_id, name: 'taken over' },
-				headers
-			);
-			assert.ok(!update.ok);
-			assert.strictEqual(error_reason(update), ERROR_CORD_NOT_FOUND);
+			const update = await call(fixture, member, 'cord_update', { cord_id, name: 'taken over' });
+			assert_refused(update, ERROR_CORD_NOT_FOUND);
 		}
 	});
 
@@ -261,43 +154,23 @@ describe('reading cords', () => {
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
 
-		const assign = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'role_grant_assign',
-			{
-				to_account_id: member.account.id,
-				role: CORD_MEMBER,
-				scope_kind: 'cord',
-				scope_id: cord.id
-			},
-			fixture.create_session_headers()
-		);
-		assert.ok(!assign.ok);
-		assert.strictEqual(error_reason(assign), ERROR_ROLE_NOT_WEB_GRANTABLE);
+		const assign = await call(fixture, fixture, 'role_grant_assign', {
+			to_account_id: member.account.id,
+			role: CORD_MEMBER,
+			scope_kind: 'cord',
+			scope_id: cord.id
+		});
+		assert_refused(assign, ERROR_ROLE_NOT_WEB_GRANTABLE);
 
-		const offer = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'role_grant_offer_create',
-			{
-				to_account_id: member.account.id,
-				role: CORD_MEMBER,
-				scope_kind: 'cord',
-				scope_id: cord.id
-			},
-			fixture.create_session_headers()
-		);
-		assert.ok(!offer.ok);
-		assert.strictEqual(error_reason(offer), ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE);
+		const offer = await call(fixture, fixture, 'role_grant_offer_create', {
+			to_account_id: member.account.id,
+			role: CORD_MEMBER,
+			scope_kind: 'cord',
+			scope_id: cord.id
+		});
+		assert_refused(offer, ERROR_ROLE_GRANT_OFFER_ROLE_NOT_GRANTABLE);
 
-		const get = await cross_rpc_call(
-			fixture.fresh_transport(),
-			rpc_path,
-			'cord_get',
-			{ cord_id: cord.id },
-			member.create_session_headers()
-		);
+		const get = await call(fixture, member, 'cord_get', { cord_id: cord.id });
 		assert.strictEqual(error_reason(get), ERROR_CORD_NOT_FOUND);
 	});
 });
@@ -306,13 +179,10 @@ describe('cord_update', () => {
 	test('the owner renames the cord', async () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
-		const res = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'cord_update',
-			{ cord_id: cord.id, name: 'the stoop' },
-			fixture.create_session_headers()
-		);
+		const res = await call(fixture, fixture, 'cord_update', {
+			cord_id: cord.id,
+			name: 'the stoop'
+		});
 		assert.deepEqual(expect_output(res, CordUpdateOutput).cord, { ...cord, name: 'the stoop' });
 	});
 
@@ -320,44 +190,21 @@ describe('cord_update', () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
-		const { token } = expect_output(
-			await cross_rpc_call(
-				fixture.transport,
-				rpc_path,
-				'cord_invite_create',
-				{ cord_id: cord.id },
-				fixture.create_session_headers()
-			),
-			CordInviteCreateOutput
-		);
+		const { token } = await mint(fixture, fixture, cord.id);
 		expect_output(
-			await call_as(fixture, member, 'cord_invite_accept', { token }),
+			await call(fixture, member, 'cord_invite_accept', { token }),
 			CordInviteAcceptOutput
 		);
 
 		// a member who may not rename it, the keeper on no cord, and the keeper
 		// on the real cord all get the same name refusal
 		const replies = [
-			await call_as(fixture, member, 'cord_update', { cord_id: cord.id, name: '' }),
-			await cross_rpc_call(
-				fixture.fresh_transport(),
-				rpc_path,
-				'cord_update',
-				{ cord_id: crypto.randomUUID(), name: '' },
-				fixture.create_session_headers()
-			),
-			await cross_rpc_call(
-				fixture.fresh_transport(),
-				rpc_path,
-				'cord_update',
-				{ cord_id: cord.id, name: '' },
-				fixture.create_session_headers()
-			)
+			await call(fixture, member, 'cord_update', { cord_id: cord.id, name: '' }),
+			await call(fixture, fixture, 'cord_update', { cord_id: crypto.randomUUID(), name: '' }),
+			await call(fixture, fixture, 'cord_update', { cord_id: cord.id, name: '' })
 		];
 		for (const res of replies) {
-			assert.ok(!res.ok);
-			assert.strictEqual(res.error?.code, JSONRPC_ERROR_CODES.invalid_params);
-			assert.strictEqual(error_reason(res), ERROR_CORD_NAME_INVALID);
+			assert_refused(res, ERROR_CORD_NAME_INVALID, JSONRPC_ERROR_CODES.invalid_params);
 		}
 		const [first, ...rest] = replies;
 		for (const res of rest) {
@@ -373,13 +220,7 @@ describe('cord_admin_list', () => {
 		const first = await create_cord(fixture, 'the porch');
 		const second = await create_cord(fixture, 'the stoop');
 
-		const res = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'cord_admin_list',
-			{},
-			fixture.create_session_headers()
-		);
+		const res = await call(fixture, fixture, 'cord_admin_list', {});
 		const cords = expect_output(res, CordAdminListOutput).cords;
 		assert.deepEqual(
 			cords.map((c) => [c.id, c.name, c.member_count]),
@@ -391,13 +232,7 @@ describe('cord_admin_list', () => {
 		);
 
 		const member = await fixture.create_account({ username: 'member' });
-		const refused = await cross_rpc_call(
-			fixture.fresh_transport(),
-			rpc_path,
-			'cord_admin_list',
-			{},
-			member.create_session_headers()
-		);
+		const refused = await call(fixture, member, 'cord_admin_list', {});
 		assert.ok(!refused.ok);
 		assert.strictEqual(refused.error?.code, JSONRPC_ERROR_CODES.forbidden);
 	});
@@ -415,17 +250,17 @@ describe('instance admins and cords', () => {
 			'the member holds a global admin grant'
 		);
 
-		const list = await call_as(fixture, admin, 'cord_list', {});
+		const list = await call(fixture, admin, 'cord_list', {});
 		assert.deepEqual(expect_output(list, CordListOutput).cords, []);
-		const get = await call_as(fixture, admin, 'cord_get', { cord_id: cord.id });
+		const get = await call(fixture, admin, 'cord_get', { cord_id: cord.id });
 		assert.strictEqual(error_reason(get), ERROR_CORD_NOT_FOUND);
-		const update = await call_as(fixture, admin, 'cord_update', {
+		const update = await call(fixture, admin, 'cord_update', {
 			cord_id: cord.id,
 			name: 'taken over'
 		});
 		assert.strictEqual(error_reason(update), ERROR_CORD_NOT_FOUND);
 
-		const admin_list = await call_as(fixture, admin, 'cord_admin_list', {});
+		const admin_list = await call(fixture, admin, 'cord_admin_list', {});
 		assert.deepEqual(
 			expect_output(admin_list, CordAdminListOutput).cords.map((c) => c.id),
 			[cord.id]
@@ -438,31 +273,25 @@ describe('scoped builtin roles', () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
-		const offer = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'role_grant_offer_create',
-			{ to_account_id: member.account.id, role: ROLE_ADMIN, scope_kind: 'cord', scope_id: cord.id },
-			fixture.create_session_headers()
-		);
+		const offer = await call(fixture, fixture, 'role_grant_offer_create', {
+			to_account_id: member.account.id,
+			role: ROLE_ADMIN,
+			scope_kind: 'cord',
+			scope_id: cord.id
+		});
 		// the spine refuses a scoped builtin before cord's own offer gate runs
-		assert.ok(!offer.ok);
-		assert.strictEqual(offer.error?.code, JSONRPC_ERROR_CODES.invalid_params);
-		assert.strictEqual(error_reason(offer), ERROR_ROLE_GRANT_BUILTIN_SCOPED);
+		assert_refused(offer, ERROR_ROLE_GRANT_BUILTIN_SCOPED, JSONRPC_ERROR_CODES.invalid_params);
 	});
 
 	test('an instance admin still offers admin globally', async () => {
 		const fixture = await setup_test();
 		const member = await fixture.create_account({ username: 'member' });
-		const offer = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'role_grant_offer_create',
-			{ to_account_id: member.account.id, role: ROLE_ADMIN },
-			fixture.create_session_headers()
-		);
+		const offer = await call(fixture, fixture, 'role_grant_offer_create', {
+			to_account_id: member.account.id,
+			role: ROLE_ADMIN
+		});
 		const offer_id = expect_output(offer, RoleGrantOfferCreateOutput).offer.id;
-		const accept = await call_as(fixture, member, 'role_grant_offer_accept', { offer_id });
+		const accept = await call(fixture, member, 'role_grant_offer_accept', { offer_id });
 		expect_output(accept, RoleGrantOfferAcceptOutput);
 		const grants = await read_role_grants(fixture, member.create_session_headers());
 		assert.deepEqual(
@@ -477,27 +306,20 @@ describe('scoped builtin roles', () => {
 		const fixture = await setup_test();
 		const cord = await create_cord(fixture, 'the porch');
 		const member = await fixture.create_account({ username: 'member' });
-		const assign = await cross_rpc_call(
-			fixture.transport,
-			rpc_path,
-			'role_grant_assign',
-			{
-				to_account_id: member.account.id,
-				role: ROLE_ADMIN,
-				scope_kind: 'cord',
-				scope_id: cord.id
-			},
-			fixture.create_session_headers()
-		);
+		const assign = await call(fixture, fixture, 'role_grant_assign', {
+			to_account_id: member.account.id,
+			role: ROLE_ADMIN,
+			scope_kind: 'cord',
+			scope_id: cord.id
+		});
 		assert.ok(!assign.ok, 'a scoped admin assign is refused');
-		assert.strictEqual(assign.error?.code, JSONRPC_ERROR_CODES.invalid_params);
-		assert.strictEqual(error_reason(assign), ERROR_ROLE_GRANT_BUILTIN_SCOPED);
+		assert_refused(assign, ERROR_ROLE_GRANT_BUILTIN_SCOPED, JSONRPC_ERROR_CODES.invalid_params);
 		const grants = await read_role_grants(fixture, member.create_session_headers());
 		assert.deepEqual(grants, [], 'no grant was written');
 
 		// so `cord_create` never meets a scoped admin; with no admin grant at
 		// all, the dispatcher's role gate refuses first
-		const create = await call_as(fixture, member, 'cord_create', { name: 'mine' });
+		const create = await call(fixture, member, 'cord_create', { name: 'mine' });
 		assert.strictEqual(error_reason(create), ERROR_INSUFFICIENT_PERMISSIONS);
 	});
 });

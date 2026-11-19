@@ -7,7 +7,8 @@
  * `CordPageState`, because the rail sits in the root layout and nests the
  * spaces of the cord you're on. The cord layout drives its fetches for the
  * route's cord, and its readers ask for a cord by id (`loaded_spaces`,
- * `get_space`), so a list left from another cord answers for none.
+ * `get_space`, `list_error_for`), so a list left from another cord answers
+ * for none.
  *
  * `fetch` reads no reactive state trackably, so a page may call it from an
  * `$effect`. A response for a cord the state has since moved off is
@@ -123,6 +124,15 @@ export class CordSpacesState {
 	/** The spaces of `cord_id` once loaded, else `null`. */
 	loaded_spaces(cord_id: Uuid): ReadonlyArray<CordSpaceJson> | null {
 		return this.loaded_cord_id === cord_id ? this.spaces : null;
+	}
+
+	/**
+	 * The list's error for `cord_id`, `null` when there's none or the list is
+	 * another cord's. A failed refresh keeps the loaded list, so the error
+	 * may show beside it.
+	 */
+	list_error_for(cord_id: Uuid): string | null {
+		return this.cord_id === cord_id ? this.list.error : null;
 	}
 
 	/** The space `space_id` of `cord_id`, if the loaded list has it. */

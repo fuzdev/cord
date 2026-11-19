@@ -1,8 +1,7 @@
 import type { SocketStatus } from '@fuzdev/fuz_app/actions/socket.svelte.ts';
-import type { JsonrpcRequestId } from '@fuzdev/fuz_app/http/jsonrpc.ts';
 import { jsonrpc_errors, type ThrownJsonrpcError } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
-import type { CordSocketClient } from '#lib/ui/cord_socket.svelte.ts';
+import type { CordSocketClient, CordSocketRequestOptions } from '#lib/ui/cord_socket.svelte.ts';
 
 /** A request the fake sent or queued, with the means to answer it. */
 export interface FakeRequest {
@@ -112,7 +111,7 @@ export class FakeSocketClient implements CordSocketClient {
 	request(
 		method: string,
 		params: unknown,
-		options: { signal?: AbortSignal; queue?: boolean; id?: JsonrpcRequestId } = {}
+		options: CordSocketRequestOptions = {}
 	): Promise<unknown> {
 		if (this.revoked) {
 			return Promise.reject(jsonrpc_errors.unauthenticated('fake: session revoked'));

@@ -27,6 +27,7 @@
 	import { cord_space_tabs_context } from './cord_space_tabs.svelte.ts';
 	import { cord_rpc_context } from './rpc.ts';
 	import { CORD_SOCKET_RECONNECTING_DELAY } from './cord_socket.svelte.ts';
+	import { prevent_double_click_selection } from './double_click.ts';
 
 	const auth_state = cord_auth_state_context.get();
 	const cords_state = cords_state_context.get();
@@ -108,11 +109,7 @@
 											class:selected={is_selected(space_href)}
 											aria-current={to_aria_current(space_href)}
 											title={space.name}
-											onmousedown={(e) => {
-												// a double click keeps the tab rather than selecting words; unlike
-												// `user-select: none`, this leaves the name selectable
-												if (e.detail > 1) e.preventDefault();
-											}}
+											onmousedown={prevent_double_click_selection}
 											ondblclick={(e) => {
 												e.preventDefault();
 												space_tabs.open(cord.id, space.id, 'permanent');

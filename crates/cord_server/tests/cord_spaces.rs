@@ -22,20 +22,18 @@
 
 #![expect(
     clippy::expect_used,
-    clippy::panic,
     reason = "test helpers outside `#[test]` fns panic on a failed setup or check"
 )]
 
 mod common;
 
-use common::{create_cord, fresh_db_pool, in_tx, seed_actor};
+use common::{add_member, assert_refused, create_cord, fresh_db_pool, in_tx, seed_actor};
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CORD_STAMPED_GRANTS, CordRow};
 use cord_server::cord_space_queries::{
     CORD_SPACE_CELL_KIND, CORD_SPACE_COUNT_MAX, CordSpaceError, CordSpaceKind, CordSpaceRow,
     query_cord_space_create, query_cord_space_delete, query_cord_space_rename, query_cord_spaces,
 };
-use cord_server::roles::CORD_SCOPE_KIND;
 use fuz_auth::actor_queries::query_role_grant_find_active_for_actor;
 use fuz_auth::{ROLE_ADMIN, query_create_role_grant};
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
@@ -44,21 +42,6 @@ use fuz_cell::cell_view_sql::CellViewer;
 use fuz_cell::{CellGrantLevel, CellVisibility};
 use fuz_db::Pool;
 use uuid::Uuid;
-
-async fn add_member(pool: &Pool, cord_id: Uuid, actor_id: Uuid, role: CordRole) {
-    let client = pool.get().await.expect("pool.get");
-    query_create_role_grant(
-        &client,
-        &actor_id,
-        role.as_str(),
-        Some(CORD_SCOPE_KIND),
-        Some(&cord_id),
-        None,
-        None,
-    )
-    .await
-    .expect("grant");
-}
 
 async fn create(
     pool: &Pool,
@@ -112,13 +95,6 @@ async fn names(pool: &Pool, cord_id: Uuid) -> Vec<String> {
         .into_iter()
         .map(|s| s.name)
         .collect()
-}
-
-fn assert_refused<T: std::fmt::Debug>(result: Result<T, CordSpaceError>, expected: &str) {
-    match result {
-        Err(e) => assert_eq!(format!("{e:?}"), expected),
-        Ok(ok) => panic!("expected {expected}, got {ok:?}"),
-    }
 }
 
 /// Whether the spine's visibility-filtered `cell_list` shows `cell_id` to an

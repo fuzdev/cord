@@ -5,10 +5,11 @@
  * The throwing RPC proxy throws an `Error` carrying the JSON-RPC `code` and
  * `data`; the cord verbs put their refusal's reason in `data.reason`. A rate
  * limit carries no reason, only its code and a `data.retry_after`. The
- * socket adds reasons of its own (`ui/cord_socket.svelte.ts`): a request the
+ * socket (`ui/cord_socket.svelte.ts`) adds reasons of its own: a request the
  * connection dropped mid-answer, one that waited too long to send, and one
- * dropped because another account signed in. Their words live beside them
- * there, as the socket's errors' own messages too.
+ * dropped because another account signed in. Those, and the words for them,
+ * live here with the rest, and the socket's errors carry the words as their
+ * own messages too.
  *
  * @module
  */
@@ -45,15 +46,45 @@ import {
 	ERROR_CORD_SPACE_NOT_FOUND,
 	ERROR_CORD_UPDATE_FORBIDDEN
 } from '../cord_action_specs.ts';
-import {
-	CORD_SIGNED_OUT_MESSAGE,
-	CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE,
-	CORD_SOCKET_ACCOUNT_CHANGED_REASON,
-	CORD_SOCKET_LOST_MESSAGE,
-	CORD_SOCKET_LOST_REASON,
-	CORD_SOCKET_WAIT_TIMEOUT_MESSAGE,
-	CORD_SOCKET_WAIT_TIMEOUT_REASON
-} from './cord_socket.svelte.ts';
+/**
+ * The `data.reason` of a request that was on the wire when the connection
+ * dropped, before the server answered: it may or may not have run.
+ */
+export const CORD_SOCKET_LOST_REASON = 'connection_lost';
+
+/** The words for `CORD_SOCKET_LOST_REASON`. */
+export const CORD_SOCKET_LOST_MESSAGE =
+	'The connection dropped before the server answered, so this may or may not have gone through. Check before trying again.';
+
+/** The `data.reason` of a request that waited out `CORD_SOCKET_WAIT_TIMEOUT` unsent. */
+export const CORD_SOCKET_WAIT_TIMEOUT_REASON = 'connection_wait_timeout';
+
+/** The words for `CORD_SOCKET_WAIT_TIMEOUT_REASON`. */
+export const CORD_SOCKET_WAIT_TIMEOUT_MESSAGE =
+	"The server's out of reach for now, so this wasn't sent. Try again in a little while.";
+
+/**
+ * The `data.reason` of a request dropped unsent because another account
+ * signed in on this browser while it waited.
+ */
+export const CORD_SOCKET_ACCOUNT_CHANGED_REASON = 'account_changed';
+
+/** The words for `CORD_SOCKET_ACCOUNT_CHANGED_REASON`. */
+export const CORD_SOCKET_ACCOUNT_CHANGED_MESSAGE =
+	"You're signed in as someone else now, so this didn't go through.";
+
+/** The words for a request with no session behind it, whichever action it was. */
+export const CORD_SIGNED_OUT_MESSAGE = "You're signed out now, so this didn't go through.";
+
+/** The socket's words for a request its caller aborted while it waited to be sent. */
+export const CORD_SOCKET_CANCELLED_MESSAGE = 'This was cancelled before it was sent.';
+
+/** The socket's words for a request made where no socket opens (off the browser). */
+export const CORD_SOCKET_NO_SOCKET_MESSAGE =
+	"There's no connection to the server here, so this wasn't sent.";
+
+/** The JSON-RPC `code` of a thrown RPC error, if it has one. */
+export const rpc_error_code = (e: unknown): unknown => (e as { code?: unknown } | null)?.code;
 
 /** The `data.reason` of a thrown RPC error, if it has one. */
 export const rpc_error_reason = (e: unknown): string | undefined => {
@@ -63,11 +94,11 @@ export const rpc_error_reason = (e: unknown): string | undefined => {
 
 /** Whether a thrown RPC error is the server's rate limit, which carries no reason. */
 export const is_rpc_rate_limited = (e: unknown): boolean =>
-	(e as { code?: unknown } | null)?.code === JSONRPC_ERROR_CODES.rate_limited;
+	rpc_error_code(e) === JSONRPC_ERROR_CODES.rate_limited;
 
 /** Whether a thrown RPC error says there's no session: signed out, or the session ended. */
 export const is_rpc_unauthenticated = (e: unknown): boolean =>
-	(e as { code?: unknown } | null)?.code === JSONRPC_ERROR_CODES.unauthenticated;
+	rpc_error_code(e) === JSONRPC_ERROR_CODES.unauthenticated;
 
 /** The words for a rate limit, whichever action hit it. */
 export const CORD_RATE_LIMITED_MESSAGE =

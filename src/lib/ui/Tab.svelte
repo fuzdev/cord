@@ -23,6 +23,8 @@
 	import { page } from '$app/state';
 	import type { ResolvedPathname } from '$app/types';
 
+	import { prevent_double_click_selection } from './double_click.ts';
+
 	const {
 		href,
 		selected: selected_override,
@@ -85,13 +87,7 @@
 		class="tab-link"
 		aria-current={is_exact ? 'page' : undefined}
 		{title}
-		onmousedown={ondblclick
-			? (e) => {
-					// a double click keeps the tab rather than selecting words; unlike
-					// `user-select: none`, this leaves the name selectable
-					if (e.detail > 1) e.preventDefault();
-				}
-			: undefined}
+		onmousedown={ondblclick ? prevent_double_click_selection : undefined}
 		ondblclick={ondblclick
 			? (e) => {
 					e.preventDefault();

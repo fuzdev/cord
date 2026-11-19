@@ -3,7 +3,7 @@ import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import { ERROR_CORD_NAME_INVALID, type CordJson } from '#lib/cord_action_specs.ts';
 import { AdminCordsState, CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
-import { CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_REASON } from '#lib/ui/cord_socket.svelte.ts';
+import { CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_REASON } from '#lib/ui/cord_errors.ts';
 
 import { rpc_error, stub_api } from './stub_api.ts';
 

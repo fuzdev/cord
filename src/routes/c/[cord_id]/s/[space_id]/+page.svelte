@@ -14,13 +14,13 @@
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
 	import ConfirmButton from '@fuzdev/fuz_app/ui/ConfirmButton.svelte';
-	import { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
-	import { parse } from '@fuzdev/fuz_schema/schema.ts';
+	import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 	import { CordSpaceName } from '#lib/cord_action_specs.ts';
 	import { cord_page_state_context } from '#lib/ui/cord_page_state.svelte.ts';
 	import { cord_spaces_state_context } from '#lib/ui/cord_spaces_state.svelte.ts';
 	import { cord_space_tabs_context } from '#lib/ui/cord_space_tabs.svelte.ts';
+	import { to_uuid_param } from '#lib/ui/route_params.ts';
 	import CordNameForm from '#lib/ui/CordNameForm.svelte';
 
 	// the layout mounts this page only for a loaded cord and the viewer's role
@@ -30,12 +30,9 @@
 	const space_tabs = cord_space_tabs_context.get();
 
 	const cord = $derived(cord_page.cord);
-	const space_id = $derived.by(() => {
-		const parsed = parse(Uuid, page.params.space_id);
-		return parsed.ok ? parsed.value : undefined;
-	});
+	const space_id = $derived(to_uuid_param(page.params.space_id));
 	const spaces = $derived(cord ? spaces_state.loaded_spaces(cord.id) : null);
-	const space = $derived(space_id && spaces ? spaces.find((s) => s.id === space_id) : undefined);
+	const space = $derived(cord && space_id ? spaces_state.get_space(cord.id, space_id) : undefined);
 
 	// a space deleted here leaves the list before the navigation away lands,
 	// so its page holds a quiet view meanwhile rather than flashing not-found
@@ -44,9 +41,7 @@
 
 	// a malformed id names no space, without waiting on the list
 	const not_found = $derived(!deleted && (!space_id || (!!spaces && !space)));
-	const list_error = $derived(
-		cord && spaces_state.cord_id === cord.id ? spaces_state.list.error : null
-	);
+	const list_error = $derived(cord ? spaces_state.list_error_for(cord.id) : null);
 	const preview = $derived(!!space && space_tabs.preview_id === space.id);
 
 	// the keep control leaves once the tab is permanent, so focus moves to
