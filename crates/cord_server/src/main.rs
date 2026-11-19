@@ -40,6 +40,7 @@ async fn main() -> ExitCode {
     match run_app(RunAppOptions {
         spine: SpineRunOptions::production(password_hasher, DEFAULT_ADDR),
         extra_action_specs_factory: None,
+        final_action_specs_factory: None,
     })
     .await
     {

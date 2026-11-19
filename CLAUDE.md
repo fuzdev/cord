@@ -492,7 +492,13 @@ it builds the audit emitter with in-flight tracking),
 `_testing_shorten_credential_expiry` (an account's credentials expiring
 seconds from now, for the spine's credential-deadline suite), cord's
 `_testing_cord_invite_expire`, and a schema wipe on boot when
-`FUZ_TESTING_RESET_DB_ON_STARTUP` is true. It binds `127.0.0.1:4161`. **Every
+`FUZ_TESTING_RESET_DB_ON_STARTUP` is true. Its two action seams are
+`RunAppOptions` fields `cordd` passes as `None`:
+`extra_action_specs_factory` (the spine's, given the app and the spine's
+runtime) mounts the `_testing_*` actions after cord's own, and
+`final_action_specs_factory` (cord's, given the assembled spec list) mounts
+`_testing_action_manifest` last, so the manifest reports every method
+mounted above it. It binds `127.0.0.1:4161`. **Every
 cord table goes in the `_testing_reset` truncate**, or rows outlive a test. Never ship it: it is the only runtime
 dependent of `fuz_testing`, and `cargo xtask check-release` fails if `cordd`
 reaches `fuz_testing` or `fuz_audit` (the `testing_` prefix exempts
@@ -545,7 +551,10 @@ admin RPC and audit stream gates for a member and a bearer token), `cords` the
 cord verbs, `cord_members` invite links and members, `cord_newcomers`
 newcomer links, `cord_spaces` the space verbs, and `cord_socket` cord verbs
 over `/api/ws`, end to end (the socket itself, its upgrade and every 4001
-close, revocation and expiry alike, is the spine suites'). The config
+close, revocation and expiry alike, is the spine suites'); `action_manifest`
+holds `all_cord_action_specs` to the registry `testing_cordd` mounts (each
+method's input shape, auth, side effects, and rate-limit class), the
+protocol and `_testing_*` actions aside. The config
 is `cord_backend_config.ts`, the declared surface `cord_surface_spec.ts`,
 the shared steps `cord_cross_helpers.ts`.
 

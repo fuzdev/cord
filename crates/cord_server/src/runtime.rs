@@ -24,6 +24,18 @@ use crate::router::{BuiltRouter, build_router};
 /// production `cordd` dep graph.
 pub type ExtraActionSpecsFactory = fuz_actions::ExtraActionSpecsFactory<crate::app::CordApp>;
 
+/// Builds action specs over the **assembled** spec list, run after
+/// [`ExtraActionSpecsFactory`], and mounts what it returns last.
+///
+/// The seam `_testing_action_manifest` needs: that spec reports the mounted
+/// method set, so it must be built from every spec mounted before it, which
+/// [`ExtraActionSpecsFactory`] can't see (it gets the app and the spine's
+/// runtime, not the list). Production passes `None`; `testing_cordd` passes
+/// `Some(_)`, closing over `fuz_testing` in its own process, so the `cordd`
+/// graph stays clean (`cargo xtask check-release`).
+pub type FinalActionSpecsFactory =
+    Box<dyn FnOnce(&[fuz_actions::ActionSpec]) -> Vec<fuz_actions::ActionSpec> + Send>;
+
 /// The name cord's sentinels (`cordd listening on …`) and `GET /` carry.
 pub const SERVER_NAME: &str = "cordd";
 
@@ -53,7 +65,7 @@ pub fn startup_hint(error: &StartupError) -> Option<&'static str> {
 /// Options for [`run_app`].
 #[expect(
     missing_debug_implementations,
-    reason = "the spine run options and the boxed action-spec factory have no `Debug`"
+    reason = "the spine run options and the boxed action-spec factories have no `Debug`"
 )]
 pub struct RunAppOptions {
     /// The spine's swap points. Production: [`fuz_auth::Argon2idHasher`],
@@ -66,6 +78,10 @@ pub struct RunAppOptions {
     /// `testing_cordd` seam for the `_testing_*` actions. Production passes
     /// `None`.
     pub extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    /// Action specs built from the assembled list and mounted last, the
+    /// `testing_cordd` seam for `_testing_action_manifest`. Production passes
+    /// `None`.
+    pub final_action_specs_factory: Option<FinalActionSpecsFactory>,
 }
 
 /// The upkeep [`run_app`] runs beside the server, each task a pass now and
@@ -118,14 +134,20 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
                 drain_timeout,
             },
         extra_action_specs_factory,
+        final_action_specs_factory,
     } = options;
 
     let env = BaseServerEnv::from_process(ENV_OPTIONS)?;
     let addr = env.bind_addr(default_addr)?;
     let shutdown = fuz_http::shutdown_token();
 
-    let BuiltRouter { router, app } =
-        build_router(&env, backend, extra_action_specs_factory).await?;
+    let BuiltRouter { router, app } = build_router(
+        &env,
+        backend,
+        extra_action_specs_factory,
+        final_action_specs_factory,
+    )
+    .await?;
 
     serve_until_shutdown(
         router,

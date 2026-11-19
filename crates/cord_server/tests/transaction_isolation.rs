@@ -51,6 +51,7 @@ async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
         &env,
         SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
         None,
+        None,
     )
     .await;
 

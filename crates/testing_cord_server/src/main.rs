@@ -32,8 +32,13 @@
 //! `_testing_shorten_credential_expiry`, which pulls an account's session and
 //! token expiries close so a test can watch its open socket and audit stream
 //! close when they lapse, and cord's own test seams
-//! ([`cord_testing_actions`]), all under the same daemon-token gate. The
-//! drain is a real barrier because this binary builds the app's audit
+//! ([`cord_testing_actions`]), all under the same daemon-token gate. Last,
+//! through the `final_action_specs_factory` seam, it mounts
+//! `_testing_action_manifest`
+//! ([`fuz_testing::create_testing_action_manifest_action_spec`]) over the
+//! assembled spec list, so the manifest reports every method `cordd` mounts
+//! but the protocol actions, plus the test-only ones. The drain is a real
+//! barrier because this binary builds the app's audit
 //! emitter with in-flight tracking (`SpineBackendOptions::audit_inflight_tracking`,
 //! `AuditEmitter::new_with_inflight_tracking`); over an untracked emitter it
 //! would return at once.
@@ -44,7 +49,9 @@ use std::net::SocketAddr;
 use std::process::ExitCode;
 
 use cord_server::router::cord_migration_namespaces;
-use cord_server::runtime::{ExtraActionSpecsFactory, RunAppOptions, run_app, startup_hint};
+use cord_server::runtime::{
+    ExtraActionSpecsFactory, FinalActionSpecsFactory, RunAppOptions, run_app, startup_hint,
+};
 use fuz_actions::server::{ServerInvocation, SpineRunOptions, StartCommand, server_invocation};
 use fuz_testing::{
     require_daemon_token_from_env, testing_backend_options, testing_reset_specs,
@@ -104,6 +111,15 @@ async fn main() -> ExitCode {
         Ok(specs)
     });
 
+    // `_testing_action_manifest`, built over the assembled list so it reports
+    // every method mounted above it, plus its own entry; the cross suite holds
+    // it to the frontend's specs
+    let final_action_specs_factory: FinalActionSpecsFactory = Box::new(|mounted| {
+        vec![fuz_testing::create_testing_action_manifest_action_spec(
+            mounted,
+        )]
+    });
+
     match run_app(RunAppOptions {
         spine: SpineRunOptions {
             backend: testing_backend_options(daemon_token_state),
@@ -111,6 +127,7 @@ async fn main() -> ExitCode {
             drain_timeout: fuz_http::DEFAULT_DRAIN_TIMEOUT,
         },
         extra_action_specs_factory: Some(extra_action_specs_factory),
+        final_action_specs_factory: Some(final_action_specs_factory),
     })
     .await
     {

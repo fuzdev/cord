@@ -6,7 +6,8 @@
  * self-service, admin, and role-grant offers) and cord's own actions
  * (`cord_action_specs.ts`), which run over either, and the notifications the
  * server pushes over `/api/ws`.
- * Keep it in step with the server's action registry; the generated
+ * Keep it in step with the server's action registry, which the
+ * `action_manifest` cross suite holds it to; the generated
  * `action_collections.ts`, `action_metatypes.ts`, and
  * `frontend_action_types.ts` derive their types from the same sources.
  *

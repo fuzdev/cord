@@ -88,7 +88,8 @@ export const rust_backend_config = (): BackendConfig => ({
 			testing_backdoors: [
 				'_testing_reset',
 				'_testing_drain_effects',
-				'_testing_shorten_credential_expiry'
+				'_testing_shorten_credential_expiry',
+				'_testing_action_manifest'
 			]
 		},
 		start_command: [resolve_cargo_binary_path(CORD_CARGO_BINARY)],

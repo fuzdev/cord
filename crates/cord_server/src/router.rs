@@ -54,7 +54,7 @@ use fuz_http::{
 };
 
 use crate::app::CordApp;
-use crate::runtime::{ExtraActionSpecsFactory, SERVER_NAME};
+use crate::runtime::{ExtraActionSpecsFactory, FinalActionSpecsFactory, SERVER_NAME};
 
 /// Session cookie name for cord.
 ///
@@ -123,6 +123,7 @@ pub async fn build_router(
     env: &BaseServerEnv,
     backend: SpineBackendOptions,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    final_action_specs_factory: Option<FinalActionSpecsFactory>,
 ) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
         return Ok(BuiltRouter {
@@ -143,7 +144,12 @@ pub async fn build_router(
     }
     let app = CordApp::new(backend);
 
-    let router = compose_full_router(&app, ready, extra_action_specs_factory)?;
+    let router = compose_full_router(
+        &app,
+        ready,
+        extra_action_specs_factory,
+        final_action_specs_factory,
+    )?;
     Ok(BuiltRouter {
         router,
         app: Some(app),
@@ -155,6 +161,7 @@ fn compose_full_router(
     app: &CordApp,
     ready: Router,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    final_action_specs_factory: Option<FinalActionSpecsFactory>,
 ) -> Result<GatedRouter, StartupError> {
     let backend = &app.backend;
     // One gate for the whole server: every route state that resolves a
@@ -167,7 +174,8 @@ fn compose_full_router(
     // transports and the spine's auth spec set, so a caller gets one budget
     // across them, not one per surface.
     let limits = ActionRateLimits::defaults(backend.rate_limiters);
-    let registry = build_action_registry(app, extra_action_specs_factory)?;
+    let registry =
+        build_action_registry(app, extra_action_specs_factory, final_action_specs_factory)?;
 
     // Account REST, bootstrap, and signup nest under `/api/account`. Signup
     // is invite-gated by default (`app_settings.open_signup = false`) and
@@ -211,10 +219,11 @@ fn compose_full_router(
 /// admin, and role-grant-offer actions over cord's role registry (the
 /// builtins plus the cord roles, which no spine grant path confers) and
 /// cord's offer gate, cord's own actions, then any extra specs from
-/// `testing_cordd`.
+/// `testing_cordd`, and last any it builds over that assembled list.
 fn build_action_registry(
     app: &CordApp,
     extra_action_specs_factory: Option<ExtraActionSpecsFactory>,
+    final_action_specs_factory: Option<FinalActionSpecsFactory>,
 ) -> Result<Arc<ActionRegistry>, StartupError> {
     let mut specs: Vec<fuz_actions::ActionSpec> = PROTOCOL_ACTION_SPECS();
     specs.extend(app.backend.auth_spec_set(
@@ -233,6 +242,12 @@ fn build_action_registry(
             Arc::new(app.clone()),
             app.backend.extra_action_specs_runtime(),
         )?);
+    }
+    // Last, so what it builds sees every spec above (the manifest
+    // `testing_cordd` serves); production passes none.
+    if let Some(factory) = final_action_specs_factory {
+        let final_specs = factory(&specs);
+        specs.extend(final_specs);
     }
     // Fail loud: booting with an empty registry would answer
     // `method_not_found` to everything.
@@ -359,7 +374,7 @@ mod tests {
             pool: app.backend.pool.clone(),
             expected: Arc::new(expected_ready_schema()),
         });
-        compose_full_router(app, ready, None).expect("router composes")
+        compose_full_router(app, ready, None, None).expect("router composes")
     }
 
     fn expected_ready_schema() -> fuz_db::ExpectedSchema {
@@ -377,7 +392,7 @@ mod tests {
     async fn boot_only_refuses_a_wildcard_origin_without_the_opt_in() {
         let options = || SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()));
         // `test_env`'s allowlist is `http://localhost:*`, with no opt-in
-        let message = match build_router(&test_env(None), options(), None).await {
+        let message = match build_router(&test_env(None), options(), None, None).await {
             Err(StartupError::Config(message)) => message,
             Err(other) => other.to_string(),
             Ok(_) => String::new(),
@@ -390,7 +405,7 @@ mod tests {
             allow_origin_wildcards: true,
             ..test_env(None)
         };
-        let built = build_router(&opted_in, options(), None).await;
+        let built = build_router(&opted_in, options(), None, None).await;
         assert!(built.is_ok_and(|built| built.app.is_none()));
     }
 
@@ -597,7 +612,7 @@ mod tests {
 
     #[test]
     fn action_registry_compiles_with_the_spine_surface() {
-        let registry = build_action_registry(&lazy_app(), None).expect("registry compiles");
+        let registry = build_action_registry(&lazy_app(), None, None).expect("registry compiles");
         for method in ["heartbeat", "account_verify", "admin_account_list"] {
             assert!(registry.get(method).is_some(), "missing action {method}");
         }
@@ -622,13 +637,50 @@ mod tests {
             )])
         });
         let app = lazy_app();
-        let registry = build_action_registry(&app, Some(factory)).expect("registry compiles");
+        let registry = build_action_registry(&app, Some(factory), None).expect("registry compiles");
         assert!(registry.get("_testing_seam_probe").is_some());
         // the spine surface is still there alongside the extra spec
         assert!(registry.get("account_verify").is_some());
 
-        let without = build_action_registry(&app, None).expect("registry compiles");
+        let without = build_action_registry(&app, None, None).expect("registry compiles");
         assert!(without.get("_testing_seam_probe").is_none());
+    }
+
+    /// The final factory sees the assembled list, the extra specs included,
+    /// and what it returns mounts after them.
+    #[test]
+    fn final_action_specs_factory_sees_the_assembled_specs() {
+        let extra: ExtraActionSpecsFactory = Box::new(|_app, _runtime| {
+            Ok(vec![fuz_actions::public_readonly_spec(
+                "_testing_seam_probe",
+                InputShape::Object,
+                |_params, _ctx| Box::pin(async { Ok(serde_json::json!({})) }),
+            )])
+        });
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+        let seen_by_factory = Arc::clone(&seen);
+        let last: FinalActionSpecsFactory = Box::new(move |mounted| {
+            *seen_by_factory.lock().expect("lock") = mounted.iter().map(|s| s.method).collect();
+            vec![fuz_actions::public_readonly_spec(
+                "_testing_final_probe",
+                InputShape::Object,
+                |_params, _ctx| Box::pin(async { Ok(serde_json::json!({})) }),
+            )]
+        });
+        let registry =
+            build_action_registry(&lazy_app(), Some(extra), Some(last)).expect("registry compiles");
+        assert!(registry.get("_testing_final_probe").is_some());
+
+        let seen = seen.lock().expect("lock");
+        for method in [
+            "heartbeat",
+            "account_verify",
+            "cord_create",
+            "_testing_seam_probe",
+        ] {
+            assert!(seen.contains(&method), "the factory didn't see {method}");
+        }
+        assert!(!seen.contains(&"_testing_final_probe"));
     }
 
     /// The probes are the spine's, named for `cordd`.
