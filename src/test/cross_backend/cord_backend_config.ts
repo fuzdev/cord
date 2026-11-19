@@ -83,6 +83,8 @@ export const rust_backend_config = (): BackendConfig => ({
 			ws_account_actions: true,
 			// no role-gated WS endpoint beside `/api/ws`
 			ws_role_gated: false,
+			// no room verbs mounted yet
+			rooms: false,
 			// the spine backdoors `testing_cordd` mounts; cord's own
 			// `_testing_cord_invite_expire` is the spine suites' `extra_methods`
 			testing_backdoors: [
