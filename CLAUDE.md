@@ -73,6 +73,9 @@ Skill(fuz-stack).
   gitignored `.env.development`
 - `zap.ts`, the `package.json` zap scripts, `.env.production.example`, `DEPLOY.md` — the
   zap deploy (see Deploying)
+- `src/routes/logos.ts` (`logo_cord`), `static/logo.svg`, `static/favicon.png`
+  — the logo: two socket faces, a plug reaching toward each, and one looped
+  cord, in teal; the three are one drawing, changed together
 - `src/env.ts` (`PUBLIC_CORD_SITE`), `src/hooks.ts` (its `reroute`),
   `src/lib/cord_site.ts` — the static site (see The static site)
 
@@ -378,9 +381,6 @@ Routes, prerendered anonymous and filled in client-side:
   the loaded list lacks shows the not-found view); the one section not
   prerendered, so the web server must fall back to the build's `spa.html`
   for all of it
-- `/logo-lab` — candidate logos side by side, in the Fuz brand colors and
-  at several sizes (`logo_ideas.ts` beside the page holds the drawings);
-  unlinked from the rail, and gone once one is chosen
 - `/join` — where an invite link lands (`/join#<token>`)
 - `/login`, `/signup` — fuz_app's forms; signup is invite-gated by default
 - `/account` — your account and sessions

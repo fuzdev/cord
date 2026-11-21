@@ -5,11 +5,13 @@
 	import { onMount } from 'svelte';
 	import { PUBLIC_CORD_SITE } from '$app/env/public';
 	import { site_context } from '@fuzdev/fuz_ui/site.svelte.ts';
+	import Svg from '@fuzdev/fuz_ui/Svg.svelte';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import CordNameForm from '#lib/ui/CordNameForm.svelte';
 	import { CORD_ROLE_LABELS } from '#lib/cord_roles.ts';
+	import { logo_cord } from '#routes/logos.ts';
 
 	const site = site_context.get();
 	const auth_state = cord_auth_state_context.get();
@@ -31,6 +33,7 @@
 </script>
 
 <main class="width_atmost_sm mx_auto p_lg">
+	<Svg data={logo_cord} size="var(--icon_size_xl)" />
 	<h1>Cord</h1>
 	<p class="font_size_lg">plug unplug</p>
 	<p>

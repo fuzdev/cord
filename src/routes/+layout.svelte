@@ -22,6 +22,7 @@
 		cord_space_tabs_local_storage
 	} from '#lib/ui/cord_space_tabs.svelte.ts';
 	import CordNav from '#lib/ui/CordNav.svelte';
+	import { logo_cord } from '#routes/logos.ts';
 
 	const {
 		children
@@ -30,7 +31,7 @@
 	} = $props();
 
 	// `glyph` and `repo_url` derive from `pkg_json`.
-	site_context.set(new SiteState({ pkg_json }));
+	site_context.set(new SiteState({ icon: logo_cord, pkg_json }));
 
 	// One RPC client and one auth state for the whole site, shared by context.
 	// Pages prerender before any session exists; the browser checks it once

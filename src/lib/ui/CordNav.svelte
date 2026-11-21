@@ -22,6 +22,8 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import Svg from '@fuzdev/fuz_ui/Svg.svelte';
+	import { site_context } from '@fuzdev/fuz_ui/site.svelte.ts';
 
 	import { cord_auth_state_context } from './cord_auth_state.svelte.ts';
 	import { cords_state_context } from './cords_state.svelte.ts';
@@ -31,6 +33,7 @@
 	import { CORD_SOCKET_RECONNECTING_DELAY } from './cord_socket.svelte.ts';
 	import { prevent_double_click_selection } from './double_click.ts';
 
+	const site = site_context.get();
 	const auth_state = cord_auth_state_context.get();
 	const cords_state = cords_state_context.get();
 	const spaces_state = cord_spaces_state_context.get();
@@ -76,7 +79,15 @@
 </script>
 
 <nav class="unstyled" aria-label="site">
-	{@render menu_link(resolve('/'), 'Cord', 'font_size_lg')}
+	<a
+		href={resolve('/')}
+		class="menuitem font_size_lg justify-content:flex-start gap_sm"
+		class:selected={is_selected(resolve('/'))}
+		aria-current={to_aria_current(resolve('/'))}
+	>
+		{#if site.icon}<Svg data={site.icon} size="var(--icon_size_sm)" label="" inline />{/if}
+		Cord
+	</a>
 	{#if auth_state.signed_in}
 		<div class="px_xs text_50 font_size_sm" role="status">
 			{#if reconnecting_shown}reconnecting…{/if}

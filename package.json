@@ -3,6 +3,8 @@
   "version": "0.0.1",
   "description": "self-hosted voice, video, chat, and forums for connection with your people",
   "glyph": "🔌",
+  "logo": "logo.svg",
+  "logo_alt": "two teal socket faces leaning apart, a plug reaching toward each, joined by one looped cord",
   "license": "0BSD",
   "private": true,
   "homepage": "https://github.com/fuzdev/cord",

@@ -1,5 +1,7 @@
 # Cord
 
+[<img src="static/logo.svg" alt="two teal socket faces leaning apart, a plug reaching toward each, joined by one looped cord" align="right" width="192" height="192">](https://cord.fuz.dev/)
+
 > self-hosted voice, video, chat, and forums for connection with your people 🔌 pre-alpha
 
 > ⚠️ **Not ready to be used.** There is no release and no supported install.
