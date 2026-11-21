@@ -15,6 +15,7 @@
 		<header class="box pt_xl">
 			<Svg data={logo_fuz} size="var(--icon_size_xl)" />
 			<h1 class="mt_xl2">cord</h1>
+			<p class="font_size_lg">plug unplug</p>
 		</header>
 		<div style:--font_size="var(--font_size_xl)">
 			<Breadcrumb />

@@ -1,8 +1,10 @@
 # cord
 
-> A self-hosted place for a friend group or small community to hang out:
-> voice, video, and screenshare rooms, live chat, forums, and your Bluesky
-> feeds, in one instance you run yourself.
+> Connectivity tools for offline social networks. Cord is a self-hosted
+> place for people who know each other in real life: voice, video, and
+> screenshare rooms, live chat, and forums, with your Bluesky and
+> ActivityPub feeds and the RSS, Atom, and JSON Feed sources you follow,
+> in one instance you run yourself.
 
 **Status: early.** The design is settled and implementation is underway: a
 SvelteKit static frontend over `cordd`, an API-only Rust server on the fuz
@@ -20,23 +22,27 @@ describe planned features as working.
   silent and each of mic, camera, and screen stays off until they turn it
   on). **chat** is persisted messages with unread markers. A **forum** holds
   threads with nested comments and reactions (a forum topic is a
-  **thread**; sort order is a view choice). A **feed** is a Bluesky feed,
-  list, or account the cord pins, shown as a list of posts that each open
+  **thread**; sort order is a view choice). A **feed** is a source the
+  cord pins (a Bluesky or ActivityPub feed, list, or account, or an RSS,
+  Atom, or JSON Feed source), shown as a list of posts that each open
   into their thread, or as a timeline.
+- **Who it's for**: groups of people who know each other in real life.
+  The tagline is "plug unplug".
 - **Views**: two switchable desktop layouts (sidebar plus main, column
   dashboard) and a phone single column, all over the same spaces.
 - **Accounts**: the instance's own (operator-gated signup, cookie
   sessions); each cord is invite-gated, with three fixed roles (owner,
   admin, member); a space is visible to all members or a listed subset. A
-  member may connect a Bluesky or other atproto PDS account for personal
-  feed columns and posting, linked to their account, never a way to log in.
+  member may connect a Bluesky (or other atproto PDS) account or an
+  ActivityPub account for personal feed columns and posting, linked to
+  their account, never a way to log in.
   Members control their own presence visibility, and the instance is honest
   about what it can see.
 - **Backend**: the API-only server, this frontend served by nginx,
   Postgres, and, once the live room lands, coturn for WebRTC TURN (full
   mesh). The live room is built first; persisted spaces layer on it.
-- **Self-hosting**: one instance hosts several cords; deployed by docker
-  compose or zap. Not federation, not a hosted service, not
+- **Self-hosting**: one instance hosts several cords; deployed by zap,
+  with docker compose planned. Not federation, not a hosted service, not
   engagement-driven: never streaks, scores, or reputation, and no push
   notifications yet.
 
@@ -53,8 +59,7 @@ Skill(fuz-stack).
   `rpc.ts`, `cord_socket.svelte.ts` (the signed-in account's WebSocket),
   `cord_errors.ts` (refusal reasons to words, the socket's included),
   `route_params.ts`, `double_click.ts`, the `*_state.svelte.ts` classes,
-  and the
-  components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs, a
+  and the components (`CordNav`, the rail; `Tabs` and `Tab`, the route tabs, a
   cord's space tabs among them, which `CordSpaceTabStrip` renders;
   `CordNameForm`, for cord and space names;
   `CordMembers`, `CordInvites`, `CordInviteForm`,
@@ -372,6 +377,9 @@ Routes, prerendered anonymous and filled in client-side:
   the loaded list lacks shows the not-found view); the one section not
   prerendered, so the web server must fall back to the build's `spa.html`
   for all of it
+- `/logo-lab` — candidate logos side by side, in the Fuz brand colors and
+  at several sizes (`logo_ideas.ts` beside the page holds the drawings);
+  unlinked from the rail, and gone once one is chosen
 - `/join` — where an invite link lands (`/join#<token>`)
 - `/login`, `/signup` — fuz_app's forms; signup is invite-gated by default
 - `/account` — your account and sessions

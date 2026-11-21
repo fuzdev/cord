@@ -29,11 +29,17 @@
 
 <main class="width_atmost_sm mx_auto p_lg">
 	<h1>Cord</h1>
+	<p class="font_size_lg">plug unplug</p>
 	<p>
-		A self-hosted place for a friend group or small community to hang out: voice, video, and
-		screenshare rooms, live chat, forums, and your Bluesky feeds, in one instance you run yourself.
+		Connectivity tools for offline social networks. Cord is a self-hosted place for people who know
+		each other in real life: voice, video, and screenshare rooms, live chat, and forums, with your
+		Bluesky and ActivityPub feeds and the RSS, Atom, and JSON Feed sources you follow, in one
+		instance you run yourself.
 	</p>
-	<p>Cord is early: cords and their spaces exist, but nothing happens inside a space yet.</p>
+	<p>
+		Cord is pre-alpha and not ready to use: cords and their spaces exist, but nothing happens inside
+		a space yet.
+	</p>
 	{#if !auth_state.session_checked}
 		<p class="text_50">checking session...</p>
 	{:else if auth_state.signed_in}

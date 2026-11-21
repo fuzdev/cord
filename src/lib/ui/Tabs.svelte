@@ -16,7 +16,7 @@
 	 * by selection or by focus, lands clear of it.
 	 *
 	 * Began from visiones' route tabs and grew editor-style tabs (`Tab`'s
-	 * preview, double click, and close), pending a shared one in fuz_app;
+	 * preview, double click, and close);
 	 * unlike visiones, cord has no global stylesheet, so the look lives here
 	 * and in `Tab.svelte`.
 	 *

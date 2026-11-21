@@ -1,17 +1,29 @@
 # Cord
 
-> A self-hosted place for a friend group or small community to hang out:
-> voice, video, and screenshare rooms, live chat, forums, and your Bluesky
-> feeds, in one instance you run yourself.
+> self-hosted voice, video, chat, and forums for connection with your people 🔌 pre-alpha
 
-**Status: early.** The design is settled and implementation is underway:
-the server runs, an instance admin can create cords, and people can be
-invited in, but nothing happens inside a cord yet, so the features
-described below don't work yet.
+> ⚠️ **Not ready to be used.** There is no release and no supported install.
+> The server runs, an instance admin can create cords, and people can be
+> invited in and add spaces, but nothing happens inside a space yet, so the
+> features described below don't work. APIs, wire shapes, and the database
+> schema break without notice, and its security is not ready to be trusted.
+
+_plug unplug_
+
+Connectivity tools for offline social networks. Cord is a self-hosted place
+for people who know each other in real life: voice, video, and screenshare
+rooms, live chat, and forums, with your Bluesky and ActivityPub feeds and
+the RSS, Atom, and JSON Feed sources you follow, in one instance you run
+yourself.
 
 Think of the coiled telephone cord stretched from the kitchen wall into
 your bedroom, or everyone on the party line at once. Cord is meant to feel
 like that: warm, low-key, a room you already know.
+
+Cord is part of the Fuz stack
+([fuz.dev](https://www.fuz.dev/), [@fuzdev](https://github.com/fuzdev)).
+
+AI disclosure: this codebase is LLM-generated with uneven human review.
 
 ## What it is
 
@@ -24,8 +36,9 @@ A **cord** is your group ("join our cord"). Inside it, everything is a
 - **chat**: messages that stay, with unread markers so you can catch up.
 - **forum**: threads with nested comments and reactions, sorted by
   activity, newest, or top.
-- **feed**: a Bluesky feed, list, or account the cord pins so everyone sees
-  the same thing, read as a list of posts that each open into their
+- **feed**: a source the cord pins so everyone sees the same thing: a
+  Bluesky or ActivityPub feed, list, or account, or an RSS, Atom, or JSON
+  Feed source. Read it as a list of posts that each open into their
   thread, or as a timeline.
 
 The same spaces can be seen through different views: on desktop, a sidebar
@@ -33,12 +46,12 @@ with the active space beside it, or a dashboard of spaces in columns side
 by side; on a phone, a single column.
 
 Accounts belong to your instance, the operator decides who can sign up,
-and each cord is joined by invite. Each cord has an owner, admins, and
+and each cord is joined by invite. Each cord has owners, admins, and
 members, and a space can be open to the whole cord or to a chosen few.
 
-Any member can connect a Bluesky account (or any atproto PDS account) to get
-personal feed columns and to post, reply, like, and repost from inside
-Cord. Nobody needs one to hang out, and the cord's shared feeds show for
+Any member can connect a Bluesky account (or any atproto PDS account) or
+an ActivityPub account to get personal feed columns and to post, reply,
+like, and repost from inside Cord. Nobody needs one to hang out, and the cord's shared feeds show for
 everyone.
 
 Cord is built around the people in it. Members decide who sees them online,
@@ -75,7 +88,7 @@ database.
   endpoint, and health and readiness checks
 
 The live room comes first, since hanging out is the point; chat, forums, and
-Bluesky feeds layer on after it.
+feeds layer on after it.
 
 ## Planned shape
 

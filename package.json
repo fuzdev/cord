@@ -1,10 +1,12 @@
 {
-  "name": "@ryanatkn/cord",
+  "name": "@fuzdev/cord",
   "version": "0.0.1",
-  "description": "a self-hosted hangout for friend groups and small communities: voice and video rooms, chat, forums, and Bluesky feeds",
+  "description": "self-hosted voice, video, chat, and forums for connection with your people",
+  "glyph": "🔌",
   "license": "0BSD",
   "private": true,
-  "repository": "https://github.com/ryanatkn/cord",
+  "homepage": "https://github.com/fuzdev/cord",
+  "repository": "https://github.com/fuzdev/cord",
   "scripts": {
     "start": "gro dev",
     "dev": "gro dev",
