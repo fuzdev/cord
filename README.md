@@ -10,11 +10,10 @@
 
 _plug unplug_
 
-Connectivity tools for offline social networks. Cord is a self-hosted place
-for people who know each other in real life: voice, video, and screenshare
-rooms, live chat, and forums, with your Bluesky and ActivityPub feeds and
-the RSS, Atom, and JSON Feed sources you follow, in one instance you run
-yourself.
+Cord is a self-hosted place for your people: a family, a friend group, a
+club, a team. Voice, video, and screenshare rooms, live chat, and forums,
+with your Bluesky and ActivityPub feeds and the RSS, Atom, and JSON Feed
+sources you follow, in one instance you run yourself.
 
 Think of the coiled telephone cord stretched from the kitchen wall into
 your bedroom, or everyone on the party line at once. Cord is meant to feel

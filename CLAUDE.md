@@ -1,10 +1,9 @@
 # cord
 
-> Connectivity tools for offline social networks. Cord is a self-hosted
-> place for people who know each other in real life: voice, video, and
-> screenshare rooms, live chat, and forums, with your Bluesky and
-> ActivityPub feeds and the RSS, Atom, and JSON Feed sources you follow,
-> in one instance you run yourself.
+> Cord is a self-hosted place for your people: a family, a friend group, a
+> club, a team. Voice, video, and screenshare rooms, live chat, and forums,
+> with your Bluesky and ActivityPub feeds and the RSS, Atom, and JSON Feed
+> sources you follow, in one instance you run yourself.
 
 **Status: early.** The design is settled and implementation is underway: a
 SvelteKit static frontend over `cordd`, an API-only Rust server on the fuz
@@ -26,8 +25,8 @@ describe planned features as working.
   cord pins (a Bluesky or ActivityPub feed, list, or account, or an RSS,
   Atom, or JSON Feed source), shown as a list of posts that each open
   into their thread, or as a timeline.
-- **Who it's for**: groups of people who know each other in real life.
-  The tagline is "plug unplug".
+- **Who it's for**: your people, the ones you already know and chose,
+  not strangers or an audience. The tagline is "plug unplug".
 - **Views**: two switchable desktop layouts (sidebar plus main, column
   dashboard) and a phone single column, all over the same spaces.
 - **Accounts**: the instance's own (operator-gated signup, cookie

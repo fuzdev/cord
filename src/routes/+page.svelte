@@ -31,10 +31,9 @@
 	<h1>Cord</h1>
 	<p class="font_size_lg">plug unplug</p>
 	<p>
-		Connectivity tools for offline social networks. Cord is a self-hosted place for people who know
-		each other in real life: voice, video, and screenshare rooms, live chat, and forums, with your
-		Bluesky and ActivityPub feeds and the RSS, Atom, and JSON Feed sources you follow, in one
-		instance you run yourself.
+		Cord is a self-hosted place for your people: a family, a friend group, a club, a team. Voice,
+		video, and screenshare rooms, live chat, and forums, with your Bluesky and ActivityPub feeds and
+		the RSS, Atom, and JSON Feed sources you follow, in one instance you run yourself.
 	</p>
 	<p>
 		Cord is pre-alpha and not ready to use: cords and their spaces exist, but nothing happens inside
