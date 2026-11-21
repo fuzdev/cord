@@ -8,6 +8,7 @@
 	import AppShell from '@fuzdev/fuz_ui/AppShell.svelte';
 	import { onMount, type Snippet } from 'svelte';
 	import pkg_json from 'virtual:pkg.json';
+	import { PUBLIC_CORD_SITE } from '$app/env/public';
 
 	import { create_cord_rpc, cord_rpc_context } from '#lib/ui/rpc.ts';
 	import { CordAuthState, cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
@@ -86,8 +87,11 @@
 		socket.recheck_session_if_in_doubt();
 	});
 
+	// the static site has no server, so no session is ever checked: it stays
+	// unsettled, no account signs in, and none of the effects above sends a
+	// request
 	onMount(() => {
-		void auth_state.check_session();
+		if (!PUBLIC_CORD_SITE) void auth_state.check_session();
 	});
 </script>
 

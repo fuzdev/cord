@@ -73,6 +73,8 @@ Skill(fuz-stack).
   gitignored `.env.development`
 - `zap.ts`, the `package.json` zap scripts, `.env.production.example`, `DEPLOY.md` — the
   zap deploy (see Deploying)
+- `src/env.ts` (`PUBLIC_CORD_SITE`), `src/hooks.ts` (its `reroute`),
+  `src/lib/cord_site.ts` — the static site (see The static site)
 
 `cord_server`'s modules (each module doc holds the detail):
 
@@ -488,6 +490,28 @@ What's cord-specific, beyond the stock fuz_app recipes:
   `cordd`, `gro build`, then the binary into `dist_artifacts/`, after
   `gro build` since it deletes `dist_*`) and gates on `/ready`. A rollback
   doesn't undo migrations, so they stay additive.
+
+## The static site
+
+cord.fuz.dev is this same frontend built with `PUBLIC_CORD_SITE=true`
+(`npm run build:site`) and deployed to GitHub Pages's `deploy` branch with
+`npm run deploy:site` (`gro deploy`). It has no server and never points at
+one. `src/env.ts` declares the flag, a static public var that refuses
+anything but `true`, `false`, or empty, and `vite.config.ts` reads it the
+way SvelteKit does. With it on:
+
+- only `CORD_SITE_PATHS` (`cord_site.ts`: the intro, about, and the a/v
+  check) prerender, and an unseen site route still fails the build;
+- the `reroute` hook sends every other path to a route-less one, so an
+  instance's pages are a 404 on the server and in the client alike;
+- the adapter writes `404.html` (Pages' fallback) in place of `spa.html`,
+  plus `CNAME` and `.nojekyll`, which only this build ships;
+- the root layout never checks a session, so the rail keeps the links both
+  shapes share and nothing requests `/api`; the home page names the repo
+  instead of the session.
+
+The instance build is unchanged when the flag is unset. A new site page goes
+in `CORD_SITE_PATHS` and needs a link the crawler can follow.
 
 ## testing_cordd
 

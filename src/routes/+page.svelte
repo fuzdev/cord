@@ -3,12 +3,15 @@
 	import { resolve } from '$app/paths';
 	import Alert from '@fuzdev/fuz_ui/Alert.svelte';
 	import { onMount } from 'svelte';
+	import { PUBLIC_CORD_SITE } from '$app/env/public';
+	import { site_context } from '@fuzdev/fuz_ui/site.svelte.ts';
 
 	import { cord_auth_state_context } from '#lib/ui/cord_auth_state.svelte.ts';
 	import { cords_state_context } from '#lib/ui/cords_state.svelte.ts';
 	import CordNameForm from '#lib/ui/CordNameForm.svelte';
 	import { CORD_ROLE_LABELS } from '#lib/cord_roles.ts';
 
+	const site = site_context.get();
 	const auth_state = cord_auth_state_context.get();
 	// the root layout loads it for whoever is signed in
 	const cords_state = cords_state_context.get();
@@ -39,7 +42,12 @@
 		Cord is pre-alpha and not ready to use: cords and their spaces exist, but nothing happens inside
 		a space yet.
 	</p>
-	{#if !auth_state.session_checked}
+	{#if PUBLIC_CORD_SITE}
+		<p>
+			Each instance runs its own Cord. The source, and how to run one, is at
+			<a href={site.repo_url}>{site.repo_url}</a>.
+		</p>
+	{:else if !auth_state.session_checked}
 		<p class="text_50">checking session...</p>
 	{:else if auth_state.signed_in}
 		<p>Signed in as <strong>{auth_state.account?.username}</strong>.</p>

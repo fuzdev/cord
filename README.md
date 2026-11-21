@@ -240,6 +240,10 @@ Deploying needs the `zap` binary and `fgro`, both built from source
 recipes from npm. The `cordd` build also needs fuz's server crates beside this
 repo.
 
+[cord.fuz.dev](https://cord.fuz.dev/) is a static site built from the same
+frontend (`npm run build:site`): the intro, about, and the a/v check, with
+no server behind it.
+
 ## Built with
 
 The fuz stack: TypeScript,

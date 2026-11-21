@@ -7,7 +7,9 @@
 	 * Pages prerender signed out, so until the first session check settles,
 	 * and between a login's `verified` and its account loading, the rail
 	 * shows only the links both shapes share; the rest arrive with the
-	 * session rather than one shape flashing before the other.
+	 * session rather than one shape flashing before the other. The static
+	 * site (`cord_site.ts`) never checks a session, so it keeps that shape,
+	 * which links only to its own pages.
 	 *
 	 * Signed in, a quiet line under the home link says the socket is
 	 * reconnecting, once it has been down for `CORD_SOCKET_RECONNECTING_DELAY`;
