@@ -1,0 +1,1 @@
+var e=class extends Error{constructor(e,t=`Unreachable case: ${e}`,n){super(t,n)}},t=(e,t)=>e instanceof Error?e.message:t??String(e);export{t as n,e as t};

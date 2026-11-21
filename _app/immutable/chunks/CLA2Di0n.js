@@ -1,0 +1,1 @@
+import{t as e}from"./DVX_YFPM.js";import{a as t}from"./Wm8s44ma.js";var n=()=>null,r=e(()=>()=>n),i=(e,n,r,i)=>e===null?i:r({scope_id:e,role:n})??t(e);export{i as n,r as t};

@@ -1,0 +1,1 @@
+import"./BJAWJjdv.js";var e=e=>t=>{t.focus({focusVisible:!0,...e})};export{e as t};

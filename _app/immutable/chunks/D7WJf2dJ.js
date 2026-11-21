@@ -1,0 +1,1 @@
+import{p as e,z as t}from"./BPDYRrhB.js";var n=n=>{let r=t(e,n);return r.ok?r.value:void 0};export{n as t};
