@@ -6,6 +6,20 @@
 	// the sizes a logo has to survive: a page header, a nav entry, a favicon
 	const SIZES = ['128px', '48px', '16px'];
 
+	const GROUPS = [
+		{
+			key: 'plug',
+			title: 'plugs',
+			blurb:
+				'The forms a plug takes, after the tagline and the glyph: mains plugs, the phone plugs a voice has always travelled through, and the faces they plug into.'
+		},
+		{
+			key: 'other',
+			title: 'other directions',
+			blurb: 'The cord itself, and the other nostalgic objects the name calls up.'
+		}
+	] as const;
+
 	let color = $state(LOGO_COLORS[0]!.value);
 </script>
 
@@ -35,24 +49,27 @@
 			{/each}
 		</div>
 	</section>
-	<section>
-		<h2>ideas</h2>
-		<ul class="unstyled ideas">
-			{#each logo_ideas as idea (idea.name)}
-				{@const data = to_logo_svg_data(idea, color)}
-				<li class="panel p_md">
-					<h3>{idea.name}</h3>
-					<div class="row gap_md">
-						{#each SIZES as size (size)}
-							<Svg {data} {size} shrink={false} />
-						{/each}
-					</div>
-					<p><small>{idea.label}</small></p>
-					<p>{idea.note}</p>
-				</li>
-			{/each}
-		</ul>
-	</section>
+	{#each GROUPS as group (group.key)}
+		<section>
+			<h2>{group.title}</h2>
+			<p>{group.blurb}</p>
+			<ul class="unstyled ideas">
+				{#each logo_ideas.filter((idea) => idea.group === group.key) as idea (idea.name)}
+					{@const data = to_logo_svg_data(idea, color)}
+					<li class="panel p_md">
+						<h3>{idea.name}</h3>
+						<div class="row gap_md">
+							{#each SIZES as size (size)}
+								<Svg {data} {size} shrink={false} />
+							{/each}
+						</div>
+						<p><small>{idea.label}</small></p>
+						<p>{idea.note}</p>
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/each}
 </main>
 
 <style>
