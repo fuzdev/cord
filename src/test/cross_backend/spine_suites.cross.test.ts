@@ -17,12 +17,8 @@ import {
 	type SuiteOverrides
 } from '@fuzdev/fuz_app/testing/cross_backend/spine_suites.ts';
 
-import {
-	cord_roles,
-	cord_rpc_endpoints,
-	cord_session_options,
-	cord_surface_source
-} from './cord_surface_spec.ts';
+import { CORD_SESSION_COOKIE_NAME } from './cord_backend_config.ts';
+import { cord_roles, cord_rpc_endpoints, cord_surface_source } from './cord_surface_spec.ts';
 
 const handle = inject_backend_handle();
 
@@ -41,7 +37,7 @@ const overrides: SuiteOverrides = {
 
 describe_spine_cross_suites(handle, {
 	surface_source: cord_surface_source,
-	session_options: cord_session_options,
+	session_cookie_name: CORD_SESSION_COOKIE_NAME,
 	rpc_endpoints: cord_rpc_endpoints,
 	roles: cord_roles,
 	// cord's own roles have no grant path: keeper for the role-shaped cell

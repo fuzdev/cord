@@ -11,7 +11,6 @@
  */
 
 import { create_role_registry } from '@fuzdev/fuz_app/auth/role_schema.ts';
-import { create_session_config } from '@fuzdev/fuz_app/auth/session_cookie.ts';
 import {
 	create_rust_spine_consumer_rpc_endpoints,
 	create_rust_spine_consumer_surface_spec,
@@ -21,9 +20,6 @@ import {
 import { all_cord_domain_action_specs } from '#lib/cord_action_specs.ts';
 import { CordRole } from '#lib/cord_roles.ts';
 import { CORD_SESSION_COOKIE_NAME } from './cord_backend_config.ts';
-
-/** cord's session config — `testing_cordd` issues the `cord_session` cookie. */
-export const cord_session_options = create_session_config(CORD_SESSION_COOKIE_NAME);
 
 /**
  * cord's role registry, the TS twin of `cord_role_registry`: the cord-scoped
@@ -41,7 +37,7 @@ const surface_options: RustSpineConsumerRpcEndpointsOptions = {
 /** The declared surface, for `describe_spine_cross_suites`'s `surface_source`. */
 export const cord_surface_source = create_rust_spine_consumer_surface_spec({
 	...surface_options,
-	session_options: cord_session_options
+	session_cookie_name: CORD_SESSION_COOKIE_NAME
 });
 
 /** The RPC endpoint the surface declares, for `describe_spine_cross_suites`'s `rpc_endpoints`. */
