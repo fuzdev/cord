@@ -26,25 +26,28 @@
 //!
 //! Redemption locks the link's row first, as accept does, so concurrent
 //! redemptions and accepts of one link run one at a time and never spend
-//! more uses than it has. A new reservation then reads the minter's global
-//! `admin` grant under a share lock (the spine's own offer-accept re-check
-//! does the same), so a revoke of it either commits first and refuses the
-//! redemption, or waits for the redemption to commit. Redeeming a username
-//! already waiting on the link skips that read, as accept does: the
-//! reservation was authorized when it was made.
+//! more uses than it has. A new reservation then takes the minter's account
+//! row under a share lock and reads the minter's global `admin` grant under
+//! another, account before grant as the last-admin guard takes them, so a
+//! delete of the minter or a revoke of the grant either commits first and
+//! refuses the redemption, or waits for the redemption to commit (a delete
+//! then deletes its signup invite with the minter's other unclaimed ones).
+//! Redeeming a username already waiting on the link skips those reads, as
+//! accept does: the reservation was authorized when it was made.
 //!
 //! Every function takes any `GenericClient`; call the writers inside a
 //! transaction.
 
 use deadpool_postgres::GenericClient;
 use fuz_auth::ROLE_ADMIN;
-use fuz_auth::account_queries::query_account_by_username;
+use fuz_auth::account_queries::{query_account_by_username, query_account_lock_live_many};
 use fuz_auth::invite_queries::{
-    query_create_invite, query_invite_claim_unscoped, query_invite_delete_unclaimed,
+    InviteCreateError, query_create_invite, query_invite_claim_unscoped,
+    query_invite_delete_unclaimed,
 };
 use fuz_cell::CellError;
 use fuz_db::tokio_postgres::Row;
-use fuz_db::{col, is_pg_unique_violation, iso8601_timestamp_expr, qualify_columns};
+use fuz_db::{col, iso8601_timestamp_expr, qualify_columns};
 use uuid::Uuid;
 
 use crate::cord_member_queries::live_role_grant_sql;
@@ -187,9 +190,10 @@ pub struct CordInviteRedeemed {
 /// unchanged, spending nothing: accept
 /// would still honor that reservation, so a newcomer retrying after a failed
 /// signup can redeem it again. Otherwise the link must be open to a new
-/// reservation: refuse it expired, or closed because its minter no longer
-/// holds a global `admin` ([`query_actor_holds_global_admin`]; a purged
-/// minter's null `created_by` refuses too), or exhausted; refuse a username
+/// reservation: refuse it expired, or closed because its minter's account is
+/// deleted or the minter no longer holds a global `admin`
+/// ([`query_actor_holds_global_admin`]; a purged minter's null `created_by`
+/// refuses too), or exhausted; refuse a username
 /// an account has (live or soft-deleted) or an unclaimed spine invite
 /// reserves; then create the spine username invite in the minter's name,
 /// record the redemption, and spend one use.
@@ -259,15 +263,13 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     {
         return Err(CordInviteError::UsernameUnavailable);
     }
-    let signup_invite =
-        match query_create_invite(client, None, Some(username), Some(&minted_by)).await {
-            Ok(signup_invite) => signup_invite,
-            // a concurrent reservation of the same username committed first
-            Err(e) if is_pg_unique_violation(&e) => {
-                return Err(CordInviteError::UsernameUnavailable);
-            }
-            Err(e) => return Err(CellError::Db(e).into()),
-        };
+    let signup_invite = match query_create_invite(client, None, Some(username), &minted_by).await {
+        Ok(signup_invite) => signup_invite,
+        // a concurrent reservation of the same username committed first
+        Err(InviteCreateError::Duplicate) => return Err(CordInviteError::UsernameUnavailable),
+        Err(InviteCreateError::IssuerNotActive) => return Err(CordInviteError::NewcomersClosed),
+        Err(InviteCreateError::Query(e)) => return Err(CellError::Db(e).into()),
+    };
     let sql = format!(
         "INSERT INTO cord_invite_redemption (cord_invite_id, signup_invite_id, username)
          VALUES ($1, $2, $3)
@@ -289,8 +291,16 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     })
 }
 
-/// The link's minter, if they still hold a global `admin`; a null
-/// `created_by` fails closed.
+/// The link's minter, if their account is live and they still hold a global
+/// `admin`; a null `created_by` fails closed.
+///
+/// The minter's account row is locked first, under the share lock
+/// `query_create_invite` takes on its issuer's: a removal of the minter (a
+/// delete, or a revoke of its `admin`) takes that row before the grant, the
+/// last-admin guard's order, so the grant's share lock taken first would hold
+/// what the guard waits on while waiting on the account the removal holds. A
+/// removal committed first is waited for and refuses the reservation; one
+/// arriving later waits for it, and a delete then deletes its invite.
 async fn require_admin_minter<C: GenericClient + ?Sized>(
     client: &C,
     invite: &CordInviteRow,
@@ -298,6 +308,22 @@ async fn require_admin_minter<C: GenericClient + ?Sized>(
     let Some(minted_by) = invite.created_by else {
         return Err(CordInviteError::NewcomersClosed);
     };
+    // an actor's account never changes, so it is read unlocked
+    let Some(minter_account) = client
+        .query_opt("SELECT account_id FROM actor WHERE id = $1", &[&minted_by])
+        .await
+        .map_err(CellError::Db)?
+        .map(|row| row.get::<_, Uuid>(0))
+    else {
+        return Err(CordInviteError::NewcomersClosed);
+    };
+    if !query_account_lock_live_many(client, &[minter_account])
+        .await
+        .map_err(CellError::Db)?
+        .contains(&minter_account)
+    {
+        return Err(CordInviteError::NewcomersClosed);
+    }
     if !query_actor_holds_global_admin(client, minted_by).await? {
         return Err(CordInviteError::NewcomersClosed);
     }

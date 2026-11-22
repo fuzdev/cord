@@ -163,7 +163,8 @@ The load-bearing rules. Each module named holds the full reasoning.
   `admin` grant, under a share lock. Lock order is link, then
   cord, then redemption; revoke must not take the cord lock, or it would
   deadlock against accept. Redeem takes the link lock and, for a new
-  reservation, share-locks the minter's global `admin` grant. The sweep
+  reservation, share-locks the minter's account row, then its global
+  `admin` grant (account before grant, the last-admin guard's order). The sweep
   takes the link lock with `SKIP LOCKED`. Space create takes the cord lock
   alone, then reads the role and counts live spaces against
   `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete take

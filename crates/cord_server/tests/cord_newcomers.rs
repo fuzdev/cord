@@ -44,6 +44,7 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use common::{
     accept, create_cord, fresh_db_pool, mint, redeem, redemption_list, seed_actor, status_of,
@@ -62,9 +63,15 @@ use cord_server::invite::sweep::{
 };
 use cord_server::runtime::upkeep_options;
 use fuz_actions::server::spawn_upkeep;
-use fuz_auth::invite_queries::{
-    query_create_invite, query_invite_claim_unscoped, query_invite_find_unclaimed_match_for_update,
+use fuz_auth::account_queries::{query_account_lock_for_revoke, query_account_soft_delete};
+use fuz_auth::actor_queries::{
+    query_actor_soft_delete, query_count_active_accounts_with_global_role_locked,
 };
+use fuz_auth::invite_queries::{
+    query_create_invite, query_invite_claim_unscoped, query_invite_delete_unclaimed_by_creators,
+    query_invite_find_unclaimed_match_for_update,
+};
+use fuz_auth::role_grant_offer_queries::query_revoke_role_grant;
 use fuz_auth::{
     AuditEmitter, AuditLogEvent, ConnectionCloseTarget, ConnectionCloser,
     CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant, query_role_grant_offer_create,
@@ -202,6 +209,9 @@ async fn newcomer_links_admit_new_people() {
         .await;
     scenario_a_soft_deleted_minter_closes_the_link(&pool, &cord).await;
     scenario_a_purged_minter_fails_closed(&pool, &cord).await;
+    for removal in [MinterRemoval::Delete, MinterRemoval::Revoke] {
+        scenario_a_removal_of_the_minter_mid_redeem(&pool, &cord, removal).await;
+    }
     scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
     scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
     scenario_the_expiry_sweep(&pool, &cord, admin).await;
@@ -262,10 +272,10 @@ async fn scenario_a_redemption_reserves_a_username(
     seed_actor(pool, "taken").await;
     {
         let client = pool.get().await.expect("pool.get");
-        query_create_invite(&client, None, Some("reserved"), Some(&admin))
+        query_create_invite(&client, None, Some("reserved"), &admin)
             .await
             .expect("an admin's own invite");
-        query_create_invite(&client, Some("both@example.com"), Some("paired"), None)
+        query_create_invite(&client, Some("both@example.com"), Some("paired"), &admin)
             .await
             .expect("an invite naming an email and a username");
         client
@@ -617,7 +627,7 @@ async fn scenario_an_account_that_took_a_waiting_username(
 async fn scenario_an_older_email_invite_won_the_claim(pool: &Pool, cord: &CordRow, admin: Uuid) {
     {
         let client = pool.get().await.expect("pool.get");
-        query_create_invite(&client, Some("mail@example.com"), None, Some(&admin))
+        query_create_invite(&client, Some("mail@example.com"), None, &admin)
             .await
             .expect("an older email invite");
     }
@@ -781,6 +791,181 @@ async fn scenario_a_purged_minter_fails_closed(pool: &Pool, cord: &CordRow) {
     assert_eq!(use_count(pool, purged_id).await, 1);
 }
 
+/// How the minter loses its authority in
+/// [`scenario_a_removal_of_the_minter_mid_redeem`].
+#[derive(Debug, Clone, Copy)]
+enum MinterRemoval {
+    /// An account delete: the last-admin guard, then the tombstones and the
+    /// invite cascade, as the spine's `account_delete` writes them.
+    Delete,
+    /// A revoke of the minter's global `admin`: the revokee's account lock,
+    /// the last-admin guard, then the revoke, as the spine's
+    /// `role_grant_revoke` writes them.
+    Revoke,
+}
+
+/// Backends of this database waiting on a lock.
+async fn lock_waiters(pool: &Pool) -> i64 {
+    let client = pool.get().await.expect("pool.get");
+    client
+        .query_one(
+            "SELECT COUNT(*) FROM pg_stat_activity
+             WHERE wait_event_type = 'Lock' AND datname = current_database()",
+            &[],
+        )
+        .await
+        .expect("pg_stat_activity")
+        .get(0)
+}
+
+/// Wait until `n` backends of this database wait on a lock.
+async fn await_lock_waiters(pool: &Pool, n: i64, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lock_waiters(pool).await < n {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A redemption racing a removal of its minter, on real row locks: the
+/// redemption waits on the minter's account row the removal holds, then is
+/// refused as a closed link, and the two never deadlock.
+///
+/// The removal takes the minter's account row first and its `admin` grant
+/// last (the last-admin guard locks account, actor, grant), so the
+/// redemption takes the minter's account row before it reads the grant under
+/// its share lock: the other order would hold the grant while waiting on the
+/// account the removal holds while it waits on the grant. The replay stalls
+/// the removal between the two (a holder of the minter's actor row, which the
+/// guard locks between them), starts the redemption, then releases the stall.
+async fn scenario_a_removal_of_the_minter_mid_redeem(
+    pool: &Pool,
+    cord: &CordRow,
+    removal: MinterRemoval,
+) {
+    let username = match removal {
+        MinterRemoval::Delete => "deleted_mid_redeem",
+        MinterRemoval::Revoke => "revoked_mid_redeem",
+    };
+    let minter = seed_admin(pool, username).await;
+    let minter_account = account_of(pool, minter).await;
+    let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), true).await;
+    let grant_id: Uuid = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one(
+                "SELECT id FROM role_grant
+                 WHERE actor_id = $1 AND role = $2 AND scope_id IS NULL",
+                &[&minter, &ROLE_ADMIN],
+            )
+            .await
+            .expect("the admin grant")
+            .get(0)
+    };
+    let waiting_before = lock_waiters(pool).await;
+
+    // the stall: the guard locks the minter's actor row after its account row
+    let mut stall_client = pool.get().await.expect("pool.get");
+    let stall = stall_client.transaction().await.expect("begin");
+    stall
+        .execute(
+            "SELECT 1 FROM actor WHERE id = $1 FOR NO KEY UPDATE",
+            &[&minter],
+        )
+        .await
+        .expect("hold the minter's actor");
+
+    let removing = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut client = pool.get().await.expect("pool.get");
+            let tx = client.transaction().await.expect("begin");
+            let exclude = match removal {
+                MinterRemoval::Delete => None,
+                MinterRemoval::Revoke => {
+                    query_account_lock_for_revoke(&tx, &minter)
+                        .await
+                        .expect("lock for revoke");
+                    Some(grant_id)
+                }
+            };
+            query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, exclude.as_ref())
+                .await
+                .expect("the last-admin guard");
+            match removal {
+                MinterRemoval::Delete => {
+                    query_account_soft_delete(&tx, &minter_account, None)
+                        .await
+                        .expect("soft-delete the account")
+                        .expect("a live account");
+                    assert!(
+                        query_actor_soft_delete(&tx, &minter, None)
+                            .await
+                            .expect("soft-delete the actor")
+                    );
+                    query_invite_delete_unclaimed_by_creators(&tx, &[minter])
+                        .await
+                        .expect("the invite cascade");
+                }
+                MinterRemoval::Revoke => {
+                    query_revoke_role_grant(&tx, grant_id, minter, None, None)
+                        .await
+                        .expect("revoke")
+                        .expect("a live grant");
+                }
+            }
+            tx.commit().await.expect("commit the removal");
+        }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        &format!("{removal:?}: the removal stalls at the minter's actor"),
+    )
+    .await;
+
+    let redeeming = tokio::spawn({
+        let pool = pool.clone();
+        async move { redeem(&pool, &link, "newcomer_mid_removal").await }
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lock_waiters(pool).await < waiting_before + 2 {
+        assert!(
+            !redeeming.is_finished(),
+            "{removal:?}: the redemption waits on the minter's account row, \
+             but finished first: {:?}",
+            redeeming.await
+        );
+        assert!(
+            Instant::now() < deadline,
+            "{removal:?}: the redemption waits"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    stall.commit().await.expect("release the stall");
+    removing.await.expect("the removal, no deadlock");
+    let redeemed = redeeming.await.expect("the redemption task");
+    assert!(
+        matches!(redeemed, Err(CordInviteError::NewcomersClosed)),
+        "{removal:?}: the redemption that waited is refused as a closed link: {redeemed:?}"
+    );
+    assert_eq!(
+        use_count(pool, link_id).await,
+        0,
+        "{removal:?}: no use spent"
+    );
+    assert_eq!(
+        count(
+            pool,
+            "SELECT COUNT(*) FROM invite WHERE username = 'newcomer_mid_removal'"
+        )
+        .await,
+        0,
+        "{removal:?}: no reservation"
+    );
+}
+
 /// A closed or expired link never says whether a username is free.
 async fn scenario_dead_links_never_say_whether_a_username_is_free(
     pool: &Pool,
@@ -938,7 +1123,7 @@ async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
         .expect("hold the busy link's lock");
         // a pass that waits on the lock instead of skipping it would hang
         let released = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            Duration::from_secs(10),
             cord_invite_sweep_pass(pool, &audit),
         )
         .await
@@ -1075,7 +1260,7 @@ impl fuz_http::ShutdownCloser for RecordingCloser {
 /// handed (the auth cleanup closes the expired session it deletes, and not
 /// the account's live one), and cancelling the token ends them.
 async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const TIMEOUT: Duration = Duration::from_secs(30);
     // what the invite sweep releases: a link expired past the grace
     let grace = i64::from(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS);
     let (link, link_id) = mint(pool, cord.id, admin, Some(3600), Some(5), true).await;
@@ -1096,7 +1281,7 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
                 scope_kind: None,
                 scope_id: None,
                 message: None,
-                expires_at: std::time::SystemTime::now() - std::time::Duration::from_secs(3600),
+                expires_at: std::time::SystemTime::now() - Duration::from_secs(3600),
             },
         )
         .await
