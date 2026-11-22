@@ -63,7 +63,10 @@ use cord_server::invite::sweep::{
 };
 use cord_server::runtime::upkeep_options;
 use fuz_actions::server::spawn_upkeep;
-use fuz_auth::account_queries::{query_account_lock_for_revoke, query_account_soft_delete};
+use fuz_auth::account_queries::{
+    query_account_lock_admins_for_purge, query_account_lock_for_purge,
+    query_account_lock_for_revoke, query_account_soft_delete, query_purge_account,
+};
 use fuz_auth::actor_queries::{
     query_actor_soft_delete, query_count_active_accounts_with_global_role_locked,
 };
@@ -209,7 +212,11 @@ async fn newcomer_links_admit_new_people() {
         .await;
     scenario_a_soft_deleted_minter_closes_the_link(&pool, &cord).await;
     scenario_a_purged_minter_fails_closed(&pool, &cord).await;
-    for removal in [MinterRemoval::Delete, MinterRemoval::Revoke] {
+    for removal in [
+        MinterRemoval::Delete,
+        MinterRemoval::Revoke,
+        MinterRemoval::Purge,
+    ] {
         scenario_a_removal_of_the_minter_mid_redeem(&pool, &cord, removal).await;
     }
     scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
@@ -802,6 +809,11 @@ enum MinterRemoval {
     /// the last-admin guard, then the revoke, as the spine's
     /// `role_grant_revoke` writes them.
     Revoke,
+    /// A purge: every admin's account row, the last-admin guard, the
+    /// account's `FOR UPDATE`, the invite void, then the delete, whose
+    /// cascade sets the link's `created_by` null: the steps of the spine's
+    /// `account_purge` that reach the minter and the link.
+    Purge,
 }
 
 /// Backends of this database waiting on a lock.
@@ -835,7 +847,9 @@ async fn await_lock_waiters(pool: &Pool, n: i64, what: &str) {
 /// last (the last-admin guard locks account, actor, grant), so the
 /// redemption takes the minter's account row before it reads the grant under
 /// its share lock: the other order would hold the grant while waiting on the
-/// account the removal holds while it waits on the grant. The replay stalls
+/// account the removal holds while it waits on the grant. A purge's cascade
+/// also writes the link's row (its `created_by` goes null), so the
+/// redemption takes the account row before the link's too. The replay stalls
 /// the removal between the two (a holder of the minter's actor row, which the
 /// guard locks between them), starts the redemption, then releases the stall.
 async fn scenario_a_removal_of_the_minter_mid_redeem(
@@ -846,6 +860,7 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
     let username = match removal {
         MinterRemoval::Delete => "deleted_mid_redeem",
         MinterRemoval::Revoke => "revoked_mid_redeem",
+        MinterRemoval::Purge => "purged_mid_redeem",
     };
     let minter = seed_admin(pool, username).await;
     let minter_account = account_of(pool, minter).await;
@@ -882,6 +897,12 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
             let tx = client.transaction().await.expect("begin");
             let exclude = match removal {
                 MinterRemoval::Delete => None,
+                MinterRemoval::Purge => {
+                    query_account_lock_admins_for_purge(&tx, &minter_account)
+                        .await
+                        .expect("lock the admins for purge");
+                    None
+                }
                 MinterRemoval::Revoke => {
                     query_account_lock_for_revoke(&tx, &minter)
                         .await
@@ -912,6 +933,20 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
                         .await
                         .expect("revoke")
                         .expect("a live grant");
+                }
+                MinterRemoval::Purge => {
+                    assert!(
+                        query_account_lock_for_purge(&tx, &minter_account)
+                            .await
+                            .expect("lock for purge")
+                    );
+                    query_invite_delete_unclaimed_by_creators(&tx, &[minter])
+                        .await
+                        .expect("the invite void");
+                    query_purge_account(&tx, &minter_account)
+                        .await
+                        .expect("purge the account")
+                        .expect("an account");
                 }
             }
             tx.commit().await.expect("commit the removal");

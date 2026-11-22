@@ -18,7 +18,7 @@
 //! A pass ([`cord_invite_sweep_pass`]) selects the links expired past the
 //! grace (by the database clock) that still have waiting reservations, then
 //! releases each in its own transaction: it takes the link's lock with
-//! `SKIP LOCKED`, the first lock accept and redeem take, so it orders
+//! `SKIP LOCKED`, the link lock accept and redeem take, so it orders
 //! against them as revoke does, and a link that's busy waits for the next
 //! pass. It then releases through
 //! [`query_cord_invite_redemption_release`] and audits `cord_invite_expire`

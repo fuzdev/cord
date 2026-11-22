@@ -16,8 +16,8 @@
 //! race a membership change. Both locks are `FOR NO KEY UPDATE`: enough to
 //! serialize the writers (a revoke's UPDATE waits on the link's lock), and
 //! no stronger. The table's own CHECK refuses an overshoot too. Redeeming a
-//! newcomer link ([`crate::invite::redemption_queries`]) takes the
-//! link's lock first as well.
+//! newcomer link ([`crate::invite::redemption_queries`]) takes the link's
+//! lock as well, after a share lock on its minter's account.
 //!
 //! A newcomer link spends its use at redemption, not at accept: the
 //! newcomer's accept finds their redemption and joins without spending
@@ -450,8 +450,8 @@ pub(crate) async fn query_cord_invite_expired_beyond<C: GenericClient + ?Sized>(
 /// `None` when it hasn't (by the database clock), when there's no such
 /// link, or when another transaction holds its lock.
 ///
-/// The lock is accept's and redeem's first lock (`FOR NO KEY UPDATE`), taken
-/// with `SKIP LOCKED`, so the expiry sweep orders against them as revoke
+/// The lock is the link lock accept and redeem take (`FOR NO KEY UPDATE`),
+/// taken with `SKIP LOCKED`, so the expiry sweep orders against them as revoke
 /// does, and passes over a busy link instead of waiting on it.
 ///
 /// # Errors
@@ -477,7 +477,10 @@ pub async fn query_cord_invite_try_lock_expired_beyond<C: GenericClient + ?Sized
 
 /// Lock the link whose token hashes to `token_hash` (`FOR NO KEY UPDATE`,
 /// until the transaction ends) and read it, without its redemption counts,
-/// or `None`. The first lock both accept and redeem take.
+/// or `None`.
+///
+/// The link lock both accept and redeem take: accept's first, redeem's after
+/// its minter's account.
 ///
 /// # Errors
 ///

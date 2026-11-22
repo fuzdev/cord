@@ -24,16 +24,20 @@
 //! older invite matching their email won), accept finds the redemption by
 //! their username instead and claims its invite then.
 //!
-//! Redemption locks the link's row first, as accept does, so concurrent
+//! Redemption locks the link's row, as accept does, so concurrent
 //! redemptions and accepts of one link run one at a time and never spend
-//! more uses than it has. A new reservation then takes the minter's account
-//! row under a share lock and reads the minter's global `admin` grant under
-//! another, account before grant as the last-admin guard takes them, so a
-//! delete of the minter or a revoke of the grant either commits first and
-//! refuses the redemption, or waits for the redemption to commit (a delete
-//! then deletes its signup invite with the minter's other unclaimed ones).
-//! Redeeming a username already waiting on the link skips those reads, as
-//! accept does: the reservation was authorized when it was made.
+//! more uses than it has. Before it, the minter's account row is taken under
+//! a share lock (the link read unlocked to find the minter, then re-checked
+//! under its lock), so a purge of the minter, which holds that row and then
+//! sets the link's `created_by` null, either commits first or waits for the
+//! redemption. A new reservation then reads the minter's global `admin` grant
+//! under another share lock, account before grant as the last-admin guard
+//! takes them, so a delete of the minter or a revoke of the grant either
+//! commits first and refuses the redemption, or waits for the redemption to
+//! commit (a delete then deletes its signup invite with the minter's other
+//! unclaimed ones). Redeeming a username already waiting on the link doesn't
+//! read the minter's `admin` grant, as accept doesn't re-read the minter: the
+//! reservation was authorized when it was made.
 //!
 //! Every function takes any `GenericClient`; call the writers inside a
 //! transaction.
@@ -54,8 +58,8 @@ use crate::cord_member_queries::live_role_grant_sql;
 use crate::cord_queries::{CordRow, query_cord_get};
 use crate::invite::queries::{
     CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, CordInviteError, CordInviteRow, CordInviteStatus,
-    query_cord_invite_expired_beyond, query_cord_invite_lock_by_token_hash,
-    query_cord_invite_spend_use,
+    query_cord_invite_by_token_hash, query_cord_invite_expired_beyond,
+    query_cord_invite_lock_by_token_hash, query_cord_invite_spend_use,
 };
 
 /// The `cord_invite_redemption` table's columns, in projection order. The
@@ -182,8 +186,9 @@ pub struct CordInviteRedeemed {
 /// `username`, which the caller has validated with the spine's username
 /// rules and lowercased.
 ///
-/// In order: lock the link; refuse it unknown (or its cord gone), revoked,
-/// without `admits_newcomers`, or expired more than
+/// In order: read the link unlocked and share-lock its minter's account
+/// (the module doc has why); lock the link; refuse it unknown (or its cord
+/// gone), revoked, without `admits_newcomers`, or expired more than
 /// [`CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS`] ago. Then, when this
 /// username's redemption through the link is still waiting (unaccepted, its
 /// signup invite unclaimed, and no account holding the username), return it
@@ -214,6 +219,13 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     token_hash: &str,
     username: &str,
 ) -> Result<CordInviteRedeemed, CordInviteError> {
+    let Some(unlocked) = query_cord_invite_by_token_hash(client, token_hash).await? else {
+        return Err(CordInviteError::NotFound);
+    };
+    let live_minter = match unlocked.created_by {
+        Some(minter) if unlocked.admits_newcomers => query_lock_live_minter(client, minter).await?,
+        _ => None,
+    };
     let Some(invite) = query_cord_invite_lock_by_token_hash(client, token_hash).await? else {
         return Err(CordInviteError::NotFound);
     };
@@ -251,7 +263,7 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     if status == CordInviteStatus::Expired {
         return Err(CordInviteError::Expired);
     }
-    let minted_by = require_admin_minter(client, &invite).await?;
+    let minted_by = require_admin_minter(client, &invite, live_minter).await?;
     if status == CordInviteStatus::Exhausted {
         return Err(CordInviteError::Exhausted);
     }
@@ -291,37 +303,57 @@ pub async fn query_cord_invite_redeem<C: GenericClient + ?Sized>(
     })
 }
 
-/// The link's minter, if their account is live and they still hold a global
-/// `admin`; a null `created_by` fails closed.
+/// Share-lock the account row of the actor `minter`, returning `minter` when
+/// the account is live, `None` when it's deleted, tombstoned, or the actor is
+/// gone.
 ///
-/// The minter's account row is locked first, under the share lock
-/// `query_create_invite` takes on its issuer's: a removal of the minter (a
-/// delete, or a revoke of its `admin`) takes that row before the grant, the
-/// last-admin guard's order, so the grant's share lock taken first would hold
-/// what the guard waits on while waiting on the account the removal holds. A
-/// removal committed first is waited for and refuses the reservation; one
-/// arriving later waits for it, and a delete then deletes its invite.
-async fn require_admin_minter<C: GenericClient + ?Sized>(
+/// Taken before the link's lock, under the share lock `query_create_invite`
+/// takes on its issuer's account. A removal of the minter takes that row
+/// first: a purge then sets the link's `created_by` null through its
+/// cascade, so the link's lock taken first would hold what the cascade waits
+/// on while waiting on the account the purge holds. Every removal also takes
+/// the row before the minter's `admin` grant (the last-admin guard's order),
+/// which [`require_admin_minter`] reads after it. A removal committed first is
+/// waited for and closes the link to new reservations; one arriving later
+/// waits for the redemption, and a delete or purge then deletes its signup
+/// invite with the minter's other unclaimed ones.
+async fn query_lock_live_minter<C: GenericClient + ?Sized>(
     client: &C,
-    invite: &CordInviteRow,
-) -> Result<Uuid, CordInviteError> {
-    let Some(minted_by) = invite.created_by else {
-        return Err(CordInviteError::NewcomersClosed);
-    };
+    minter: Uuid,
+) -> Result<Option<Uuid>, CordInviteError> {
     // an actor's account never changes, so it is read unlocked
     let Some(minter_account) = client
-        .query_opt("SELECT account_id FROM actor WHERE id = $1", &[&minted_by])
+        .query_opt("SELECT account_id FROM actor WHERE id = $1", &[&minter])
         .await
         .map_err(CellError::Db)?
         .map(|row| row.get::<_, Uuid>(0))
     else {
-        return Err(CordInviteError::NewcomersClosed);
+        return Ok(None);
     };
-    if !query_account_lock_live_many(client, &[minter_account])
+    let live = query_account_lock_live_many(client, &[minter_account])
         .await
         .map_err(CellError::Db)?
-        .contains(&minter_account)
-    {
+        .contains(&minter_account);
+    Ok(live.then_some(minter))
+}
+
+/// The link's minter, if it is `live_minter` (whose account
+/// [`query_lock_live_minter`] locked live before the link's lock) and still
+/// holds a global `admin`; a null `created_by` fails closed.
+///
+/// `created_by` is re-read under the link's lock: a purge of the minter
+/// committed between the unlocked read and the account lock has nulled it,
+/// and any other change leaves the account locked for an actor that is no
+/// longer the minter, so both refuse.
+async fn require_admin_minter<C: GenericClient + ?Sized>(
+    client: &C,
+    invite: &CordInviteRow,
+    live_minter: Option<Uuid>,
+) -> Result<Uuid, CordInviteError> {
+    let Some(minted_by) = invite.created_by else {
+        return Err(CordInviteError::NewcomersClosed);
+    };
+    if live_minter != Some(minted_by) {
         return Err(CordInviteError::NewcomersClosed);
     }
     if !query_actor_holds_global_admin(client, minted_by).await? {

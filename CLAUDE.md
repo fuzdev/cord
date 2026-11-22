@@ -162,9 +162,12 @@ The load-bearing rules. Each module named holds the full reasoning.
   read the caller's role afresh inside the transaction; minting a newcomer link also re-reads the caller's global
   `admin` grant, under a share lock. Lock order is link, then
   cord, then redemption; revoke must not take the cord lock, or it would
-  deadlock against accept. Redeem takes the link lock and, for a new
-  reservation, share-locks the minter's account row, then its global
-  `admin` grant (account before grant, the last-admin guard's order). The sweep
+  deadlock against accept. Redeem share-locks the minter's account row
+  before the link lock (a purge holds that row, then its cascade nulls the
+  link's `created_by`), finding the minter by an unlocked read of the link
+  and re-checking it under the lock; a new reservation then share-locks the
+  minter's global `admin` grant (account before grant, the last-admin
+  guard's order). The sweep
   takes the link lock with `SKIP LOCKED`. Space create takes the cord lock
   alone, then reads the role and counts live spaces against
   `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete take
