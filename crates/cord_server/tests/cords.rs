@@ -27,6 +27,7 @@ use cord_server::cord_queries::{
     CORD_CELL_KIND, CORD_STAMPED_GRANTS, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids,
 };
+use cord_server::migrations::{CORD_MIGRATIONS, CORD_MIGRATIONS_NAMESPACE};
 use cord_server::roles::{CORD_MEMBER, CORD_OWNER, CORD_SCOPE_KIND};
 use fuz_auth::actor_queries::query_role_grant_find_active_for_actor;
 use fuz_auth::query_create_role_grant;
@@ -34,7 +35,7 @@ use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
 use fuz_cell::cell_view_sql::CellViewer;
 use fuz_cell::{CellGrantLevel, CellVisibility};
-use fuz_db::Pool;
+use fuz_db::{Pool, run_migrations};
 use uuid::Uuid;
 
 /// Whether the spine's visibility-filtered `cell_list` shows `cord_id` to an
@@ -239,7 +240,7 @@ async fn cords_are_structural_cells_governed_by_role_grants() {
         )
         .await
         .expect("seed an extra data field");
-    let renamed = query_cord_rename(&client, cord.id, "the stoop", owner)
+    let renamed = query_cord_rename(&client, cord.id, "the stoop")
         .await
         .expect("rename")
         .expect("the cord exists");
@@ -253,10 +254,64 @@ async fn cords_are_structural_cells_governed_by_role_grants() {
         serde_json::json!({ "name": "the stoop", "topic": "kept" })
     );
     assert_eq!(cell.created_by, None);
+    assert_eq!(cell.updated_by, None, "a cord cell names no actor");
     assert_eq!(
-        query_cord_rename(&client, Uuid::nil(), "x", owner)
+        query_cord_rename(&client, Uuid::nil(), "x")
             .await
             .expect("rename a missing cord"),
         None
+    );
+
+    // a cord stamped before cords named no actor (an older rename's
+    // `updated_by`) is cleared by the `cord` chain, and no other cell is
+    client
+        .execute(
+            "UPDATE cell SET created_by = $2, updated_by = $2 WHERE id = $1",
+            &[&cord.id, &owner],
+        )
+        .await
+        .expect("stamp the cord as an older rename did");
+    let other_kind: Uuid = client
+        .query_one(
+            "INSERT INTO cell (data, kind, created_by, updated_by)
+             VALUES ('{}'::jsonb, 'note', $1, $1) RETURNING id",
+            &[&owner],
+        )
+        .await
+        .expect("a cell of another kind")
+        .get(0);
+    // the database as it was before the migration
+    client
+        .execute(
+            "DELETE FROM schema_version WHERE namespace = $1 AND name = $2",
+            &[&CORD_MIGRATIONS_NAMESPACE, &"cord_cell_names_no_actor"],
+        )
+        .await
+        .expect("forget the migration");
+    run_migrations(&pool, &[CORD_MIGRATIONS])
+        .await
+        .expect("run the cord chain");
+    let stamps = |id: Uuid| {
+        let client = &client;
+        async move {
+            let row = client
+                .query_one(
+                    "SELECT created_by, updated_by FROM cell WHERE id = $1",
+                    &[&id],
+                )
+                .await
+                .expect("row");
+            (row.get::<_, Option<Uuid>>(0), row.get::<_, Option<Uuid>>(1))
+        }
+    };
+    assert_eq!(
+        stamps(cord.id).await,
+        (None, None),
+        "the cord names no actor"
+    );
+    assert_eq!(
+        stamps(other_kind).await,
+        (Some(owner), Some(owner)),
+        "another kind keeps its actors"
     );
 }

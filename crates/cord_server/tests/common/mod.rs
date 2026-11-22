@@ -20,6 +20,7 @@
 )]
 
 use std::fmt::Debug;
+use std::time::{Duration, Instant};
 
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CordRow, query_cord_create};
@@ -34,6 +35,8 @@ use cord_server::invite::redemption_queries::{
 };
 use cord_server::roles::CORD_SCOPE_KIND;
 use cord_server::router::cord_migration_namespaces;
+use fuz_auth::account_queries::{query_account_lock_for_purge, query_purge_account};
+use fuz_auth::invite_queries::query_invite_delete_unclaimed_by_creators;
 use fuz_auth::query_create_role_grant;
 use fuz_db::{Pool, col, iso8601_timestamp_expr, qualify_columns};
 use fuz_testing::{TestingDbOptions, fresh_test_db_pool, seed_account_actor};
@@ -211,4 +214,43 @@ pub async fn redemption_list(pool: &Pool, cord_invite_id: Uuid) -> Vec<CordInvit
             accepted_at: row.get(col!(CORD_INVITE_REDEMPTION_COLUMNS, "accepted_at")),
         })
         .collect()
+}
+
+/// Backends of this database waiting on a lock.
+pub async fn lock_waiters(pool: &Pool) -> i64 {
+    let client = pool.get().await.expect("pool.get");
+    client
+        .query_one(
+            "SELECT COUNT(*) FROM pg_stat_activity
+             WHERE wait_event_type = 'Lock' AND datname = current_database()",
+            &[],
+        )
+        .await
+        .expect("pg_stat_activity")
+        .get(0)
+}
+
+/// Wait until `n` backends of this database wait on a lock.
+pub async fn await_lock_waiters(pool: &Pool, n: i64, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lock_waiters(pool).await < n {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// The steps of the spine's `account_purge` that reach the purged actor's
+/// rows, after its admin lock and last-admin guard (the caller's): the
+/// account's `FOR UPDATE`, the invite void, then the delete, whose cascade
+/// deletes the actor and nulls every `ON DELETE SET NULL` column naming it
+/// (a link's `created_by`, a cell's `updated_by`).
+pub async fn purge_account_steps(
+    tx: &deadpool_postgres::Transaction<'_>,
+    actor: Uuid,
+    account: Uuid,
+) -> Result<(), fuz_db::tokio_postgres::Error> {
+    query_account_lock_for_purge(tx, &account).await?;
+    query_invite_delete_unclaimed_by_creators(tx, &[actor]).await?;
+    query_purge_account(tx, &account).await?;
+    Ok(())
 }

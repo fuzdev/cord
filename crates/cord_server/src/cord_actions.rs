@@ -429,7 +429,7 @@ async fn handle_cord_update<C: GenericClient + ?Sized>(
     let role =
         require_cord_manager_fresh(client, "cord_update", auth, input.cord_id, update_forbidden)
             .await?;
-    let cord = query_cord_rename(client, input.cord_id, &input.name, auth.actor.id)
+    let cord = query_cord_rename(client, input.cord_id, &input.name)
         .await
         .map_err(|e| internal_error_with_source("cord_update", &e))?
         .ok_or_else(cord_not_found)?;

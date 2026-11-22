@@ -37,7 +37,8 @@
 //! cord runs the spine's `fuz_auth::AUTH_MIGRATIONS` and
 //! `fuz_cell::CELL_MIGRATIONS` (cords are cells), then its own `cord`
 //! namespace ([`crate::migrations::CORD_MIGRATIONS`], the `cord_invite`
-//! and `cord_invite_redemption` tables), via `fuz_db::run_migrations`.
+//! and `cord_invite_redemption` tables, and a data fix clearing actors from
+//! cord cells), via `fuz_db::run_migrations`.
 
 use std::sync::Arc;
 

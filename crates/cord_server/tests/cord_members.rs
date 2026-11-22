@@ -27,18 +27,22 @@
 
 mod common;
 
-use common::{add_member, assert_refused, create_cord, fresh_db_pool, in_tx, mint, seed_actor};
+use common::{
+    add_member, assert_refused, await_lock_waiters, create_cord, fresh_db_pool, in_tx,
+    lock_waiters, mint, purge_account_steps, seed_actor,
+};
 use cord_server::cord_authz::{CordRole, cord_role_in};
 use cord_server::cord_member_queries::{
     CORD_REVOKE_REASON_LEAVE, CORD_REVOKE_REASON_REMOVE, CORD_REVOKE_REASON_ROLE_SET,
     CordMemberError, query_cord_leave, query_cord_manager_role, query_cord_member_remove,
     query_cord_member_role_set, query_cord_members,
 };
-use cord_server::cord_queries::CordRow;
+use cord_server::cord_queries::{CordRow, query_cord_rename};
 use cord_server::invite::queries::{
     CordInviteError, hash_cord_invite_token, query_cord_invite_accept,
 };
 use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
+use fuz_auth::account_queries::query_account_lock_admins_for_purge;
 use fuz_db::Pool;
 use uuid::Uuid;
 
@@ -130,6 +134,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     scenario_two_owners_leaving_at_once(&pool).await;
     let (shed, host) = scenario_the_unlocked_verbs_read_the_role_afresh(&pool, stranger).await;
     scenario_accept_remove_and_role_set_race(&pool, &shed, host).await;
+    scenario_a_purge_of_a_renamer_mid_remove(&pool).await;
 }
 
 /// Owners first, soft-deleted actors left out.
@@ -718,4 +723,66 @@ async fn scenario_accept_remove_and_role_set_race(pool: &Pool, shed: &CordRow, h
             _ => unreachable!(),
         }
     }
+}
+
+/// A remove racing a purge of the member it removes, who renamed the cord, on
+/// real row locks: the remove holds the cord's row and waits on the member's
+/// account row, which the purge holds from its first statement. The cord's
+/// row names no actor, so the purge's cascade never writes it: the purge
+/// commits, then the remove, the member already gone.
+async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
+    let host = seed_actor(pool, "renamed_host").await;
+    let cord = create_cord(pool, "the renamed shed", host).await;
+    let renamer = seed_actor(pool, "renamer").await;
+    add_member(pool, cord.id, renamer, CordRole::Admin).await;
+    in_tx!(pool, |tx| query_cord_rename(
+        &tx,
+        cord.id,
+        "the shed, renamed",
+    )
+    .await)
+    .expect("rename")
+    .expect("the cord exists");
+    let renamer_account: Uuid = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one("SELECT account_id FROM actor WHERE id = $1", &[&renamer])
+            .await
+            .expect("the actor")
+            .get(0)
+    };
+    let waiting_before = lock_waiters(pool).await;
+
+    // the purge's first statement, held open: the target's account row
+    let mut purge_client = pool.get().await.expect("pool.get");
+    let purge = purge_client.transaction().await.expect("begin");
+    query_account_lock_admins_for_purge(&purge, &renamer_account)
+        .await
+        .expect("lock the target for purge");
+
+    let removing = tokio::spawn({
+        let pool = pool.clone();
+        let cord_id = cord.id;
+        async move {
+            in_tx!(pool, |tx| query_cord_member_remove(
+                &tx, cord_id, host, renamer
+            )
+            .await)
+        }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        "the remove holds the cord and waits on the renamer's account",
+    )
+    .await;
+
+    let purged = match purge_account_steps(&purge, renamer, renamer_account).await {
+        Ok(()) => purge.commit().await,
+        Err(e) => Err(e),
+    };
+    let removed = removing.await.expect("the remove task");
+    assert!(purged.is_ok(), "the purge commits: {purged:?}");
+    assert!(removed.is_ok(), "the remove commits: {removed:?}");
+    assert_eq!(roster(pool, cord.id).await, vec![(host, CordRole::Owner)]);
 }

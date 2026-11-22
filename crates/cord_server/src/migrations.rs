@@ -3,7 +3,8 @@
 //! cord tables reference `actor`, `invite`, and `cell`.
 //!
 //! Forward-only: append new entries and never edit one that has shipped.
-//! Every statement is guarded (`IF NOT EXISTS`), so a partly migrated
+//! Every statement is guarded (`IF NOT EXISTS`, or a data fix's `WHERE`
+//! that leaves nothing to change once it has run), so a partly migrated
 //! database converges.
 
 use fuz_db::{ColumnProjections, Migration, MigrationNamespace};
@@ -82,6 +83,15 @@ CREATE INDEX IF NOT EXISTS cord_invite_redemption_invite_idx
     ON cord_invite_redemption (cord_invite_id, created_at);
 ";
 
+/// Cord cells name no actor: clears the `created_by` and `updated_by` a cord
+/// rename stamped before it stopped (`crate::cord_queries` has why a purge
+/// must never write a cord's row). Idempotent, and a no-op on a database
+/// whose cords never named one.
+const CORD_CELL_NAMES_NO_ACTOR: &str = r"
+UPDATE cell SET created_by = NULL, updated_by = NULL
+WHERE kind = 'cord' AND (created_by IS NOT NULL OR updated_by IS NOT NULL);
+";
+
 const MIGRATIONS: &[Migration] = &[
     Migration {
         name: "cord_invite_schema",
@@ -90,6 +100,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         name: "cord_invite_redemption_schema",
         sql: CORD_INVITE_REDEMPTION_SCHEMA,
+    },
+    Migration {
+        name: "cord_cell_names_no_actor",
+        sql: CORD_CELL_NAMES_NO_ACTOR,
     },
 ];
 

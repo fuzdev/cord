@@ -47,10 +47,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{
-    accept, create_cord, fresh_db_pool, mint, redeem, redemption_list, seed_actor, status_of,
+    accept, add_member, await_lock_waiters, create_cord, fresh_db_pool, in_tx, lock_waiters, mint,
+    purge_account_steps, redeem, redemption_list, seed_actor, status_of,
 };
 use cord_server::cord_authz::CordRole;
+use cord_server::cord_member_queries::query_cord_leave;
 use cord_server::cord_queries::CordRow;
+use cord_server::cord_queries::query_cord_rename;
 use cord_server::invite::queries::{
     CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS, CordInviteError, CordInviteStatus,
     query_cord_invite_list, query_cord_invite_revoke,
@@ -79,7 +82,9 @@ use fuz_auth::{
     AuditEmitter, AuditLogEvent, ConnectionCloseTarget, ConnectionCloser,
     CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant, query_role_grant_offer_create,
 };
+use fuz_cell::CellError;
 use fuz_db::Pool;
+use fuz_db::tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 /// Seed an actor holding a global `admin` grant.
@@ -219,6 +224,14 @@ async fn newcomer_links_admit_new_people() {
     ] {
         scenario_a_removal_of_the_minter_mid_redeem(&pool, &cord, removal).await;
     }
+    for stall in [AcceptStall::Cord, AcceptStall::Link] {
+        for signup in [NewcomerSignup::Claimed, NewcomerSignup::Unclaimed] {
+            scenario_a_purge_of_the_minter_mid_accept(&pool, &cord, stall, signup).await;
+        }
+    }
+    scenario_a_purge_a_leave_and_an_accept(&pool, &cord).await;
+    scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(&pool).await;
+    scenario_a_purge_of_the_newcomer_mid_fallback_accept(&pool, &cord).await;
     scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
     scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
     scenario_the_expiry_sweep(&pool, &cord, admin).await;
@@ -816,29 +829,6 @@ enum MinterRemoval {
     Purge,
 }
 
-/// Backends of this database waiting on a lock.
-async fn lock_waiters(pool: &Pool) -> i64 {
-    let client = pool.get().await.expect("pool.get");
-    client
-        .query_one(
-            "SELECT COUNT(*) FROM pg_stat_activity
-             WHERE wait_event_type = 'Lock' AND datname = current_database()",
-            &[],
-        )
-        .await
-        .expect("pg_stat_activity")
-        .get(0)
-}
-
-/// Wait until `n` backends of this database wait on a lock.
-async fn await_lock_waiters(pool: &Pool, n: i64, what: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while lock_waiters(pool).await < n {
-        assert!(Instant::now() < deadline, "{what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
 /// A redemption racing a removal of its minter, on real row locks: the
 /// redemption waits on the minter's account row the removal holds, then is
 /// refused as a closed link, and the two never deadlock.
@@ -999,6 +989,313 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
         0,
         "{removal:?}: no reservation"
     );
+}
+
+/// Where [`scenario_a_purge_of_the_minter_mid_accept`] holds the accept.
+#[derive(Debug, Clone, Copy)]
+enum AcceptStall {
+    /// A holder of the cord's row.
+    Cord,
+    /// A holder of the link's row.
+    Link,
+}
+
+/// How the newcomer in [`scenario_a_purge_of_the_minter_mid_accept`] signed
+/// up.
+#[derive(Debug, Clone, Copy)]
+enum NewcomerSignup {
+    /// Their signup claimed the redemption's spine invite.
+    Claimed,
+    /// Their signup claimed none (open signup), so accept finds the
+    /// redemption by username and locks it with its unclaimed invite, the
+    /// invite the purge deletes among the minter's unclaimed ones.
+    Unclaimed,
+}
+
+/// Wait until `n` backends of this database wait on a lock, or `task` has
+/// finished without waiting.
+async fn await_lock_waiters_or_finished<T>(
+    pool: &Pool,
+    n: i64,
+    task: &tokio::task::JoinHandle<T>,
+    what: &str,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !task.is_finished() && lock_waiters(pool).await < n {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// An accept racing a purge of the link's minter, on real row locks: the
+/// purge deletes the minter's unclaimed invites (one may be the redemption's,
+/// which a fallback accept locks with its redemption), its cascade deletes
+/// the minter's actor, which the accept's grant names as its `granted_by`,
+/// and sets the link's `created_by` null, writing the link's row. Accept
+/// key-shares the minter's account row before the link's lock, and the
+/// purge takes that row `FOR UPDATE` before any of those writes, so one waits
+/// for the other and neither is refused: both commit, and the accept joins.
+///
+/// The replay holds the accept at `stall`, runs the purge until it waits or
+/// finishes, then releases the stall.
+async fn scenario_a_purge_of_the_minter_mid_accept(
+    pool: &Pool,
+    cord: &CordRow,
+    stall: AcceptStall,
+    signup: NewcomerSignup,
+) {
+    let label = format!("{stall:?} {signup:?}");
+    let suffix = format!("{stall:?}_{signup:?}").to_lowercase();
+    let minter = seed_admin(pool, &format!("purged_{suffix}")).await;
+    let minter_account = account_of(pool, minter).await;
+    let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), true).await;
+    let username = format!("joining_{suffix}");
+    redeem(pool, &link, &username).await.expect("redeem");
+    let newcomer = match signup {
+        NewcomerSignup::Claimed => sign_up(pool, &username).await,
+        NewcomerSignup::Unclaimed => seed_actor(pool, &username).await,
+    };
+    let waiting_before = lock_waiters(pool).await;
+
+    let mut stall_client = pool.get().await.expect("pool.get");
+    let stall_tx = stall_client.transaction().await.expect("begin");
+    let (sql, id) = match stall {
+        AcceptStall::Cord => (
+            "SELECT 1 FROM cell WHERE id = $1 FOR NO KEY UPDATE",
+            cord.id,
+        ),
+        AcceptStall::Link => (
+            "SELECT 1 FROM cord_invite WHERE id = $1 FOR NO KEY UPDATE",
+            link_id,
+        ),
+    };
+    stall_tx.execute(sql, &[&id]).await.expect("the stall");
+
+    let accepting = tokio::spawn({
+        let pool = pool.clone();
+        let link = link.clone();
+        async move { accept(&pool, &link, newcomer).await }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        &format!("{label}: the accept waits at the stall"),
+    )
+    .await;
+
+    let purging = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut client = pool.get().await.expect("pool.get");
+            let tx = client.transaction().await?;
+            query_account_lock_admins_for_purge(&tx, &minter_account).await?;
+            query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, None).await?;
+            purge_account_steps(&tx, minter, minter_account).await?;
+            tx.commit().await
+        }
+    });
+    await_lock_waiters_or_finished(
+        pool,
+        waiting_before + 2,
+        &purging,
+        &format!("{label}: the purge waits or commits"),
+    )
+    .await;
+
+    stall_tx.commit().await.expect("release the stall");
+    let purged = purging.await.expect("the purge task");
+    let accepted = accepting.await.expect("the accept task");
+    assert!(purged.is_ok(), "{label}: the purge commits: {purged:?}");
+    let accepted = accepted.unwrap_or_else(|e| panic!("{label}: the accept joins: {e:?}"));
+    assert!(accepted.role_grant_id.is_some(), "{label}: a new grant");
+    let created_by: Option<Uuid> = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one(
+                "SELECT created_by FROM cord_invite WHERE id = $1",
+                &[&link_id],
+            )
+            .await
+            .expect("row")
+            .get(0)
+    };
+    assert_eq!(
+        created_by, None,
+        "{label}: the purge nulled the link's minter"
+    );
+}
+
+/// Three writers on real row locks, none waiting forever: a purge of a link's
+/// minter, which holds every admin's account row from its first statement; a
+/// member leaving the cord who is an admin, which holds the cord's row and
+/// then waits on its own account row the purge holds; and an accept of the
+/// link, which waits on the cord's row. Accept takes the cord's row before
+/// its lock on the minter, so it holds nothing the purge waits on: the purge
+/// commits, then the leave, then the accept, its link's minter gone.
+async fn scenario_a_purge_a_leave_and_an_accept(pool: &Pool, cord: &CordRow) {
+    let minter = seed_admin(pool, "purged_three_way").await;
+    let minter_account = account_of(pool, minter).await;
+    let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), false).await;
+    let leaver = seed_admin(pool, "leaving_three_way").await;
+    add_member(pool, cord.id, leaver, CordRole::Member).await;
+    let joiner = seed_actor(pool, "joining_three_way").await;
+    let waiting_before = lock_waiters(pool).await;
+
+    // the purge's first statements, held open
+    let mut purge_client = pool.get().await.expect("pool.get");
+    let purge = purge_client.transaction().await.expect("begin");
+    query_account_lock_admins_for_purge(&purge, &minter_account)
+        .await
+        .expect("lock the admins for purge");
+    query_count_active_accounts_with_global_role_locked(&purge, ROLE_ADMIN, None)
+        .await
+        .expect("the last-admin guard");
+
+    let leaving = tokio::spawn({
+        let pool = pool.clone();
+        let cord_id = cord.id;
+        async move { in_tx!(pool, |tx| query_cord_leave(&tx, cord_id, leaver).await) }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        "the leave holds the cord and waits on its account",
+    )
+    .await;
+    let accepting = tokio::spawn({
+        let pool = pool.clone();
+        async move { accept(&pool, &link, joiner).await }
+    });
+    await_lock_waiters(pool, waiting_before + 2, "the accept waits").await;
+
+    let purged = purge_account_steps(&purge, minter, minter_account).await;
+    let purged = match purged {
+        Ok(()) => purge.commit().await,
+        Err(e) => Err(e),
+    };
+    let left = leaving.await.expect("the leave task");
+    let accepted = accepting.await.expect("the accept task");
+    assert!(purged.is_ok(), "the purge commits: {purged:?}");
+    assert!(left.is_ok(), "the leave commits: {left:?}");
+    let accepted = accepted.expect("the accept joins");
+    assert!(accepted.role_grant_id.is_some(), "a new grant");
+    assert_eq!(use_count(pool, link_id).await, 1);
+}
+
+/// An accept racing a purge of a link's minter who renamed the link's cord,
+/// on real row locks: the purge holds the minter's account `FOR UPDATE`, and
+/// the accept holds the cord's row while it waits on that account. The
+/// cord's row names no actor, so the purge's cascade never writes it: the
+/// purge commits, then the accept joins, its link's minter gone.
+async fn scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(pool: &Pool) {
+    let minter = seed_admin(pool, "renaming_minter").await;
+    let minter_account = account_of(pool, minter).await;
+    let cord = create_cord(pool, "the renamed porch", minter).await;
+    in_tx!(pool, |tx| query_cord_rename(
+        &tx,
+        cord.id,
+        "the porch, renamed",
+    )
+    .await)
+    .expect("rename")
+    .expect("the cord exists");
+    let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), false).await;
+    let joiner = seed_actor(pool, "joining_renamed").await;
+    let waiting_before = lock_waiters(pool).await;
+
+    // the purge's locks up to the minter's account, held open
+    let mut purge_client = pool.get().await.expect("pool.get");
+    let purge = purge_client.transaction().await.expect("begin");
+    query_account_lock_admins_for_purge(&purge, &minter_account)
+        .await
+        .expect("lock the admins for purge");
+    query_count_active_accounts_with_global_role_locked(&purge, ROLE_ADMIN, None)
+        .await
+        .expect("the last-admin guard");
+    assert!(
+        query_account_lock_for_purge(&purge, &minter_account)
+            .await
+            .expect("lock for purge")
+    );
+
+    let accepting = tokio::spawn({
+        let pool = pool.clone();
+        async move { accept(&pool, &link, joiner).await }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        "the accept holds the cord and waits on the minter's account",
+    )
+    .await;
+
+    let purged = match purge_account_steps(&purge, minter, minter_account).await {
+        Ok(()) => purge.commit().await,
+        Err(e) => Err(e),
+    };
+    let accepted = accepting.await.expect("the accept task");
+    assert!(purged.is_ok(), "the purge commits: {purged:?}");
+    let accepted = accepted.expect("the accept joins");
+    assert!(accepted.role_grant_id.is_some(), "a new grant");
+    assert_eq!(use_count(pool, link_id).await, 1);
+}
+
+/// A fallback accept racing a purge of the newcomer accepting, on real row
+/// locks: the newcomer's signup claimed no invite, so the accept claims the
+/// redemption's for their account, a write naming the account the purge
+/// holds `FOR UPDATE`. Accept claims before its grant names the newcomer's
+/// actor, so it holds nothing the purge's delete of that actor waits on: the
+/// purge commits, and the accept fails on the account the purge removed,
+/// rather than one of the two deadlocking.
+async fn scenario_a_purge_of_the_newcomer_mid_fallback_accept(pool: &Pool, cord: &CordRow) {
+    let minter = seed_admin(pool, "minting_for_the_purged").await;
+    let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), true).await;
+    redeem(pool, &link, "purged_mid_accept_newcomer")
+        .await
+        .expect("redeem");
+    // open signup: an account with the username, the invite left unclaimed
+    let newcomer = seed_actor(pool, "purged_mid_accept_newcomer").await;
+    let newcomer_account = account_of(pool, newcomer).await;
+    let waiting_before = lock_waiters(pool).await;
+
+    // the purge's locks up to the newcomer's account, held open
+    let mut purge_client = pool.get().await.expect("pool.get");
+    let purge = purge_client.transaction().await.expect("begin");
+    query_account_lock_admins_for_purge(&purge, &newcomer_account)
+        .await
+        .expect("lock the target for purge");
+    assert!(
+        query_account_lock_for_purge(&purge, &newcomer_account)
+            .await
+            .expect("lock for purge")
+    );
+
+    let accepting = tokio::spawn({
+        let pool = pool.clone();
+        async move { accept(&pool, &link, newcomer).await }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        "the accept waits on the newcomer's account",
+    )
+    .await;
+
+    let purged = match purge_account_steps(&purge, newcomer, newcomer_account).await {
+        Ok(()) => purge.commit().await,
+        Err(e) => Err(e),
+    };
+    let accepted = accepting.await.expect("the accept task");
+    assert!(purged.is_ok(), "the purge commits: {purged:?}");
+    let Err(CordInviteError::Db(CellError::Db(e))) = &accepted else {
+        panic!("the accept fails on the removed account: {accepted:?}");
+    };
+    assert_eq!(
+        e.code(),
+        Some(&SqlState::FOREIGN_KEY_VIOLATION),
+        "the accept fails on the removed account, not a deadlock: {e:?}"
+    );
+    assert_eq!(use_count(pool, link_id).await, 1, "only the redeem's use");
 }
 
 /// A closed or expired link never says whether a username is free.

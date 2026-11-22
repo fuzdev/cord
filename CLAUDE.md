@@ -160,15 +160,27 @@ The load-bearing rules. Each module named holds the full reasoning.
   `2`) when `default_transaction_isolation` is anything else. The other
   managing writes (rename, invite create and revoke) take no cord lock and
   read the caller's role afresh inside the transaction; minting a newcomer link also re-reads the caller's global
-  `admin` grant, under a share lock. Lock order is link, then
-  cord, then redemption; revoke must not take the cord lock, or it would
-  deadlock against accept. Redeem share-locks the minter's account row
-  before the link lock (a purge holds that row, then its cascade nulls the
-  link's `created_by`), finding the minter by an unlocked read of the link
-  and re-checking it under the lock; a new reservation then share-locks the
-  minter's global `admin` grant (account before grant, the last-admin
-  guard's order). The sweep
-  takes the link lock with `SKIP LOCKED`. Space create takes the cord lock
+  `admin` grant, under a share lock. Accept locks the cord, then the
+  link's minter's account, then the link, then the redemption; redeem
+  locks the minter's account, then the link, and no cord. Revoke must not
+  take the cord lock after the link's. The minter's account comes before
+  the link because a purge holds it, then deletes the minter's unclaimed
+  invites and nulls the link's `created_by`; the minter is found by an
+  unlocked read of the link and re-checked under the lock. Accept takes
+  it `FOR KEY SHARE`, the weakest lock that conflicts with the purge's
+  `FOR UPDATE`, so a login, a revoke, or a member verb of another cord
+  doesn't wait behind an accept, and after the cord (a purge holds every
+  admin's account, so a member verb can wait on it holding the cord).
+  Holding the cord while waiting on an account is safe because a purge
+  never writes a cord's row: a cord cell names no actor (`created_by` and
+  `updated_by` stay `NULL`, older stamps cleared by the
+  `cord_cell_names_no_actor` migration; the audit events name who created
+  or renamed it). A newcomer's accept claims their signup invite before
+  its grant names their actor, so a purge of the newcomer is waited out,
+  not deadlocked, and the accept then fails. Redeem takes the minter's account `FOR SHARE`, and a new
+  reservation then share-locks the minter's global `admin` grant (account
+  before grant, the last-admin guard's order). The sweep takes the link
+  lock with `SKIP LOCKED`. Space create takes the cord lock
   alone, then reads the role and counts live spaces against
   `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete take
   no cord lock, read the role afresh, and lock only the space's row. The

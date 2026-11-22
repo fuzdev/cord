@@ -17,6 +17,17 @@
 //! cord cells change only through Cord's own verbs, and nothing may rely on
 //! the spine's cell edit paths for them.
 //!
+//! A cord cell names no actor: `created_by` and `updated_by` both stay
+//! `NULL`. A purge deletes the purged actor's row, and its foreign keys then
+//! delete the rows that reference it `ON DELETE CASCADE` and set null the
+//! `ON DELETE SET NULL` columns that name it, a cell's `created_by` and
+//! `updated_by` among them; with neither set, it never writes a cord's row.
+//! Accept and the member verbs hold that row while they wait on account rows
+//! a purge holds, so a cascade write to it would close a cycle. Cords
+//! stamped before this held are cleared by the `cord_cell_names_no_actor`
+//! migration ([`crate::migrations`]), which the invariant depends on. Who
+//! created or renamed a cord is in its audit events.
+//!
 //! Every function takes any `GenericClient`, so it composes on a pooled
 //! client or inside the action's transaction. Cell reads project through
 //! `fuz_cell`'s queries (and so its `CELL_COLUMNS`); the membership reads
@@ -371,6 +382,11 @@ pub async fn query_cords_by_ids<C: GenericClient + ?Sized>(
 /// Rename a cord, keeping the rest of its `data`. `name` must already be
 /// validated. Returns `None` when no active cord has that id.
 ///
+/// The cell's `updated_by` stays `NULL`, as its `created_by` does: a purge's
+/// cascade must never write a cord's row, which accept and the member verbs
+/// hold while waiting on account rows; the caller records the renamer in an
+/// audit event.
+///
 /// # Errors
 ///
 /// [`CellError`] on a driver or decode failure.
@@ -378,7 +394,6 @@ pub async fn query_cord_rename<C: GenericClient + ?Sized>(
     client: &C,
     cord_id: Uuid,
     name: &str,
-    updated_by: Uuid,
 ) -> Result<Option<CordRow>, CellError> {
     let Some(cell) = query_cell_get(client, cord_id).await? else {
         return Ok(None);
@@ -392,7 +407,7 @@ pub async fn query_cord_rename<C: GenericClient + ?Sized>(
     };
     fields.insert("name".to_owned(), Value::String(name.to_owned()));
     Ok(
-        query_cell_update(client, cord_id, Some(&data), None, None, Some(updated_by))
+        query_cell_update(client, cord_id, Some(&data), None, None, None)
             .await?
             .as_ref()
             .and_then(CordRow::from_cell),

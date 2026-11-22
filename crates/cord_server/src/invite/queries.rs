@@ -10,14 +10,40 @@
 //! once `use_count` reaches `max_uses`, and active otherwise. Reads compute
 //! the expiry against the database clock, so every check agrees on "now".
 //!
-//! Accepting a link ([`query_cord_invite_accept`]) locks the link's row, then
-//! the cord's (as the member changes in [`crate::cord_member_queries`] do),
-//! so concurrent accepts can't push `use_count` past `max_uses` and can't
-//! race a membership change. Both locks are `FOR NO KEY UPDATE`: enough to
-//! serialize the writers (a revoke's UPDATE waits on the link's lock), and
-//! no stronger. The table's own CHECK refuses an overshoot too. Redeeming a
-//! newcomer link ([`crate::invite::redemption_queries`]) takes the link's
-//! lock as well, after a share lock on its minter's account.
+//! Accepting a link ([`query_cord_invite_accept`]) locks the cord's row (as
+//! the member changes in [`crate::cord_member_queries`] do), then its
+//! minter's account, then the link's, so concurrent accepts can't push
+//! `use_count` past `max_uses` and can't race a membership change. The cord
+//! and link locks are `FOR NO KEY UPDATE`: enough to serialize the writers
+//! (a revoke's UPDATE waits on the link's lock), and no stronger. The
+//! table's own CHECK refuses an overshoot too. Redeeming a newcomer link
+//! ([`crate::invite::redemption_queries`]) takes the link's lock as well.
+//!
+//! Both lock the link's minter's account row before the link's, the link
+//! read unlocked to find the minter and re-checked under its lock. A purge
+//! of the minter takes that row `FOR UPDATE` and then writes rows an accept
+//! or redeem goes on to: it deletes the minter's unclaimed invites (one may
+//! be a redemption's), and its cascade deletes the minter's actor and sets
+//! the link's `created_by` null. A link lock taken first would hold what the
+//! purge waits on while waiting on the purge. They lock the account in
+//! different modes. Redeem takes `FOR SHARE`, the lock the spine's invite
+//! create takes on its issuer, and no cord lock. Accept takes
+//! `FOR KEY SHARE` ([`query_cord_invite_lock_with_minter_account`]), the
+//! weakest lock that conflicts with the purge's `FOR UPDATE`, so a login, a
+//! revoke, or a member verb of another cord doesn't wait behind an accept.
+//! Accept takes the cord's lock before the minter's: a purge holds every
+//! admin's account row from its first statement, so a member verb on the
+//! cord can wait on the purge while holding the cord, and an accept holding
+//! its minter's row while waiting on the cord would close the cycle. That
+//! the cord's row is safe to hold while waiting on an account rests on a
+//! purge never writing it: a cord cell names no actor
+//! ([`crate::cord_queries`]).
+//!
+//! A newcomer's accept claims their signup invite, which waits on their
+//! account, before anything names their actor (the redemption's
+//! `accepted_by`, the grant): a purge of the newcomer holds that account,
+//! then its cascade deletes the actor, so the accept waits the purge out and
+//! then fails on the removed account.
 //!
 //! A newcomer link spends its use at redemption, not at accept: the
 //! newcomer's accept finds their redemption and joins without spending
@@ -479,8 +505,8 @@ pub async fn query_cord_invite_try_lock_expired_beyond<C: GenericClient + ?Sized
 /// until the transaction ends) and read it, without its redemption counts,
 /// or `None`.
 ///
-/// The link lock both accept and redeem take: accept's first, redeem's after
-/// its minter's account.
+/// The link lock both accept and redeem take, each after a lock on the link's
+/// minter's account (the module doc has why).
 ///
 /// # Errors
 ///
@@ -495,6 +521,64 @@ pub async fn query_cord_invite_lock_by_token_hash<C: GenericClient + ?Sized>(
     );
     let row = client.query_opt(&sql, &[&token_hash]).await?;
     Ok(row.as_ref().map(decode_invite))
+}
+
+/// Key-share-lock the account row of the link's minter, then lock the link:
+/// accept's locks after the cord's.
+///
+/// `minter` is the link's `created_by` as read before the lock; the link is
+/// the one whose token hashes to `token_hash`, locked as
+/// [`query_cord_invite_lock_by_token_hash`] does.
+///
+/// `FOR KEY SHARE` conflicts only with a delete of the row (or an update of
+/// a key column, which no writer of an account makes). A purge of the minter
+/// takes the row `FOR UPDATE` before any write that reaches the link (the
+/// unclaimed invites it deletes, one of which a fallback accept locks; the
+/// actor its cascade deletes, which the grant's `granted_by` names; the
+/// link's `created_by` that cascade nulls), so it either commits first or
+/// waits for the accept. It doesn't conflict with the member verbs' or a
+/// login's `FOR NO KEY UPDATE`, nor with redeem's `FOR SHARE`.
+///
+/// `created_by` is re-checked under the link's lock. Null is fine: a purge
+/// committed after the unlocked read nulled it, and the grant then names no
+/// grantor, as it would have had the purge committed first. Any other change
+/// would leave the accept writing a `granted_by` it holds no lock on; no
+/// writer changes a link's minter, so that refuses as a broken invariant
+/// rather than going on.
+///
+/// # Errors
+///
+/// [`CellError::Db`] on a driver failure, [`CellError::Decode`] when the
+/// link's minter changed under the lock.
+pub async fn query_cord_invite_lock_with_minter_account<C: GenericClient + ?Sized>(
+    client: &C,
+    token_hash: &str,
+    minter: Option<Uuid>,
+) -> Result<Option<CordInviteRow>, CellError> {
+    let locked_minter = match minter {
+        Some(minter) => client
+            .query_opt(
+                "SELECT ac.id FROM account a JOIN actor ac ON ac.account_id = a.id
+                 WHERE ac.id = $1
+                 FOR KEY SHARE OF a",
+                &[&minter],
+            )
+            .await?
+            .map(|row| row.get::<_, Uuid>(0)),
+        None => None,
+    };
+    let Some(invite) = query_cord_invite_lock_by_token_hash(client, token_hash).await? else {
+        return Ok(None);
+    };
+    if let Some(minter) = invite.created_by
+        && locked_minter != Some(minter)
+    {
+        return Err(CellError::Decode(format!(
+            "the minter of cord invite {} changed under its lock",
+            invite.id
+        )));
+    }
+    Ok(Some(invite))
 }
 
 /// Spend one of the link `invite_id`'s uses. The table's CHECK refuses a
@@ -568,14 +652,18 @@ pub struct CordInviteAccepted {
 /// Accept the link whose token hashes to `token_hash`, as the actor
 /// `actor_id`.
 ///
-/// Locks the link's row, then the cord's, then the caller's pending
-/// redemption of the link, if they have one
+/// Locks the cord's row, then key-shares the minter's account row and locks
+/// the link's ([`query_cord_invite_lock_with_minter_account`]), then the
+/// caller's pending redemption of the link, if they have one
 /// ([`query_cord_invite_redemption_pending_for_actor`]): an unaccepted
 /// redemption whose signup invite the caller's account claimed, or, when
 /// their signup claimed none (open signup, or an older invite matching their
 /// email won), one whose signup invite is still unclaimed and names the
 /// caller's username. Completing the latter claims that invite for the
-/// caller's account ([`query_cord_invite_redemption_complete`]).
+/// caller's account ([`query_cord_invite_redemption_complete`]). Once that
+/// unclaimed invite is gone (a delete or purge of the minter voids it), the
+/// fallback finds nothing: the reservation's use stays spent, and the caller
+/// accepts as anyone else, spending another.
 ///
 /// - A caller already in the cord gets their current role back and spends
 ///   no use, whatever the link's state (completing their pending
@@ -589,7 +677,7 @@ pub struct CordInviteAccepted {
 ///
 /// A join grants the link's role on the cord, in the caller's transaction,
 /// with the link's minter as its `granted_by` (who may since have left the
-/// cord).
+/// cord), or none, once their actor is purged.
 ///
 /// # Errors
 ///
@@ -600,10 +688,17 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     token_hash: &str,
     actor_id: Uuid,
 ) -> Result<CordInviteAccepted, CordInviteError> {
-    let Some(invite) = query_cord_invite_lock_by_token_hash(client, token_hash).await? else {
+    // the cord's lock first, then the minter's, then the link's (the module
+    // doc has why); a link's cord never changes, so it is read unlocked
+    let Some(unlocked) = query_cord_invite_by_token_hash(client, token_hash).await? else {
         return Err(CordInviteError::NotFound);
     };
-    let Some(cord) = query_cord_lock(client, invite.cord_id).await? else {
+    let Some(cord) = query_cord_lock(client, unlocked.cord_id).await? else {
+        return Err(CordInviteError::NotFound);
+    };
+    let Some(invite) =
+        query_cord_invite_lock_with_minter_account(client, token_hash, unlocked.created_by).await?
+    else {
         return Err(CordInviteError::NotFound);
     };
     let pending = if invite.admits_newcomers {
@@ -649,15 +744,19 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     }
     let role = CordRole::from_role(&invite.role)
         .ok_or_else(|| CellError::Decode(format!("not a cord role: {}", invite.role)))?;
-    let role_grant_id =
-        query_cord_role_grant_create(client, invite.cord_id, actor_id, role, invite.created_by)
-            .await?;
     if let Some(pending) = &pending {
-        // the use was spent when the link was redeemed
+        // the use was spent when the link was redeemed; completed before the
+        // grant, so its claim of the signup invite, which names the caller's
+        // account, waits out a purge of that account holding no lock on the
+        // caller's actor, which the purge's cascade deletes once it holds the
+        // account
         query_cord_invite_redemption_complete(client, pending, actor_id).await?;
     } else {
         query_cord_invite_spend_use(client, invite.id).await?;
     }
+    let role_grant_id =
+        query_cord_role_grant_create(client, invite.cord_id, actor_id, role, invite.created_by)
+            .await?;
     Ok(CordInviteAccepted {
         cord,
         invite_id: invite.id,

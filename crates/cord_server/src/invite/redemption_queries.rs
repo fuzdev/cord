@@ -30,7 +30,11 @@
 //! a share lock (the link read unlocked to find the minter, then re-checked
 //! under its lock), so a purge of the minter, which holds that row and then
 //! sets the link's `created_by` null, either commits first or waits for the
-//! redemption. A new reservation then reads the minter's global `admin` grant
+//! redemption. Accept key-shares the same row, after the cord's lock
+//! ([`crate::invite::queries`] has why the two differ): redeem needs the
+//! account's share lock for the issuer rule `query_create_invite` enforces,
+//! and takes no cord lock, so the member verbs' cord-then-account order
+//! never meets it. A new reservation then reads the minter's global `admin` grant
 //! under another share lock, account before grant as the last-admin guard
 //! takes them, so a delete of the minter or a revoke of the grant either
 //! commits first and refuses the redemption, or waits for the redemption to
