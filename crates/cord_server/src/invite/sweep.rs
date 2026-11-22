@@ -42,8 +42,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::{Object, Pool};
-use fuz_actions::PostCommitEffects;
-use fuz_auth::{AuditEmitter, AuditLogInput, AuditRouting};
+use fuz_auth::{AuditEmitter, AuditLogInput, AuditRouting, CollectingAuditPostCommit};
 use fuz_cell::CellError;
 use fuz_db::{DbError, commit_checked};
 use fuz_http::CancellationToken;
@@ -198,7 +197,7 @@ async fn sweep_link(
         return Ok(None);
     }
     // the listener fan-out (the admin audit stream) runs once the row commits
-    let post_commit = PostCommitEffects::new();
+    let post_commit = CollectingAuditPostCommit::default();
     // no request behind it, so no actor, account, or IP
     audit
         .emit_in_tx(
@@ -218,7 +217,7 @@ async fn sweep_link(
         .await
         .map_err(CellError::Db)?;
     commit_checked(tx).await.map_err(SweepLinkError::Commit)?;
-    post_commit.drain_all().await;
+    post_commit.drain().await;
     Ok(Some(CordInviteExpireReleased {
         cord_id,
         invite_id,
