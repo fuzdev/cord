@@ -242,14 +242,14 @@ mod tests {
     #[tokio::test]
     async fn a_pass_without_a_database_logs_and_releases_nothing() {
         let pool = unreachable_pool();
-        let audit = Arc::new(AuditEmitter::new(pool.clone()));
+        let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
         assert!(cord_invite_sweep_pass(&pool, &audit).await.is_empty());
     }
 
     #[tokio::test]
     async fn the_sweep_survives_an_outage_and_stops_on_shutdown() {
         let pool = unreachable_pool();
-        let audit = Arc::new(AuditEmitter::new(pool.clone()));
+        let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
         let shutdown = CancellationToken::new();
         let sweep =
             spawn_cord_invite_sweep(pool, audit, Duration::from_millis(10), shutdown.clone());

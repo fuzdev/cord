@@ -904,7 +904,7 @@ async fn scenario_redemptions_never_overshoot_max_uses(pool: &Pool, cord: &CordR
 /// The expiry sweep releases what expired links still reserve.
 async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
     let grace = i64::from(CORD_INVITE_NEWCOMER_ACCEPT_GRACE_SECONDS);
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     // expired past the grace: two waiting, one signed up but not accepted,
     // one accepted
     let (swept, swept_id) = mint(pool, cord.id, admin, Some(3600), Some(5), true).await;
@@ -1117,7 +1117,7 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
         .await
         .expect("seed sessions");
 
-    let audit = Arc::new(AuditEmitter::new(pool.clone()));
+    let audit = Arc::new(AuditEmitter::new(pool.clone(), Arc::default()));
     let (tx, mut audited) = tokio::sync::mpsc::unbounded_channel::<Arc<AuditLogEvent>>();
     audit.add_listener(Arc::new(move |event| {
         // a send after the scenario's last `recv` has nowhere to go
