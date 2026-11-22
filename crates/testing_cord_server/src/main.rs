@@ -38,10 +38,7 @@
 //! ([`fuz_testing::create_testing_action_manifest_action_spec`]) over the
 //! assembled spec list, so the manifest reports every method `cordd` mounts
 //! but the protocol actions, plus the test-only ones. The drain is a real
-//! barrier because this binary builds the app's audit
-//! emitter with in-flight tracking (`SpineBackendOptions::audit_inflight_tracking`,
-//! `AuditEmitter::new_with_inflight_tracking`); over an untracked emitter it
-//! would return at once.
+//! barrier because every spine audit emitter tracks its in-flight writes.
 
 mod cord_testing_actions;
 

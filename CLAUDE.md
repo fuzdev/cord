@@ -519,7 +519,7 @@ The same `run_app` with the test-only pieces: `fuz_testing`'s fast hasher,
 disabled rate limiters, a daemon token under `CORD_DAEMON_TOKEN_DIR`
 (required), `_testing_reset` (a fresh keeper, then a truncate of cord's
 tables and the cell tables), `_testing_drain_effects` (a real barrier, since
-it builds the audit emitter with in-flight tracking),
+every spine audit emitter tracks its in-flight writes),
 `_testing_shorten_credential_expiry` (an account's credentials expiring
 seconds from now, for the spine's credential-deadline suite), cord's
 `_testing_cord_invite_expire`, and a schema wipe on boot when

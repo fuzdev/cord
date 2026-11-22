@@ -71,8 +71,8 @@ pub struct RunAppOptions {
     /// The spine's swap points. Production: [`fuz_auth::Argon2idHasher`],
     /// [`DEFAULT_ADDR`], [`fuz_http::DEFAULT_DRAIN_TIMEOUT`], every limiter
     /// enforced (cord's invite limiter too, built through the same mode), no
-    /// daemon token, no pre-migration hook, no in-flight audit tracking. Only
-    /// `testing_cordd` fills the seams.
+    /// daemon token, no pre-migration hook. Only `testing_cordd` fills the
+    /// seams.
     pub spine: SpineRunOptions,
     /// Extra action specs folded into the registry after cord's own, the
     /// `testing_cordd` seam for the `_testing_*` actions. Production passes
@@ -117,8 +117,9 @@ pub fn upkeep_options(auth_cleanup: fuz_auth::AuthCleanupOptions) -> UpkeepOptio
 /// migrating), and serves until the signal
 /// ([`fuz_actions::server::serve_until_shutdown`]): every live WebSocket is
 /// closed with 1001 and every audit stream ended, then in-flight requests
-/// drain. With a database, the upkeep ([`upkeep_options`]) runs beside the
-/// server, from the bind until shutdown begins.
+/// drain, then the audit writes in flight drain. With a database, the upkeep
+/// ([`upkeep_options`]) runs beside the server, from the bind until shutdown
+/// begins.
 ///
 /// # Errors
 ///
@@ -156,10 +157,10 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             addr,
             drain_timeout,
             shutdown,
-            connection_closer: app.as_ref().map(|app| app.backend.connection_closer()),
-            upkeep: app
-                .as_ref()
-                .map(|app| upkeep_options(app.backend.auth_cleanup_options())),
+            backend: app.as_ref().map(|app| {
+                app.backend
+                    .serve_backend(Some(upkeep_options(app.backend.auth_cleanup_options())))
+            }),
         },
     )
     .await
