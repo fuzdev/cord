@@ -28,9 +28,10 @@
 //!
 //! Beside the spine's `_testing_reset` it registers `_testing_drain_effects`,
 //! the barrier that awaits in-flight fire-and-forget audit writes (a
-//! signup's, or a failure audit from an RPC verb),
-//! `_testing_shorten_credential_expiry`, which pulls an account's session and
-//! token expiries close so a test can watch its open socket and audit stream
+//! signup's, or a failure audit from an RPC verb), `_testing_db_invariants`,
+//! the read the cross-process setup checks the auth schema's invariants
+//! through after each test, `_testing_shorten_credential_expiry`, which pulls
+//! an account's session and token expiries close so a test can watch its open socket and audit stream
 //! close when they lapse, and cord's own test seams
 //! ([`cord_testing_actions`]), all under the same daemon-token gate. Last,
 //! through the `final_action_specs_factory` seam, it mounts

@@ -9,7 +9,7 @@
  */
 
 import { assert } from 'vitest';
-import type { TestAccount } from '@fuzdev/fuz_app/testing/app_server.ts';
+import type { TestAccount } from '@fuzdev/fuz_app/testing/test_app.ts';
 import { inject_backend_handle } from '@fuzdev/fuz_app/testing/cross_backend/provided_context.ts';
 import { default_cross_process_setup } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
 import {

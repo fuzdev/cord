@@ -90,6 +90,7 @@ export const rust_backend_config = (): BackendConfig => ({
 			testing_backdoors: [
 				'_testing_reset',
 				'_testing_drain_effects',
+				'_testing_db_invariants',
 				'_testing_shorten_credential_expiry',
 				'_testing_action_manifest'
 			]

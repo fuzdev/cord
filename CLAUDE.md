@@ -520,6 +520,8 @@ disabled rate limiters, a daemon token under `CORD_DAEMON_TOKEN_DIR`
 (required), `_testing_reset` (a fresh keeper, then a truncate of cord's
 tables and the cell tables), `_testing_drain_effects` (a real barrier, since
 every spine audit emitter tracks its in-flight writes),
+`_testing_db_invariants` (the auth schema's invariants, which the
+cross-process setup checks after each test),
 `_testing_shorten_credential_expiry` (an account's credentials expiring
 seconds from now, for the spine's credential-deadline suite), cord's
 `_testing_cord_invite_expire`, and a schema wipe on boot when
