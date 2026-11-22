@@ -9,7 +9,7 @@
 use std::net::SocketAddr;
 
 use fuz_actions::server::{
-    ServeOptions, SpineRunOptions, StartupError, UpkeepOptions, serve_until_shutdown,
+    ServeMode, ServeOptions, SpineRunOptions, StartupError, UpkeepOptions, serve_until_shutdown,
 };
 use fuz_http::{BaseServerEnv, ServerEnvOptions};
 
@@ -142,25 +142,30 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
     let addr = env.bind_addr(default_addr)?;
     let shutdown = fuz_http::shutdown_token();
 
-    let BuiltRouter { router, app } = build_router(
+    let built = build_router(
         &env,
         backend,
         extra_action_specs_factory,
         final_action_specs_factory,
     )
     .await?;
+    let mode = match built {
+        BuiltRouter::BootOnly(router) => ServeMode::BootOnly(router),
+        BuiltRouter::Live { router, app } => ServeMode::Live {
+            router,
+            backend: app
+                .backend
+                .serve_backend(Some(upkeep_options(app.backend.auth_cleanup_options()))),
+        },
+    };
 
     serve_until_shutdown(
-        router,
+        mode,
         ServeOptions {
             server_name: SERVER_NAME,
             addr,
             drain_timeout,
             shutdown,
-            backend: app.as_ref().map(|app| {
-                app.backend
-                    .serve_backend(Some(upkeep_options(app.backend.auth_cleanup_options())))
-            }),
         },
     )
     .await

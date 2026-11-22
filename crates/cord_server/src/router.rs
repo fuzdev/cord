@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use fuz_actions::server::{
-    AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError, boot_only,
+    AppBackendSpec, BootOnlyRouter, BootedAppBackend, SpineBackendOptions, StartupError, boot_only,
     compile_action_registry, create_app_backend, fallback_group, probe_router,
 };
 use fuz_actions::{
@@ -90,15 +90,16 @@ pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
     browser_gates: fuz_actions::server::BrowserGateSpec::DEFAULT,
 };
 
-/// What [`build_router`] builds: the router, and the composition root behind
-/// it for the work [`crate::runtime::run_app`] runs beside the server.
+/// What [`build_router`] builds: the boot-only router, or the full one with
+/// the composition root behind it, for the work [`crate::runtime::run_app`]
+/// runs beside the server.
 #[derive(Debug)]
-pub struct BuiltRouter {
-    /// The composed router, served by `fuz_http::serve_with_shutdown`, the
-    /// only thing that takes it.
-    pub router: GatedRouter,
-    /// `None` in boot-only mode, with no database.
-    pub app: Option<CordApp>,
+pub enum BuiltRouter {
+    /// No database: the probes alone, served with no backend.
+    BootOnly(BootOnlyRouter),
+    /// A database: the composed router, served as `ServeMode::Live` with its
+    /// app's `serve_backend`, and the app it serves over.
+    Live { router: GatedRouter, app: CordApp },
 }
 
 /// Build the top-level router.
@@ -126,10 +127,11 @@ pub async fn build_router(
     final_action_specs_factory: Option<FinalActionSpecsFactory>,
 ) -> Result<BuiltRouter, StartupError> {
     if env.database_url.is_none() {
-        return Ok(BuiltRouter {
-            router: boot_only(env, &CORD_BACKEND_SPEC, SERVER_NAME)?,
-            app: None,
-        });
+        return Ok(BuiltRouter::BootOnly(boot_only(
+            env,
+            &CORD_BACKEND_SPEC,
+            SERVER_NAME,
+        )?));
     }
 
     let BootedAppBackend { backend, ready } =
@@ -150,10 +152,7 @@ pub async fn build_router(
         extra_action_specs_factory,
         final_action_specs_factory,
     )?;
-    Ok(BuiltRouter {
-        router,
-        app: Some(app),
-    })
+    Ok(BuiltRouter::Live { router, app })
 }
 
 /// Compose the full router with every subsystem wired.
@@ -347,7 +346,9 @@ mod tests {
             allow_origin_wildcards: true,
             ..test_env(None)
         };
-        boot_only(&env, &CORD_BACKEND_SPEC, SERVER_NAME).expect("the boot-only router builds")
+        boot_only(&env, &CORD_BACKEND_SPEC, SERVER_NAME)
+            .expect("the boot-only router builds")
+            .into_gated_router()
     }
 
     /// The spine core built without booting (its pool is lazy), over
@@ -406,7 +407,7 @@ mod tests {
             ..test_env(None)
         };
         let built = build_router(&opted_in, options(), None, None).await;
-        assert!(built.is_ok_and(|built| built.app.is_none()));
+        assert!(matches!(built, Ok(BuiltRouter::BootOnly(_))));
     }
 
     #[tokio::test]
