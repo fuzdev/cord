@@ -84,7 +84,7 @@ Skill(fuz-stack).
 - `main.rs` (`cordd`, `cordd db-status`; the strict command line — anything
   else exits `2`), `runtime.rs` (`run_app`, `RunAppOptions`, the env —
   the spine's `BaseServerEnv` with `CORD_TRUSTED_PROXIES` — and
-  `upkeep_options`: the spine's auth cleanup and the invite expiry sweep, run
+  `extra_upkeep`: the invite expiry sweep, run with the spine's auth cleanup
   beside the server and joined on shutdown; the auth cleanup closes the
   sockets and audit streams of each expired session it deletes), over the
   spine's server toolkit (`fuz_actions::server`: signals, the READ COMMITTED

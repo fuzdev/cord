@@ -21,11 +21,10 @@
 //! admits them, as does the expiry sweep's pass
 //! (`cord_server::invite::sweep`) for links expired past the grace,
 //! skipping a link another transaction holds. Last, the upkeep tasks the
-//! server runs (`cord_server::runtime::upkeep_options`, spawned by the spine's
-//! `fuz_actions::server::spawn_upkeep`): their startup passes
-//! run that sweep and the spine's auth cleanup, which closes the expired
-//! session it deletes through the closer they're handed, and they end on
-//! shutdown.
+//! server runs (`fuz_auth::AuthCleanup`, and the sweep
+//! `cord_server::runtime::extra_upkeep` builds): their startup passes run that
+//! sweep and the spine's auth cleanup, which closes the expired session it
+//! deletes through the closer they're handed, and they end on shutdown.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
@@ -64,8 +63,7 @@ use cord_server::invite::redemption_queries::{
 use cord_server::invite::sweep::{
     CORD_INVITE_EXPIRE_AUDIT_EVENT, CordInviteExpireReleased, cord_invite_sweep_pass,
 };
-use cord_server::runtime::upkeep_options;
-use fuz_actions::server::spawn_upkeep;
+use cord_server::runtime::extra_upkeep;
 use fuz_auth::account_queries::{
     query_account_lock_admins_for_purge, query_account_lock_for_purge,
     query_account_lock_for_revoke, query_account_soft_delete, query_purge_account,
@@ -85,6 +83,7 @@ use fuz_auth::{
 use fuz_cell::CellError;
 use fuz_db::Pool;
 use fuz_db::tokio_postgres::error::SqlState;
+use fuz_http::Upkeep;
 use uuid::Uuid;
 
 /// Seed an actor holding a global `admin` grant.
@@ -1644,13 +1643,23 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     let recording = Arc::new(RecordingCloser::default());
     let connection_closer: Arc<dyn ConnectionCloser> = Arc::<RecordingCloser>::clone(&recording);
     let shutdown = fuz_http::CancellationToken::new();
-    let tasks = spawn_upkeep(
-        upkeep_options(fuz_auth::AuthCleanupOptions {
-            pool: pool.clone(),
-            audit: Arc::clone(&audit),
-            connection_closer,
-        }),
-        &shutdown,
+    // the spine's cleanup as its serve duties spawn it, beside cord's sweep as
+    // `extra_upkeep` builds it
+    let mut tasks = vec![
+        fuz_auth::AuthCleanup {
+            options: fuz_auth::AuthCleanupOptions {
+                pool: pool.clone(),
+                audit: Arc::clone(&audit),
+                connection_closer,
+            },
+            interval: fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL,
+        }
+        .spawn(shutdown.clone()),
+    ];
+    tasks.extend(
+        extra_upkeep(pool.clone(), Arc::clone(&audit))
+            .into_iter()
+            .map(|task| task(shutdown.clone())),
     );
     assert_eq!(tasks.len(), 2, "the auth cleanup and the invite sweep");
 

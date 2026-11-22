@@ -49,7 +49,10 @@ async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
     .expect("the env reads");
     let refused = cord_server::router::build_router(
         &env,
-        SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new())),
+        SpineBackendOptions::production(
+            Arc::new(fuz_auth::Argon2idHasher::new()),
+            fuz_auth::AuthCleanupSchedule::Off,
+        ),
         None,
         None,
     )

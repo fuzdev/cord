@@ -98,8 +98,9 @@ pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
 pub enum BuiltRouter {
     /// No database: the probes alone, served with no backend.
     BootOnly(GatedRouter),
-    /// A database: the composed router, carrying its backend's shutdown
-    /// duties (`AppBackend::stack_options`), and the app it serves over.
+    /// A database: the composed router, carrying its backend's serve
+    /// duties (`AppBackend::stack_options`: the auth cleanup, the shutdown
+    /// closes, the write drain), and the app it serves over.
     Live { router: GatedRouter, app: CordApp },
 }
 
@@ -358,7 +359,10 @@ mod tests {
             &CORD_BACKEND_SPEC,
             &SpineBackendOptions {
                 rate_limiters,
-                ..SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()))
+                ..SpineBackendOptions::production(
+                    Arc::new(fuz_auth::Argon2idHasher::new()),
+                    fuz_auth::AuthCleanupSchedule::Off,
+                )
             },
         )
         .expect("the core builds without touching the DB");
@@ -390,7 +394,12 @@ mod tests {
     /// as the full boot does, before any database exists — and boots with it.
     #[tokio::test]
     async fn boot_only_refuses_a_wildcard_origin_without_the_opt_in() {
-        let options = || SpineBackendOptions::production(Arc::new(fuz_auth::Argon2idHasher::new()));
+        let options = || {
+            SpineBackendOptions::production(
+                Arc::new(fuz_auth::Argon2idHasher::new()),
+                fuz_auth::AuthCleanupSchedule::Off,
+            )
+        };
         // `test_env`'s allowlist is `http://localhost:*`, with no opt-in
         let message = match build_router(&test_env(None), options(), None, None).await {
             Err(StartupError::Config(message)) => message,

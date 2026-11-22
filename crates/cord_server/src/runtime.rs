@@ -3,14 +3,18 @@
 //! Over the spine's server toolkit (`fuz_actions::server`): [`run_app`] reads
 //! the env, installs the signal handler, builds the router (the READ
 //! COMMITTED check, then migrations), binds the listener, starts the upkeep
-//! tasks ([`upkeep_options`]), and drains on shutdown, so the binary's `main`
-//! is tracing init, swap-point selection, and one call.
+//! tasks ([`extra_upkeep`]) beside the spine's auth cleanup, and drains on
+//! shutdown, so the binary's `main` is tracing init, swap-point selection, and
+//! one call.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use fuz_actions::server::{
-    ServeOptions, SpineRunOptions, StartupError, UpkeepOptions, serve_until_shutdown,
+    ServeOptions, SpineRunOptions, StartupError, UpkeepTask, serve_until_shutdown,
 };
+use fuz_auth::AuditEmitter;
+use fuz_db::Pool;
 use fuz_http::{BaseServerEnv, ServerEnvOptions};
 
 use crate::invite::sweep::{CORD_INVITE_SWEEP_INTERVAL, spawn_cord_invite_sweep};
@@ -84,30 +88,19 @@ pub struct RunAppOptions {
     pub final_action_specs_factory: Option<FinalActionSpecsFactory>,
 }
 
-/// The upkeep [`run_app`] runs beside the server, each task a pass now and
-/// then one per interval until shutdown:
+/// The upkeep cord adds beside the spine's own.
 ///
-/// - the spine's auth cleanup ([`fuz_auth::spawn_auth_cleanup`]): expired
-///   sessions deleted and the connections they opened closed, expired
-///   role-grant offers audited once, every
-///   [`fuz_auth::DEFAULT_AUTH_CLEANUP_INTERVAL`];
-/// - the invite expiry sweep ([`crate::invite::sweep`]), every
-///   [`CORD_INVITE_SWEEP_INTERVAL`], over the cleanup's pool and emitter.
+/// [`run_app`] runs it from the bind until shutdown: the invite expiry sweep
+/// ([`crate::invite::sweep`]), a pass now and then one every
+/// [`CORD_INVITE_SWEEP_INTERVAL`], over the given pool and audit emitter.
 ///
-/// `auth_cleanup` is the app's
-/// ([`fuz_actions::server::AppBackend::auth_cleanup_options`]): its emitter,
-/// so what both audit reaches the admin audit streams, and its closer, over
-/// the sockets and the streams.
+/// The spine's auth cleanup is not here: it rides on the backend's serve
+/// duties, scheduled by the backend options' `auth_cleanup`.
 #[must_use]
-pub fn upkeep_options(auth_cleanup: fuz_auth::AuthCleanupOptions) -> UpkeepOptions {
-    let pool = auth_cleanup.pool.clone();
-    let audit = std::sync::Arc::clone(&auth_cleanup.audit);
-    UpkeepOptions {
-        auth_cleanup,
-        extra: vec![Box::new(move |shutdown| {
-            spawn_cord_invite_sweep(pool, audit, CORD_INVITE_SWEEP_INTERVAL, shutdown)
-        })],
-    }
+pub fn extra_upkeep(pool: Pool, audit: Arc<AuditEmitter>) -> Vec<UpkeepTask> {
+    vec![Box::new(move |shutdown| {
+        spawn_cord_invite_sweep(pool, audit, CORD_INVITE_SWEEP_INTERVAL, shutdown)
+    })]
 }
 
 /// Run the server to completion.
@@ -118,8 +111,8 @@ pub fn upkeep_options(auth_cleanup: fuz_auth::AuthCleanupOptions) -> UpkeepOptio
 /// ([`fuz_actions::server::serve_until_shutdown`]): every live WebSocket is
 /// closed with 1001 and every audit stream ended, then in-flight requests
 /// drain, the upkeep is joined, and the audit writes in flight drain, all
-/// within one drain timeout. With a database, the upkeep
-/// ([`upkeep_options`]) runs beside the server, from the bind until shutdown
+/// within one drain timeout. With a database, the upkeep ([`extra_upkeep`], and
+/// the auth cleanup) runs beside the server, from the bind until shutdown
 /// begins.
 ///
 /// # Errors
@@ -150,11 +143,16 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
         final_action_specs_factory,
     )
     .await?;
-    let (router, upkeep) = match built {
-        BuiltRouter::BootOnly(router) => (router, None),
+    let (router, extra_upkeep) = match built {
+        BuiltRouter::BootOnly(router) => (router, Vec::new()),
+        // over the backend's pool and audit emitter, so what the sweep audits
+        // reaches the admin audit streams
         BuiltRouter::Live { router, app } => (
             router,
-            Some(upkeep_options(app.backend.auth_cleanup_options())),
+            extra_upkeep(
+                app.backend.pool.clone(),
+                Arc::clone(&app.backend.audit_emitter),
+            ),
         ),
     };
 
@@ -165,7 +163,7 @@ pub async fn run_app(options: RunAppOptions) -> Result<(), StartupError> {
             addr,
             drain_timeout,
             shutdown,
-            upkeep,
+            extra_upkeep,
         },
     )
     .await

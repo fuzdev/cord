@@ -15,7 +15,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use fuz_actions::server::{ServerInvocation, SpineRunOptions, StartCommand, server_invocation};
-use fuz_auth::{Argon2idHasher, PasswordHasher};
+use fuz_auth::{
+    Argon2idHasher, AuthCleanupSchedule, DEFAULT_AUTH_CLEANUP_INTERVAL, PasswordHasher,
+};
 
 use cord_server::router::cord_migration_namespaces;
 use cord_server::runtime::{DEFAULT_ADDR, RunAppOptions, run_app, startup_hint};
@@ -38,7 +40,11 @@ async fn main() -> ExitCode {
     let password_hasher: Arc<dyn PasswordHasher> = Arc::new(Argon2idHasher::new());
 
     match run_app(RunAppOptions {
-        spine: SpineRunOptions::production(password_hasher, DEFAULT_ADDR),
+        spine: SpineRunOptions::production(
+            password_hasher,
+            AuthCleanupSchedule::Every(DEFAULT_AUTH_CLEANUP_INTERVAL),
+            DEFAULT_ADDR,
+        ),
         extra_action_specs_factory: None,
         final_action_specs_factory: None,
     })
