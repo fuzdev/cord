@@ -43,7 +43,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use fuz_actions::server::{
-    AppBackendSpec, BootOnlyRouter, BootedAppBackend, SpineBackendOptions, StartupError, boot_only,
+    AppBackendSpec, BootedAppBackend, SpineBackendOptions, StartupError, boot_only,
     compile_action_registry, create_app_backend, fallback_group, probe_router,
 };
 use fuz_actions::{
@@ -96,9 +96,9 @@ pub const CORD_BACKEND_SPEC: AppBackendSpec = AppBackendSpec {
 #[derive(Debug)]
 pub enum BuiltRouter {
     /// No database: the probes alone, served with no backend.
-    BootOnly(BootOnlyRouter),
-    /// A database: the composed router, served as `ServeMode::Live` with its
-    /// app's `serve_backend`, and the app it serves over.
+    BootOnly(GatedRouter),
+    /// A database: the composed router, carrying its backend's shutdown
+    /// duties (`AppBackend::stack_options`), and the app it serves over.
     Live { router: GatedRouter, app: CordApp },
 }
 
@@ -346,9 +346,7 @@ mod tests {
             allow_origin_wildcards: true,
             ..test_env(None)
         };
-        boot_only(&env, &CORD_BACKEND_SPEC, SERVER_NAME)
-            .expect("the boot-only router builds")
-            .into_gated_router()
+        boot_only(&env, &CORD_BACKEND_SPEC, SERVER_NAME).expect("the boot-only router builds")
     }
 
     /// The spine core built without booting (its pool is lazy), over
