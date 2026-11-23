@@ -255,10 +255,10 @@ pub async fn await_lock_waiters_or_finished<T>(
 }
 
 /// The steps of the spine's `account_purge` that reach the purged actor's
-/// rows, after its admin lock and last-admin guard (the caller's): the
+/// rows, after its advisory lock and last-admin guard (the caller's): the
 /// account's `FOR UPDATE`, the invite void, then the delete, whose cascade
 /// deletes the actor and nulls every `ON DELETE SET NULL` column naming it
-/// (a link's `created_by`, a cell's `updated_by`).
+/// (a link's `created_by`).
 pub async fn purge_account_steps(
     tx: &deadpool_postgres::Transaction<'_>,
     actor: Uuid,

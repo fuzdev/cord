@@ -534,8 +534,8 @@ pub async fn query_cord_invite_lock_by_token_hash<C: GenericClient + ?Sized>(
 /// a key column, which no writer of an account makes). A purge of the minter
 /// takes the row `FOR UPDATE` before any write that reaches the link (the
 /// unclaimed invites it deletes, one of which a fallback accept locks; the
-/// actor its cascade deletes, which the grant's `granted_by` names; the
-/// link's `created_by` that cascade nulls), so it either commits first or
+/// actor its cascade deletes (a grant's `granted_by` keeps the purged id);
+/// the link's `created_by` that cascade nulls), so it either commits first or
 /// waits for the accept. It doesn't conflict with the member verbs' or a
 /// login's `FOR NO KEY UPDATE`, nor with redeem's `FOR SHARE`.
 ///
