@@ -27,14 +27,20 @@
 
 mod common;
 
-use common::{add_member, assert_refused, create_cord, fresh_db_pool, in_tx, seed_actor};
+use common::{
+    add_member, assert_refused, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
+    fresh_db_pool, in_tx, lock_waiters, purge_account_steps, seed_actor,
+};
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CORD_STAMPED_GRANTS, CordRow};
 use cord_server::cord_space_queries::{
     CORD_SPACE_CELL_KIND, CORD_SPACE_COUNT_MAX, CordSpaceError, CordSpaceKind, CordSpaceRow,
     query_cord_space_create, query_cord_space_delete, query_cord_space_rename, query_cord_spaces,
 };
-use fuz_auth::actor_queries::query_role_grant_find_active_for_actor;
+use fuz_auth::account_queries::query_account_lock_admins_for_purge;
+use fuz_auth::actor_queries::{
+    query_count_active_accounts_with_global_role_locked, query_role_grant_find_active_for_actor,
+};
 use fuz_auth::{ROLE_ADMIN, query_create_role_grant};
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
@@ -168,6 +174,9 @@ async fn spaces_are_cord_cells_its_managers_shape() {
     scenario_a_demotion_holding_the_lock(&pool).await;
     scenario_the_cap(&pool).await;
     scenario_concurrent_creates_at_the_cap(&pool).await;
+    for write in [SpaceWrite::Rename, SpaceWrite::Delete] {
+        scenario_a_purge_of_the_writer_mid_write(&pool, &den, write).await;
+    }
 }
 
 /// The cell: private, a child of the cord, no owner column, the cord's
@@ -401,7 +410,7 @@ async fn scenario_rename_keeps_the_rest(pool: &Pool, den: &Den) {
         serde_json::json!({ "kind": "line", "name": "the stove", "topic": "kept" })
     );
     assert_eq!(cell.created_by, None);
-    assert_eq!(cell.updated_by, Some(den.admin));
+    assert_eq!(cell.updated_by, None, "a space cell names no actor");
     delete(pool, den.cord.id, space.id, den.owner)
         .await
         .expect("clean up");
@@ -438,7 +447,11 @@ async fn scenario_delete(pool: &Pool, den: &Den) {
         .await
         .expect("the tombstone");
     assert!(row.get::<_, bool>(0), "soft-deleted");
-    assert_eq!(row.get::<_, Option<Uuid>>(1), Some(den.admin));
+    assert_eq!(
+        row.get::<_, Option<Uuid>>(1),
+        None,
+        "a space cell names no actor"
+    );
     delete(pool, den.cord.id, keep.id, den.owner)
         .await
         .expect("clean up");
@@ -642,4 +655,118 @@ async fn scenario_a_demotion_holding_the_lock(pool: &Pool) {
         .expect("join");
     assert_refused(result, "Forbidden");
     assert!(list(pool, cord.id).await.is_empty());
+}
+
+/// The space write [`scenario_a_purge_of_the_writer_mid_write`] races.
+#[derive(Debug, Clone, Copy)]
+enum SpaceWrite {
+    Rename,
+    Delete,
+}
+
+/// A rename or delete racing a purge of the admin making it, on real row
+/// locks. A third connection holds the admin's grant, so the purge stops
+/// mid-cascade with their actor row already deleted; the write then runs. A
+/// space names no actor, so the write never checks a key against that row
+/// and commits while the purge waits; the purge commits once the hold lifts.
+async fn scenario_a_purge_of_the_writer_mid_write(pool: &Pool, den: &Den, write: SpaceWrite) {
+    let suffix = format!("{write:?}").to_lowercase();
+    let writer = seed_actor(pool, &format!("purged_{suffix}r")).await;
+    add_member(pool, den.cord.id, writer, CordRole::Admin).await;
+    let space = create(pool, den.cord.id, den.owner, &format!("to {suffix}"))
+        .await
+        .expect("create");
+    let writer_account: Uuid = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one("SELECT account_id FROM actor WHERE id = $1", &[&writer])
+            .await
+            .expect("the actor")
+            .get(0)
+    };
+    let waiting_before = lock_waiters(pool).await;
+
+    // the hold: the writer's grant, which the purge's cascade deletes after
+    // their actor row
+    let mut hold_client = pool.get().await.expect("pool.get");
+    let hold = hold_client.transaction().await.expect("begin");
+    hold.execute(
+        "SELECT 1 FROM role_grant WHERE actor_id = $1 FOR UPDATE",
+        &[&writer],
+    )
+    .await
+    .expect("hold the writer's grant");
+
+    let purging = tokio::spawn({
+        let pool = pool.clone();
+        async move {
+            let mut client = pool.get().await.expect("pool.get");
+            let tx = client.transaction().await?;
+            query_account_lock_admins_for_purge(&tx, &writer_account).await?;
+            query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, None).await?;
+            purge_account_steps(&tx, writer, writer_account).await?;
+            tx.commit().await
+        }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 1,
+        &format!("{suffix}: the purge waits on the held grant"),
+    )
+    .await;
+
+    let writing = tokio::spawn({
+        let pool = pool.clone();
+        let cord_id = den.cord.id;
+        let space_id = space.id;
+        async move {
+            match write {
+                SpaceWrite::Rename => rename(&pool, cord_id, space_id, writer, "renamed")
+                    .await
+                    .map(|_| ()),
+                SpaceWrite::Delete => delete(&pool, cord_id, space_id, writer).await.map(|_| ()),
+            }
+        }
+    });
+    await_lock_waiters_or_finished(
+        pool,
+        waiting_before + 2,
+        &writing,
+        &format!("{suffix}: the write waits or commits"),
+    )
+    .await;
+
+    assert!(
+        writing.is_finished(),
+        "{suffix}: the write commits while the purge waits"
+    );
+    hold.commit().await.expect("release the hold");
+    let purged = purging.await.expect("the purge task");
+    let written = writing.await.expect("the write task");
+    assert!(purged.is_ok(), "{suffix}: the purge commits: {purged:?}");
+    assert!(written.is_ok(), "{suffix}: the write commits: {written:?}");
+    let row = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one(
+                "SELECT data->>'name', deleted_at IS NOT NULL, updated_by FROM cell WHERE id = $1",
+                &[&space.id],
+            )
+            .await
+            .expect("the space's cell")
+    };
+    assert_eq!(
+        row.get::<_, Option<Uuid>>(2),
+        None,
+        "{suffix}: the space names no actor"
+    );
+    match write {
+        SpaceWrite::Rename => {
+            assert_eq!(row.get::<_, String>(0), "renamed");
+            delete(pool, den.cord.id, space.id, den.owner)
+                .await
+                .expect("clean up");
+        }
+        SpaceWrite::Delete => assert!(row.get::<_, bool>(1), "{suffix}: soft-deleted"),
+    }
 }

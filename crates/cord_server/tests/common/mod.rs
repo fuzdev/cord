@@ -239,6 +239,21 @@ pub async fn await_lock_waiters(pool: &Pool, n: i64, what: &str) {
     }
 }
 
+/// Wait until `n` backends of this database wait on a lock, or `task` has
+/// finished without waiting.
+pub async fn await_lock_waiters_or_finished<T>(
+    pool: &Pool,
+    n: i64,
+    task: &tokio::task::JoinHandle<T>,
+    what: &str,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !task.is_finished() && lock_waiters(pool).await < n {
+        assert!(Instant::now() < deadline, "{what}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// The steps of the spine's `account_purge` that reach the purged actor's
 /// rows, after its admin lock and last-admin guard (the caller's): the
 /// account's `FOR UPDATE`, the invite void, then the delete, whose cascade

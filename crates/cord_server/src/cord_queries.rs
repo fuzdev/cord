@@ -18,15 +18,12 @@
 //! the spine's cell edit paths for them.
 //!
 //! A cord cell names no actor: `created_by` and `updated_by` both stay
-//! `NULL`. A purge deletes the purged actor's row, and its foreign keys then
-//! delete the rows that reference it `ON DELETE CASCADE` and set null the
-//! `ON DELETE SET NULL` columns that name it, a cell's `created_by` and
-//! `updated_by` among them; with neither set, it never writes a cord's row.
-//! Accept and the member verbs hold that row while they wait on account rows
-//! a purge holds, so a cascade write to it would close a cycle. Cords
-//! stamped before this held are cleared by the `cord_cell_names_no_actor`
-//! migration ([`crate::migrations`]), which the invariant depends on. Who
-//! created or renamed a cord is in its audit events.
+//! `NULL`, and the audit events are the record of who created or renamed
+//! it, so no purge reaches the row. Accept and the member verbs hold that
+//! row while they wait on account rows a purge holds, so a purge's write to
+//! it would close a cycle. Every cord is born and renamed with neither set
+//! ([`query_cord_create`], [`query_cord_rename`]). A cord's spaces name no
+//! actor either ([`crate::cord_space_queries`]).
 //!
 //! Every function takes any `GenericClient`, so it composes on a pooled
 //! client or inside the action's transaction. Cell reads project through
@@ -382,10 +379,10 @@ pub async fn query_cords_by_ids<C: GenericClient + ?Sized>(
 /// Rename a cord, keeping the rest of its `data`. `name` must already be
 /// validated. Returns `None` when no active cord has that id.
 ///
-/// The cell's `updated_by` stays `NULL`, as its `created_by` does: a purge's
-/// cascade must never write a cord's row, which accept and the member verbs
-/// hold while waiting on account rows; the caller records the renamer in an
-/// audit event.
+/// The cell's `updated_by` stays `NULL`, as its `created_by` does, so no
+/// purge reaches a cord's row, which accept and the member verbs hold while
+/// waiting on account rows; the caller records the renamer in an audit
+/// event.
 ///
 /// # Errors
 ///

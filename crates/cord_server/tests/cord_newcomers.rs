@@ -46,8 +46,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{
-    accept, add_member, await_lock_waiters, create_cord, fresh_db_pool, in_tx, lock_waiters, mint,
-    purge_account_steps, redeem, redemption_list, seed_actor, status_of,
+    accept, add_member, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
+    fresh_db_pool, in_tx, lock_waiters, mint, purge_account_steps, redeem, redemption_list,
+    seed_actor, status_of,
 };
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_member_queries::query_cord_leave;
@@ -235,6 +236,7 @@ async fn newcomer_links_admit_new_people() {
     scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
     scenario_the_expiry_sweep(&pool, &cord, admin).await;
     scenario_the_upkeep_tasks(&pool, &cord, admin).await;
+    scenario_a_purge_of_an_accepted_newcomer(&pool, &cord, admin).await;
 }
 
 /// A redemption creates the spine invite and the row and spends one use;
@@ -381,6 +383,18 @@ async fn scenario_accept_after_redemption_spends_nothing(
             redemption_counts(pool, redeemed.cord.id, link_id).await,
             (2, 1)
         );
+        // the acceptor and the time are filled together, or neither
+        let client = pool.get().await.expect("pool.get");
+        for set in ["accepted_by = NULL", "accepted_at = NULL"] {
+            let refused = client
+                .execute(
+                    &format!("UPDATE cord_invite_redemption SET {set} WHERE id = $1"),
+                    &[&redemptions[0].id],
+                )
+                .await
+                .expect_err(set);
+            assert_eq!(refused.code(), Some(&SqlState::CHECK_VIOLATION), "{set}");
+        }
     }
     // accepting again changes nothing
     let again = accept(pool, token, newcomer).await.expect("accept again");
@@ -1009,21 +1023,6 @@ enum NewcomerSignup {
     /// redemption by username and locks it with its unclaimed invite, the
     /// invite the purge deletes among the minter's unclaimed ones.
     Unclaimed,
-}
-
-/// Wait until `n` backends of this database wait on a lock, or `task` has
-/// finished without waiting.
-async fn await_lock_waiters_or_finished<T>(
-    pool: &Pool,
-    n: i64,
-    task: &tokio::task::JoinHandle<T>,
-    what: &str,
-) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !task.is_finished() && lock_waiters(pool).await < n {
-        assert!(Instant::now() < deadline, "{what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 /// An accept racing a purge of the link's minter, on real row locks: the
@@ -1700,4 +1699,31 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
             .expect("cancelling the token ends each task")
             .expect("the task ends cleanly");
     }
+}
+
+/// A purge of a newcomer who accepted leaves their redemption as the record:
+/// `accepted_by` has no foreign key, so the purge never writes the row, and
+/// it keeps naming the actor and the time they joined.
+async fn scenario_a_purge_of_an_accepted_newcomer(pool: &Pool, cord: &CordRow, admin: Uuid) {
+    let (link, link_id) = mint(pool, cord.id, admin, Some(3600), Some(3), true).await;
+    redeem(pool, &link, "accepted_then_purged")
+        .await
+        .expect("redeem");
+    let newcomer = sign_up(pool, "accepted_then_purged").await;
+    accept(pool, &link, newcomer).await.expect("accept");
+    let before = redemption_counts(pool, cord.id, link_id).await;
+    let account = account_of(pool, newcomer).await;
+    let purged: Result<(), fuz_db::tokio_postgres::Error> = async {
+        let mut client = pool.get().await.expect("pool.get");
+        let tx = client.transaction().await?;
+        query_account_lock_admins_for_purge(&tx, &account).await?;
+        purge_account_steps(&tx, newcomer, account).await?;
+        tx.commit().await
+    }
+    .await;
+    assert!(purged.is_ok(), "the purge commits: {purged:?}");
+    let redemptions = redemption_list(pool, link_id).await;
+    assert_eq!(redemptions[0].accepted_by, Some(newcomer));
+    assert!(redemptions[0].accepted_at.is_some());
+    assert_eq!(redemption_counts(pool, cord.id, link_id).await, before);
 }

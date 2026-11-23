@@ -40,10 +40,10 @@
 //! ([`crate::cord_queries`]).
 //!
 //! A newcomer's accept claims their signup invite, which waits on their
-//! account, before anything names their actor (the redemption's
-//! `accepted_by`, the grant): a purge of the newcomer holds that account,
-//! then its cascade deletes the actor, so the accept waits the purge out and
-//! then fails on the removed account.
+//! account, before its grant names their actor in `actor_id`, a foreign key
+//! (the redemption's `accepted_by` is a record with none): a purge of the
+//! newcomer holds that account, then its cascade deletes the actor, so the
+//! accept waits the purge out and then fails on the removed account.
 //!
 //! A newcomer link spends its use at redemption, not at accept: the
 //! newcomer's accept finds their redemption and joins without spending

@@ -34,6 +34,11 @@
 //!   before that read is honored; one that commits while the verb runs is
 //!   ordered after it.
 //!
+//! A space names no actor, as its cord doesn't: `created_by` and
+//! `updated_by` stay `NULL` through create, rename, and delete. The audit
+//! events are the record of who made each change, so no purge reaches the
+//! row.
+//!
 //! A space is addressed with its cord's id. One that isn't a live space
 //! under that cord reads as missing ([`CordSpaceError::SpaceNotFound`]), but
 //! only for someone in the cord: anyone outside it gets
@@ -305,7 +310,9 @@ pub async fn query_cord_space_create<C: GenericClient + ?Sized>(
 /// the rest of its `data`.
 ///
 /// The cord's owner or admins only, by the role read afresh. `name` must
-/// already be validated ([`validate_cord_space_name`]).
+/// already be validated ([`validate_cord_space_name`]). The cell's
+/// `updated_by` stays `NULL`; the caller records the renamer in an audit
+/// event.
 ///
 /// # Errors
 ///
@@ -326,16 +333,9 @@ pub async fn query_cord_space_rename<C: GenericClient + ?Sized>(
     };
     fields.insert("name".to_owned(), Value::String(name.to_owned()));
     // the row is locked and live, so the update finds it
-    query_cell_update(
-        client,
-        space_id,
-        Some(&data),
-        None,
-        None,
-        Some(caller_actor_id),
-    )
-    .await?
-    .ok_or(CordSpaceError::SpaceNotFound)?;
+    query_cell_update(client, space_id, Some(&data), None, None, None)
+        .await?
+        .ok_or(CordSpaceError::SpaceNotFound)?;
     Ok(CordSpaceRow {
         name: name.to_owned(),
         ..space
@@ -346,7 +346,9 @@ pub async fn query_cord_space_rename<C: GenericClient + ?Sized>(
 /// delete, so its cell and grants stay but nothing lists or finds it.
 /// Returns the space as it was.
 ///
-/// The cord's owner or admins only, by the role read afresh.
+/// The cord's owner or admins only, by the role read afresh. The cell's
+/// `updated_by` stays `NULL`; the caller records who deleted it in an audit
+/// event.
 ///
 /// # Errors
 ///
@@ -361,7 +363,7 @@ pub async fn query_cord_space_delete<C: GenericClient + ?Sized>(
     let Some((space, _)) = query_cord_space_lock(client, cord_id, space_id).await? else {
         return Err(CordSpaceError::SpaceNotFound);
     };
-    if !query_cell_delete(client, space_id, Some(caller_actor_id)).await? {
+    if !query_cell_delete(client, space_id, None).await? {
         return Err(CordSpaceError::SpaceNotFound);
     }
     Ok(space)

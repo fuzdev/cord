@@ -146,45 +146,48 @@ The load-bearing rules. Each module named holds the full reasoning.
 - **Spaces are cells too.** A space is a cell with `kind = "space"`, a
   private child of the cord's cell (`parent_id` and `root_id` the cord),
   `created_by = NULL`, its own kind and name in `data` (`kind` a closed
-  set, only `line` so far). The cord's three role-shaped grants are stamped
-  on it, scoped to the cord; per-space visibility will narrow the member
-  one. Owners and admins create, rename, and delete; members list. A space
-  is always named with its cord, and one that isn't a live space of that
-  cord is `cord_space_not_found`, but only after the IDOR mask. Space names
-  share the cord name rules and validator, with their own length.
-  (`cord_space_queries.rs`)
+  set, only `line` so far). A space names no actor, as its cord doesn't:
+  `updated_by` stays `NULL` through rename and delete, and the audit
+  events are the record, so no purge reaches the row. The cord's three
+  role-shaped grants are stamped on it, scoped to the cord; per-space
+  visibility will narrow the member one. Owners and admins create, rename,
+  and delete; members list. A space is always named with its cord, and one
+  that isn't a live space of that cord is `cord_space_not_found`, but only
+  after the IDOR mask. Space names share the cord name rules and
+  validator, with their own length. (`cord_space_queries.rs`)
 - **Serialization.** Every membership change (role set, remove, leave,
   accept) locks the cord's cell row, then re-reads membership and applies
   the rules to that read, never the request's snapshot; this relies on
   READ COMMITTED, which `cordd` checks at boot, refusing to serve (exit
   `2`) when `default_transaction_isolation` is anything else. The other
   managing writes (rename, invite create and revoke) take no cord lock and
-  read the caller's role afresh inside the transaction; minting a newcomer link also re-reads the caller's global
-  `admin` grant, under a share lock. Accept locks the cord, then the
-  link's minter's account, then the link, then the redemption; redeem
-  locks the minter's account, then the link, and no cord. Revoke must not
-  take the cord lock after the link's. The minter's account comes before
-  the link because a purge holds it, then deletes the minter's unclaimed
-  invites and nulls the link's `created_by`; the minter is found by an
-  unlocked read of the link and re-checked under the lock. Accept takes
-  it `FOR KEY SHARE`, the weakest lock that conflicts with the purge's
-  `FOR UPDATE`, so a login, a revoke, or a member verb of another cord
-  doesn't wait behind an accept, and after the cord (a purge holds every
-  admin's account, so a member verb can wait on it holding the cord).
-  Holding the cord while waiting on an account is safe because a purge
-  never writes a cord's row: a cord cell names no actor (`created_by` and
-  `updated_by` stay `NULL`, older stamps cleared by the
-  `cord_cell_names_no_actor` migration; the audit events name who created
-  or renamed it). A newcomer's accept claims their signup invite before
-  its grant names their actor, so a purge of the newcomer is waited out,
-  not deadlocked, and the accept then fails. Redeem takes the minter's account `FOR SHARE`, and a new
-  reservation then share-locks the minter's global `admin` grant (account
-  before grant, the last-admin guard's order). The sweep takes the link
-  lock with `SKIP LOCKED`. Space create takes the cord lock
-  alone, then reads the role and counts live spaces against
-  `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete take
-  no cord lock, read the role afresh, and lock only the space's row. The
-  read-only verbs trust the snapshot. (`cord_member_queries.rs`,
+  read the caller's role afresh inside the transaction; minting a newcomer
+  link also re-reads the caller's global `admin` grant, under a share
+  lock. Accept locks the cord, then the link's minter's account, then the
+  link, then the redemption; redeem locks the minter's account, then the
+  link, and no cord. Revoke must not take the cord lock after the link's.
+  The minter's account comes before the link because a purge holds it,
+  then deletes the minter's unclaimed invites and nulls the link's
+  `created_by`; the minter is found by an unlocked read of the link and
+  re-checked under the lock. Accept takes it `FOR KEY SHARE`, the weakest
+  lock that conflicts with the purge's `FOR UPDATE`, so a login, a revoke,
+  or a member verb of another cord doesn't wait behind an accept, and
+  after the cord (a purge holds every admin's account, so a member verb
+  can wait on it holding the cord). Holding the cord while waiting on an
+  account is safe because a purge never writes a cord's row: a cord cell
+  names no actor (`created_by` and `updated_by` stay `NULL`; the audit
+  events are the record of who created or renamed it). A newcomer's accept
+  claims their signup invite before its grant names their actor, so a
+  purge of the newcomer is waited out, not deadlocked, and the accept then
+  fails; the redemption's `accepted_by` is a record with no foreign key,
+  so a purge never writes it. Redeem takes the minter's account
+  `FOR SHARE`, and a new reservation then share-locks the minter's global
+  `admin` grant (account before grant, the last-admin guard's order). The
+  sweep takes the link lock with `SKIP LOCKED`. Space create takes the
+  cord lock alone, then reads the role and counts live spaces against
+  `CORD_SPACE_COUNT_MAX`, so the cap is exact; space rename and delete
+  take no cord lock, read the role afresh, and lock only the space's row.
+  The read-only verbs trust the snapshot. (`cord_member_queries.rs`,
   `invite/queries.rs`, `cord_space_queries.rs`)
 - **Live grants.** A member is a live grant on a live actor and account;
   soft-deleted ones keep their grants but aren't listed, targeted, or

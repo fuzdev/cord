@@ -3,8 +3,7 @@
 //! cord tables reference `actor`, `invite`, and `cell`.
 //!
 //! Forward-only: append new entries and never edit one that has shipped.
-//! Every statement is guarded (`IF NOT EXISTS`, or a data fix's `WHERE`
-//! that leaves nothing to change once it has run), so a partly migrated
+//! Every statement is guarded (`IF NOT EXISTS`), so a partly migrated
 //! database converges.
 
 use fuz_db::{ColumnProjections, Migration, MigrationNamespace};
@@ -62,9 +61,10 @@ CREATE INDEX IF NOT EXISTS cord_invite_cord_idx ON cord_invite (cord_id, created
 ///   deletes that invite while it's unclaimed: the redemption stays as a
 ///   record, its use stays spent, and nobody can accept through it.
 /// - `username` is the reserved username, lowercased as the spine stores it.
-/// - `accepted_by` and `accepted_at` are filled when the newcomer accepts the
-///   link; `accepted_by` goes null if their actor is purged, and
-///   `accepted_at` stays.
+/// - `accepted_by` and `accepted_at` are filled together when the newcomer
+///   accepts the link, and never change after. `accepted_by` is a record
+///   with no foreign key: it keeps naming the actor once they're purged, as
+///   the audit log does, so a purge never writes the row.
 const CORD_INVITE_REDEMPTION_SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cord_invite_redemption (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,24 +72,15 @@ CREATE TABLE IF NOT EXISTS cord_invite_redemption (
     signup_invite_id UUID REFERENCES invite(id) ON DELETE SET NULL,
     username TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    accepted_by UUID REFERENCES actor(id) ON DELETE SET NULL,
+    accepted_by UUID,
     accepted_at TIMESTAMPTZ,
     CONSTRAINT cord_invite_redemption_signup_invite_unique UNIQUE (signup_invite_id),
     CONSTRAINT cord_invite_redemption_accepted_paired CHECK (
-        accepted_by IS NULL OR accepted_at IS NOT NULL
+        (accepted_by IS NULL) = (accepted_at IS NULL)
     )
 );
 CREATE INDEX IF NOT EXISTS cord_invite_redemption_invite_idx
     ON cord_invite_redemption (cord_invite_id, created_at);
-";
-
-/// Cord cells name no actor: clears the `created_by` and `updated_by` a cord
-/// rename stamped before it stopped (`crate::cord_queries` has why a purge
-/// must never write a cord's row). Idempotent, and a no-op on a database
-/// whose cords never named one.
-const CORD_CELL_NAMES_NO_ACTOR: &str = r"
-UPDATE cell SET created_by = NULL, updated_by = NULL
-WHERE kind = 'cord' AND (created_by IS NOT NULL OR updated_by IS NOT NULL);
 ";
 
 const MIGRATIONS: &[Migration] = &[
@@ -100,10 +91,6 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         name: "cord_invite_redemption_schema",
         sql: CORD_INVITE_REDEMPTION_SCHEMA,
-    },
-    Migration {
-        name: "cord_cell_names_no_actor",
-        sql: CORD_CELL_NAMES_NO_ACTOR,
     },
 ];
 
