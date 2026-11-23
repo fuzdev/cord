@@ -66,8 +66,8 @@ use cord_server::invite::sweep::{
 };
 use cord_server::runtime::extra_upkeep;
 use fuz_auth::account_queries::{
-    query_account_lock_admins_for_purge, query_account_lock_for_purge,
-    query_account_lock_for_revoke, query_account_soft_delete, query_purge_account,
+    query_account_lock_for_purge, query_account_lock_for_revoke, query_account_purge_advisory_lock,
+    query_account_soft_delete, query_purge_account,
 };
 use fuz_auth::actor_queries::{
     query_actor_soft_delete, query_count_active_accounts_with_global_role_locked,
@@ -835,7 +835,7 @@ enum MinterRemoval {
     /// the last-admin guard, then the revoke, as the spine's
     /// `role_grant_revoke` writes them.
     Revoke,
-    /// A purge: every admin's account row, the last-admin guard, the
+    /// A purge: the purge lock, the last-admin guard (every admin's account row), the
     /// account's `FOR UPDATE`, the invite void, then the delete, whose
     /// cascade sets the link's `created_by` null: the steps of the spine's
     /// `account_purge` that reach the minter and the link.
@@ -901,9 +901,9 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
             let exclude = match removal {
                 MinterRemoval::Delete => None,
                 MinterRemoval::Purge => {
-                    query_account_lock_admins_for_purge(&tx, &minter_account)
+                    query_account_purge_advisory_lock(&tx)
                         .await
-                        .expect("lock the admins for purge");
+                        .expect("the purge lock");
                     None
                 }
                 MinterRemoval::Revoke => {
@@ -1028,8 +1028,9 @@ enum NewcomerSignup {
 /// An accept racing a purge of the link's minter, on real row locks: the
 /// purge deletes the minter's unclaimed invites (one may be the redemption's,
 /// which a fallback accept locks with its redemption), its cascade deletes
-/// the minter's actor, which the accept's grant names as its `granted_by`,
-/// and sets the link's `created_by` null, writing the link's row. Accept
+/// the minter's actor (the accept's grant names it as its `granted_by`, which
+/// keeps the purged id and so is not written), and sets the link's
+/// `created_by` null, writing the link's row. Accept
 /// key-shares the minter's account row before the link's lock, and the
 /// purge takes that row `FOR UPDATE` before any of those writes, so one waits
 /// for the other and neither is refused: both commit, and the accept joins.
@@ -1086,7 +1087,7 @@ async fn scenario_a_purge_of_the_minter_mid_accept(
         async move {
             let mut client = pool.get().await.expect("pool.get");
             let tx = client.transaction().await?;
-            query_account_lock_admins_for_purge(&tx, &minter_account).await?;
+            query_account_purge_advisory_lock(&tx).await?;
             query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, None).await?;
             purge_account_steps(&tx, minter, minter_account).await?;
             tx.commit().await
@@ -1124,7 +1125,7 @@ async fn scenario_a_purge_of_the_minter_mid_accept(
 }
 
 /// Three writers on real row locks, none waiting forever: a purge of a link's
-/// minter, which holds every admin's account row from its first statement; a
+/// minter, which holds every admin's account row from its guard; a
 /// member leaving the cord who is an admin, which holds the cord's row and
 /// then waits on its own account row the purge holds; and an accept of the
 /// link, which waits on the cord's row. Accept takes the cord's row before
@@ -1139,12 +1140,12 @@ async fn scenario_a_purge_a_leave_and_an_accept(pool: &Pool, cord: &CordRow) {
     let joiner = seed_actor(pool, "joining_three_way").await;
     let waiting_before = lock_waiters(pool).await;
 
-    // the purge's first statements, held open
+    // the purge's lock and guard, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
-    query_account_lock_admins_for_purge(&purge, &minter_account)
+    query_account_purge_advisory_lock(&purge)
         .await
-        .expect("lock the admins for purge");
+        .expect("the purge lock");
     query_count_active_accounts_with_global_role_locked(&purge, ROLE_ADMIN, None)
         .await
         .expect("the last-admin guard");
@@ -1204,9 +1205,9 @@ async fn scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(pool: &Poo
     // the purge's locks up to the minter's account, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
-    query_account_lock_admins_for_purge(&purge, &minter_account)
+    query_account_purge_advisory_lock(&purge)
         .await
-        .expect("lock the admins for purge");
+        .expect("the purge lock");
     query_count_active_accounts_with_global_role_locked(&purge, ROLE_ADMIN, None)
         .await
         .expect("the last-admin guard");
@@ -1259,9 +1260,9 @@ async fn scenario_a_purge_of_the_newcomer_mid_fallback_accept(pool: &Pool, cord:
     // the purge's locks up to the newcomer's account, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
-    query_account_lock_admins_for_purge(&purge, &newcomer_account)
+    query_account_purge_advisory_lock(&purge)
         .await
-        .expect("lock the target for purge");
+        .expect("the purge lock");
     assert!(
         query_account_lock_for_purge(&purge, &newcomer_account)
             .await
@@ -1716,7 +1717,7 @@ async fn scenario_a_purge_of_an_accepted_newcomer(pool: &Pool, cord: &CordRow, a
     let purged: Result<(), fuz_db::tokio_postgres::Error> = async {
         let mut client = pool.get().await.expect("pool.get");
         let tx = client.transaction().await?;
-        query_account_lock_admins_for_purge(&tx, &account).await?;
+        query_account_purge_advisory_lock(&tx).await?;
         purge_account_steps(&tx, newcomer, account).await?;
         tx.commit().await
     }

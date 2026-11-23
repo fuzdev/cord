@@ -42,7 +42,7 @@ use cord_server::invite::queries::{
     CordInviteError, hash_cord_invite_token, query_cord_invite_accept,
 };
 use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
-use fuz_auth::account_queries::query_account_lock_admins_for_purge;
+use fuz_auth::account_queries::{query_account_lock_for_purge, query_account_purge_advisory_lock};
 use fuz_db::Pool;
 use uuid::Uuid;
 
@@ -727,7 +727,7 @@ async fn scenario_accept_remove_and_role_set_race(pool: &Pool, shed: &CordRow, h
 
 /// A remove racing a purge of the member it removes, who renamed the cord, on
 /// real row locks: the remove holds the cord's row and waits on the member's
-/// account row, which the purge holds from its first statement. The cord's
+/// account row, which the purge holds from its first statements. The cord's
 /// row names no actor, so the purge's cascade never writes it: the purge
 /// commits, then the remove, the member already gone.
 async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
@@ -753,12 +753,17 @@ async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
     };
     let waiting_before = lock_waiters(pool).await;
 
-    // the purge's first statement, held open: the target's account row
+    // the purge's lock and the target's account row, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
-    query_account_lock_admins_for_purge(&purge, &renamer_account)
+    query_account_purge_advisory_lock(&purge)
         .await
-        .expect("lock the target for purge");
+        .expect("the purge lock");
+    assert!(
+        query_account_lock_for_purge(&purge, &renamer_account)
+            .await
+            .expect("lock the target for purge")
+    );
 
     let removing = tokio::spawn({
         let pool = pool.clone();

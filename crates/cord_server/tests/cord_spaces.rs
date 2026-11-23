@@ -37,7 +37,7 @@ use cord_server::cord_space_queries::{
     CORD_SPACE_CELL_KIND, CORD_SPACE_COUNT_MAX, CordSpaceError, CordSpaceKind, CordSpaceRow,
     query_cord_space_create, query_cord_space_delete, query_cord_space_rename, query_cord_spaces,
 };
-use fuz_auth::account_queries::query_account_lock_admins_for_purge;
+use fuz_auth::account_queries::query_account_purge_advisory_lock;
 use fuz_auth::actor_queries::{
     query_count_active_accounts_with_global_role_locked, query_role_grant_find_active_for_actor,
 };
@@ -702,7 +702,7 @@ async fn scenario_a_purge_of_the_writer_mid_write(pool: &Pool, den: &Den, write:
         async move {
             let mut client = pool.get().await.expect("pool.get");
             let tx = client.transaction().await?;
-            query_account_lock_admins_for_purge(&tx, &writer_account).await?;
+            query_account_purge_advisory_lock(&tx).await?;
             query_count_active_accounts_with_global_role_locked(&tx, ROLE_ADMIN, None).await?;
             purge_account_steps(&tx, writer, writer_account).await?;
             tx.commit().await
