@@ -601,9 +601,13 @@ PostgreSQL leg runs everything:
 
 ```bash
 FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres cargo test --workspace -- --include-ignored
-# regenerate expected_schema.json after a migration change
-FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres UPDATE_SCHEMA_READY=1 \
-  cargo test -p cord_server --test schema_ready
+```
+
+Regenerate `expected_schema.json` after a migration change on the default
+engine (the column map is the same on either):
+
+```bash
+UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready
 ```
 
 GitHub CI has no PostgreSQL leg, so the marked tests run only locally.

@@ -8,12 +8,14 @@
 //! (`UPDATE_SCHEMA_READY=1`) or asserts the committed copy still matches a
 //! fresh bootstrap.
 //!
-//! It runs over a database of its own (`common::fresh_db`). Regenerate on
-//! PostgreSQL, the engine production runs:
+//! It runs in plain `cargo test` over a database of its own
+//! (`common::fresh_db`: pglet by default, PostgreSQL under
+//! `FUZ_TEST_POSTGRES_URL`); the column map is the same on either engine.
 //!
 //! ```bash
-//! FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres UPDATE_SCHEMA_READY=1 \
-//!   cargo test -p cord_server --test schema_ready
+//! cargo test -p cord_server --test schema_ready
+//! # regenerate after an intentional schema change:
+//! UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready
 //! ```
 
 mod common;
