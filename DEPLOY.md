@@ -19,8 +19,8 @@ them from any working directory.
   `zap.ts` with; both are built from source (see
   [zap's install guide](https://zap.fuz.dev/docs/install)), and the `zap`
   binary must be the same 0.x minor as the `@fuzdev/zap` package
-- this repo checked out beside fuz's Rust server crates (the `cordd` build,
-  see the README), with `npm install` run for the `@fuzdev/zap` dev dependency
+- this repo checked out beside fuz's Rust server crates and pglet (the
+  `cordd` build, see the README), with `npm install` run for the `@fuzdev/zap` dev dependency
 - the Rust toolchain and `gro`, for the build zap runs locally; `cordd` is
   built on your machine and shipped as-is, so build on Linux x86_64 with a
   glibc no newer than the host's (Debian 13 building for Debian 13 is fine;

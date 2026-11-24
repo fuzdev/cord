@@ -10,7 +10,7 @@ publish.workspace = true
 # unshippable and exempts it, by name, from `cargo xtask check-release`, which
 # asserts the production `cordd` graph never reaches `fuz_testing` or
 # `fuz_audit` (this crate is the only runtime dependent of `fuz_testing`;
-# `cord_server` takes it as a dev-dependency for its Postgres suites, an edge
+# `cord_server` takes it as a dev-dependency for its database suites, an edge
 # the audit ignores).
 [[bin]]
 name = "testing_cordd"

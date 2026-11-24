@@ -1,4 +1,4 @@
-//! Postgres-backed tests for cord membership changes
+//! Database tests for cord membership changes
 //! (`cord_server::cord_member_queries`).
 //!
 //! What only the database can show: a role change leaves exactly one active
@@ -12,13 +12,10 @@
 //! and an accept take the cord's scope lock before any row, so with the lock
 //! held exclusive (as a teardown would) they wait holding nothing.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
-//! schema, so the scenarios run in order from one test function:
-//!
-//! ```bash
-//! cargo test -p cord_server --test cord_members -- --ignored
-//! ```
+//! The scenarios run in order from one test function, over a database of
+//! their own (`common::fresh_db`), but for the ones that observe a lock
+//! wait, which only PostgreSQL shows: those are a test of their own, on
+//! PostgreSQL alone.
 
 #![expect(
     clippy::unwrap_used,
@@ -30,8 +27,8 @@
 mod common;
 
 use common::{
-    add_member, assert_refused, await_lock_waiters, create_cord, fresh_db_pool, in_tx,
-    lock_waiters, mint, purge_account_steps, seed_actor,
+    add_member, assert_refused, await_lock_waiters, create_cord, fresh_db, fresh_postgres_db,
+    in_tx, lock_waiters, mint, purge_account_steps, seed_actor,
 };
 use cord_server::cord_authz::{CordRole, cord_role_in};
 use cord_server::cord_member_queries::{
@@ -107,9 +104,8 @@ struct Porch {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn membership_changes_keep_one_role_and_an_owner() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_actor(&pool, "owner").await;
     let admin = seed_actor(&pool, "admin").await;
     let member = seed_actor(&pool, "member").await;
@@ -137,6 +133,13 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     scenario_two_owners_leaving_at_once(&pool).await;
     let (shed, host) = scenario_the_unlocked_verbs_read_the_role_afresh(&pool, stranger).await;
     scenario_accept_remove_and_role_set_race(&pool, &shed, host).await;
+}
+
+/// The lock order on real row locks, which only PostgreSQL shows waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "postgres-only: lock waits observed through `pg_stat_activity`"]
+async fn membership_changes_take_their_locks_in_order() {
+    let pool = fresh_postgres_db().await;
     scenario_a_purge_of_a_renamer_mid_remove(&pool).await;
     scenario_the_scope_lock_comes_first(&pool).await;
 }

@@ -1,4 +1,4 @@
-//! Postgres-backed tests for cord creation and reads (`cord_server::cord_queries`).
+//! Database tests for cord creation and reads (`cord_server::cord_queries`).
 //!
 //! What only the database can show: a created cord is a private root cell with
 //! no `created_by`, its creator holds `cord_owner` scoped to it (with the
@@ -6,14 +6,9 @@
 //! on it, and the spine's own visibility query (`query_cell_list`) admits
 //! exactly the cord's members through those grants.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and its `CORD_SCHEMA_READY_TEST_URL` override). It drops and recreates the
-//! `public` schema, so the scenarios run in one test function rather than
-//! racing each other:
-//!
-//! ```bash
-//! cargo test -p cord_server --test cords -- --ignored
-//! ```
+//! Its scenarios run in order from one test function, over a database of
+//! its own (`common::fresh_postgres_db`): its seeding concatenates `jsonb`,
+//! which pglet doesn't have yet.
 
 #![expect(
     clippy::expect_used,
@@ -22,7 +17,7 @@
 
 mod common;
 
-use common::{fresh_db_pool, seed_actor};
+use common::{fresh_postgres_db, seed_actor};
 use cord_server::cord_queries::{
     CORD_CELL_KIND, CORD_STAMPED_GRANTS, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids,
@@ -62,9 +57,9 @@ async fn cell_list_shows(pool: &Pool, actor_id: Uuid, cord_id: Uuid) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
+#[ignore = "pglet: jsonb || jsonb"]
 async fn cords_are_structural_cells_governed_by_role_grants() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_postgres_db().await;
     let owner = seed_actor(&pool, "owner").await;
     let member = seed_actor(&pool, "member").await;
     let stranger = seed_actor(&pool, "stranger").await;

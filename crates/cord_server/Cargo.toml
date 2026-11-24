@@ -40,7 +40,7 @@ deadpool-postgres.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# Dev-only: the spine's shared Postgres-suite harness (`fuz_testing`'s
+# Dev-only: the spine's shared database-test harness (`fuz_testing`'s
 # `fresh_db`, `seed`, and the column-projection guard). A dev-dependency never
 # reaches the `cordd` binary, and `cargo xtask check-release` walks runtime
 # edges only.

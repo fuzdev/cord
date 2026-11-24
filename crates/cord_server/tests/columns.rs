@@ -8,16 +8,11 @@
 //! fails here until it's registered there. The assertion over them is the
 //! spine's shared `fuz_testing::assert_column_projections`.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and `CORD_SCHEMA_READY_TEST_URL` override):
-//!
-//! ```bash
-//! cargo test -p cord_server --test columns -- --ignored
-//! ```
+//! It runs over a database of its own (`common::fresh_db`).
 
 mod common;
 
-use common::fresh_db_pool;
+use common::fresh_db;
 use cord_server::migrations::CORD_COLUMN_PROJECTIONS;
 use fuz_auth::AUTH_COLUMN_PROJECTIONS;
 use fuz_cell::CELL_COLUMN_PROJECTIONS;
@@ -25,9 +20,8 @@ use fuz_db::DB_COLUMN_PROJECTIONS;
 use fuz_testing::assert_column_projections;
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn columns_match_live_schema() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     assert_column_projections(
         &pool,
         &[

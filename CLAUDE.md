@@ -66,7 +66,7 @@ Skill(fuz-stack).
   with `media_output.ts` routing sound to a chosen output)
 - `src/test/` — vitest tests; `cross_backend/` holds the end-to-end suites
 - `crates/cord_server/` — the server library and `cordd`, plus the
-  `expected_schema.json` fixture; `tests/` holds the Postgres suites
+  `expected_schema.json` fixture; `tests/` holds the database suites
 - `crates/testing_cord_server/` — the test-only `testing_cordd`
 - `crates/xtask/` — `cargo xtask check-release`
 - `.env.development.example` — the server's local env, copied to the
@@ -464,8 +464,11 @@ plain text.
 
 The spine crates are path deps into a sibling checkout of the fuz Rust
 workspace (paths in the root `Cargo.toml`); they aren't published, so cargo
-resolves only with that checkout, and GitHub CI runs only the frontend
-check. `default-members` is `cord_server` alone, so a bare `cargo build`
+resolves only with that checkout and a `pglet/` checkout beside it
+(`fuz_testing` path-depends on pglet's server crate, and cargo loads it for
+any build). GitHub CI's `rust` job checks out fuz and pglet at `main`
+beside this repo and runs fmt, clippy, and `cargo test` on pglet, beside the
+frontend check. `default-members` is `cord_server` alone, so a bare `cargo build`
 never builds `testing_cordd`. Crates opt into the workspace lints
 (`[lints] workspace = true`): `unsafe_code` forbidden, clippy
 all/pedantic/nursery/cargo, and `unwrap_used`/`expect_used`/`panic` at warn,
@@ -561,7 +564,7 @@ cord table goes in the `_testing_reset` truncate**, or rows outlive a test. Neve
 dependent of `fuz_testing`, and `cargo xtask check-release` fails if `cordd`
 reaches `fuz_testing` or `fuz_audit` (the `testing_` prefix exempts
 `testing_cordd` by name; `cord_server` takes `fuz_testing` as a
-dev-dependency for its Postgres suites, an edge the audit ignores).
+dev-dependency for its database suites, an edge the audit ignores).
 
 ## Testing
 
@@ -572,27 +575,41 @@ re-checks, reopens, and waiting requests), and the RPC client's routing and
 push dispatch (`src/test/ui/`, the socket over `FakeSocketClient` and
 `FakeTimers`).
 
-Rust unit tests live in `#[cfg(test)]` modules and need no database,
-except `router.rs`'s `#[ignore]`d redeem-budget test, which drives the
-dispatcher over a live connection but no schema. The Postgres suites in
-`crates/cord_server/tests/` are `#[ignore]`d and reset the `public` schema
-of their database: `schema_ready.rs` (the fixture's drift guard),
-`columns.rs` (the column projections), `cords.rs`, `cord_members.rs`,
-`cord_invites.rs`, `cord_newcomers.rs`, and `cord_spaces.rs`, sharing
-`tests/common/` (the reset-and-migrate cycle, the actor seeding, and the
-`columns.rs` assertion come from the spine's `fuz_testing`); each module
-doc lists what it covers.
-`transaction_isolation.rs` resets no schema: it boots `cordd`'s router on
-its own scratch database set to `repeatable read` and asserts the refusal
-comes before any migration. `cordd_args.rs` runs unignored with no
-database: the real binary's command line and its start-failure exit codes.
+Every database test opens a database of its own through the spine's
+`fuz_testing::fresh_test_db`: an in-process pglet server by default, so
+`cargo test --workspace` runs them with nothing to set up, or, with
+`FUZ_TEST_POSTGRES_URL` naming a PostgreSQL server and a role with
+`CREATEDB`, a database created and dropped there per test. Rust unit tests
+live in `#[cfg(test)]` modules; `router.rs`'s redeem-budget test drives the
+dispatcher over a bare database. The suites in `crates/cord_server/tests/`
+are `schema_ready.rs` (the fixture's drift guard), `columns.rs` (the column
+projections), `cords.rs`, `cord_members.rs`, `cord_invites.rs`,
+`cord_newcomers.rs`, and `cord_spaces.rs`, sharing `tests/common/` (the
+fresh database, the actor seeding, and the `columns.rs` assertion come from
+the spine's `fuz_testing`); each module doc lists what it covers.
+`transaction_isolation.rs` boots `cordd`'s router on a database set to
+`repeatable read` and asserts the refusal comes before any migration.
+`cordd_args.rs` needs no database: the real binary's command line and its
+start-failure exit codes.
+
+A test of what only PostgreSQL has (a lock wait seen through
+`pg_stat_activity`, `ALTER DATABASE … SET`) opens its database with
+`fresh_postgres_db` (`TestEngine::Postgres`) and carries
+`#[ignore = "postgres-only: <why>"]`; one waiting on a pglet feature
+carries `#[ignore = "pglet: <feature>"]` and the same engine. The
+PostgreSQL leg runs everything:
 
 ```bash
-createdb cord_schema_ready_test
-cargo test -p cord_server -- --ignored
+FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres cargo test --workspace -- --include-ignored
 # regenerate expected_schema.json after a migration change
-UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready -- --ignored
+FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres UPDATE_SCHEMA_READY=1 \
+  cargo test -p cord_server --test schema_ready
 ```
+
+GitHub CI has no PostgreSQL leg, so the marked tests run only locally.
+
+A run killed before its tests' drops ran leaves `fuz_testing_*` databases
+behind; drop them by that prefix.
 
 The `cross_backend_rust` vitest project runs
 `src/test/cross_backend/*.cross.test.ts` over real HTTP against a spawned
@@ -620,7 +637,6 @@ the shared steps `cord_cross_helpers.ts`.
 npm run test:cross   # FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust
 ```
 
-`CORD_SCHEMA_READY_TEST_URL` and `CORD_CROSS_BACKEND_TEST_URL` override the
-databases (`cord_schema_ready_test`, `cord_test_rust`). Both suites wipe
-their database's `public` schema (`testing_cordd` on every boot), so point
-them only at throwaway databases.
+`CORD_CROSS_BACKEND_TEST_URL` overrides its database (`cord_test_rust`),
+whose `public` schema `testing_cordd` wipes on every boot, so point it only
+at a throwaway database.

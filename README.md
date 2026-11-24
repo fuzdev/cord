@@ -116,8 +116,10 @@ Prerequisites:
   automatically)
 - [Gro](https://github.com/fuzdev/gro) for the `gro` commands, installed
   globally (`npm i -g @fuzdev/gro`); the `npm run` scripts work without it
-- for the server only, fuz's Rust server crates checked out beside this
-  repo (see [The server](#the-server)); the frontend builds without them
+- for the server only, [fuz](https://github.com/fuzdev/fuz)'s Rust server
+  crates and [pglet](https://github.com/fuzdev/pglet) checked out beside
+  this repo (see [The server](#the-server)); the frontend builds without
+  them
 
 ```bash
 npm i
@@ -134,8 +136,10 @@ pages, `/c/<id>` and its tabs).
 
 `cordd` is built on fuz's Rust server crates, which aren't published yet.
 Building it needs a checkout of them beside this repo, at the paths the
-root `Cargo.toml` names; without one, cargo can't resolve the workspace,
-so the server doesn't build from this repo alone. The frontend builds and
+root `Cargo.toml` names, and a checkout of pglet beside that, as `pglet/`
+(fuz's test harness depends on it by path, and cargo loads it for any
+build); without both, cargo can't resolve the workspace, so the server
+doesn't build from this repo alone. The frontend builds and
 checks on its own.
 
 The Rust side uses cargo directly:
@@ -212,24 +216,28 @@ migrations.
 
 ### Tests that need Postgres
 
-`gro test` and `cargo test --workspace` need no database. These tests do,
-and each wipes the `public` schema of its database, so give them throwaway
-ones:
+`gro test` and `cargo test --workspace` need no database: the Rust database
+tests run each on an in-process [pglet](https://github.com/fuzdev/pglet)
+server of its own. The few that test what only PostgreSQL has, or wait on
+a pglet feature, are ignored there; to run every database test on
+PostgreSQL, name a server and a role with `CREATEDB`, through which each
+test creates and drops a database of its own:
+
+```bash
+FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres cargo test --workspace -- --include-ignored
+```
+
+The end-to-end tests need Postgres, and wipe the `public` schema of their
+database, so give them a throwaway one:
 
 ```bash
 # end-to-end tests of auth, cords, members, invites, newcomer links, and
 # spaces, plus fuz_app's shared spine suites: build testing_cordd, create
 # its database (cord_test_rust) when missing, and drive it over HTTP
 npm run test:cross
-
-# the schema fixture, column guards, and the cord, member, invite,
-# newcomer, and space queries
-createdb cord_schema_ready_test
-cargo test -p cord_server -- --ignored
 ```
 
-`CORD_CROSS_BACKEND_TEST_URL` and `CORD_SCHEMA_READY_TEST_URL` override
-their database URLs.
+`CORD_CROSS_BACKEND_TEST_URL` overrides its database URL.
 
 ## Deploying
 
@@ -239,8 +247,8 @@ systemd service, provisioned and deployed with
 [zap](https://zap.fuz.dev/). [DEPLOY.md](DEPLOY.md) is the runbook.
 Deploying needs the `zap` binary and `fgro`, both built from source
 ([install](https://zap.fuz.dev/docs/install)); `package.json` installs zap's
-recipes from npm. The `cordd` build also needs fuz's server crates beside this
-repo.
+recipes from npm. The `cordd` build also needs fuz's server crates and pglet
+beside this repo.
 
 [cord.fuz.dev](https://cord.fuz.dev/) is a static site built from the same
 frontend (`npm run build:site`): the intro, about, and the a/v check, with

@@ -3,14 +3,10 @@
 //! refuses it **before migrating**, so a misconfigured database is never
 //! written to.
 //!
-//! The boot runs on its own scratch database
-//! (`fuz_testing::ScratchDb`, `cord_isolation_scratch`), since the setting is
-//! database-wide and would leak into every suite sharing the test database.
-//! The check itself is the spine's (`fuz_actions::server`), tested there.
-//!
-//! ```bash
-//! cargo test -p cord_server --test transaction_isolation -- --ignored
-//! ```
+//! The setting is database-level (`ALTER DATABASE … SET`), which only
+//! PostgreSQL has, so the test runs on PostgreSQL alone, over a database of
+//! its own. The check itself is the spine's (`fuz_actions::server`), tested
+//! there.
 
 mod common;
 
@@ -18,25 +14,32 @@ use std::sync::Arc;
 
 use fuz_actions::server::{SpineBackendOptions, StartupError};
 use fuz_db::create_pool;
-use fuz_testing::ScratchDb;
+use fuz_testing::{TestingDbOptions, fresh_test_db};
 
 #[tokio::test]
-#[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
+#[ignore = "postgres-only: a database-level `ALTER DATABASE … SET`"]
 async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
-    let scratch = ScratchDb::create(common::DB, "cord_isolation_scratch").await;
-    create_pool(scratch.url(), &fuz_db::PoolOptions::default())
-        .expect("create_pool")
-        .get()
+    // bare: the boot under test runs the chain, so nothing is migrated first
+    let db = fresh_test_db(TestingDbOptions {
+        migrations: &[],
+        ..common::DB.postgres_only()
+    })
+    .await;
+    let client = db.get().await.expect("pool.get");
+    let name: String = client
+        .query_one("SELECT current_database()", &[])
         .await
-        .expect("pool.get")
-        .batch_execute(
-            "ALTER DATABASE cord_isolation_scratch \
-             SET default_transaction_isolation = 'repeatable read'",
-        )
+        .expect("read the database name")
+        .get(0);
+    client
+        .batch_execute(&format!(
+            "ALTER DATABASE {name} SET default_transaction_isolation = 'repeatable read'"
+        ))
         .await
         .expect("alter database");
+    drop(client);
 
-    let url = scratch.url().to_owned();
+    let url = db.url().to_owned();
     let env = fuz_http::BaseServerEnv::from_vars(
         &|k| match k {
             "DATABASE_URL" => Some(url.clone()),
@@ -58,7 +61,7 @@ async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
     )
     .await;
 
-    let migrated: bool = create_pool(scratch.url(), &fuz_db::PoolOptions::default())
+    let migrated: bool = create_pool(db.url(), &fuz_db::PoolOptions::default())
         .expect("create_pool")
         .get()
         .await
@@ -70,7 +73,6 @@ async fn the_boot_refuses_anything_but_read_committed_before_migrating() {
         .await
         .expect("query the tracker")
         .get(0);
-    scratch.drop_database().await;
 
     let err = refused.expect_err("repeatable read is refused");
     assert!(

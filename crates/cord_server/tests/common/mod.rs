@@ -2,13 +2,13 @@
 //! migrated database, seeded actors, and the cord and invite-link steps the
 //! suites take, each run in its own transaction as the actions do.
 //!
-//! Every suite here but `transaction_isolation` (which boots on its own
-//! scratch database) drops and recreates the
-//! `public` schema of the one test database (`CORD_SCHEMA_READY_TEST_URL`,
-//! default `postgres://localhost/cord_schema_ready_test`), so each suite keeps
-//! its scenarios in a single test function; cargo runs the test binaries one
-//! at a time. That cycle and the identity seeding are the spine's shared ones
-//! in `fuz_testing` (`fresh_db`, `seed`); the cord steps are this module's.
+//! Each test opens a database of its own ([`fresh_db`], or
+//! [`fresh_postgres_db`] for a test of what only PostgreSQL has), through the
+//! spine's `fuz_testing::fresh_test_db`: an in-process pglet server by
+//! default, a created and dropped PostgreSQL database under
+//! `FUZ_TEST_POSTGRES_URL`. That and the identity seeding are the spine's
+//! shared ones in `fuz_testing` (its `fresh_db` and `seed` modules); the
+//! cord steps are this module's.
 
 // `allow`, not `expect`: this module is compiled into every test binary, and
 // which helpers go unused differs from one binary to the next.
@@ -39,17 +39,15 @@ use fuz_auth::account_queries::{query_account_lock_for_purge, query_purge_accoun
 use fuz_auth::invite_queries::query_invite_delete_unclaimed_by_creators;
 use fuz_auth::query_create_role_grant;
 use fuz_db::{Pool, col, iso8601_timestamp_expr, qualify_columns};
-use fuz_testing::{TestingDbOptions, fresh_test_db_pool, seed_account_actor};
+use fuz_testing::{TestDb, TestEngine, TestingDbOptions, fresh_test_db, seed_account_actor};
 use uuid::Uuid;
 
-/// The suites' database: `CORD_SCHEMA_READY_TEST_URL` (default
-/// `postgres://localhost/cord_schema_ready_test`) over the chain
-/// `build_router` runs, no scratch DDL.
+/// The suites' database: the chain `build_router` runs, no scratch DDL.
 pub const DB: TestingDbOptions<'static> = TestingDbOptions {
-    env_var: "CORD_SCHEMA_READY_TEST_URL",
-    default_db: "cord_schema_ready_test",
+    suite: "cord_server",
     migrations: &cord_migration_namespaces(),
     setup_sql: None,
+    engine: TestEngine::Any,
 };
 
 /// Run `$body` in its own transaction bound to `$tx`, committing on `Ok`
@@ -75,9 +73,14 @@ macro_rules! in_tx {
 )]
 pub(crate) use in_tx;
 
-/// A pool over a freshly reset and migrated database.
-pub async fn fresh_db_pool() -> Pool {
-    fresh_test_db_pool(DB).await
+/// A freshly migrated database of the test's own.
+pub async fn fresh_db() -> TestDb {
+    fresh_test_db(DB).await
+}
+
+/// [`fresh_db`] on PostgreSQL alone, for a test of what only PostgreSQL has.
+pub async fn fresh_postgres_db() -> TestDb {
+    fresh_test_db(DB.postgres_only()).await
 }
 
 /// Create a cord owned by `owner`.

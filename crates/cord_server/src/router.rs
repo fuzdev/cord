@@ -566,21 +566,20 @@ mod tests {
     /// Redeem through the whole router and the spine's dispatcher, which
     /// needs a live connection (it opens redeem's transaction before the
     /// handler runs) but no schema: an empty token is refused at params
-    /// validation, after the limiter charges and before any query. The
-    /// database must exist (`createdb`), migrated or not; a missing one
-    /// answers 503 `database unavailable` at that transaction, so the test
-    /// checks out a connection first and names the cause.
+    /// validation, after the limiter charges and before any query. So the
+    /// test's database is a bare one of its own.
     #[tokio::test]
-    #[ignore = "requires Postgres at CORD_SCHEMA_READY_TEST_URL"]
     async fn redeem_refuses_past_its_budget_per_ip() {
         use crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS;
 
-        let url = std::env::var("CORD_SCHEMA_READY_TEST_URL")
-            .unwrap_or_else(|_| "postgres://localhost/cord_schema_ready_test".to_owned());
-        let app = lazy_app_over(&url, RateLimiterMode::Enforced);
-        drop(app.backend.pool.get().await.expect(
-            "CORD_SCHEMA_READY_TEST_URL's database must exist (`createdb`): redeem needs a connection, not a schema",
-        ));
+        let db = fuz_testing::fresh_test_db(fuz_testing::TestingDbOptions {
+            suite: "cord_server_router",
+            migrations: &[],
+            setup_sql: None,
+            engine: fuz_testing::TestEngine::Any,
+        })
+        .await;
+        let app = lazy_app_over(db.url(), RateLimiterMode::Enforced);
         let router = full_router_over(&app);
         let redeem = serde_json::json!({
             "jsonrpc": "2.0",

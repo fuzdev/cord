@@ -13,7 +13,8 @@ publish = false
 
 [workspace.dependencies]
 # The fuz Rust spine crates, as path deps to a sibling checkout of the fuz
-# workspace (the crates aren't published yet).
+# workspace (the crates aren't published yet). `fuz_testing` path-depends on
+# pglet's server crate, so a `pglet` checkout beside it is needed too.
 fuz_actions = { path = "../fuz/crates/fuz_actions" }
 fuz_auth = { path = "../fuz/crates/fuz_auth" }
 fuz_cell = { path = "../fuz/crates/fuz_cell" }
@@ -23,9 +24,9 @@ fuz_sys = { path = "../fuz/crates/fuz_sys" }
 # Dev tooling: the `cargo xtask check-release` production-binary audit.
 fuz_audit = { path = "../fuz/crates/fuz_audit" }
 # Test-only spine fixtures (the fast hasher, the `_testing_*` action specs,
-# the daemon token, the shared Postgres-suite harness). `testing_cord_server`
+# the daemon token, the shared database-test harness). `testing_cord_server`
 # (bin `testing_cordd`) is its only runtime dependent; `cord_server` takes it
-# as a dev-dependency for its Postgres suites. `cargo xtask check-release`
+# as a dev-dependency for its database suites. `cargo xtask check-release`
 # forbids it from the production `cordd` graph.
 fuz_testing = { path = "../fuz/crates/fuz_testing" }
 

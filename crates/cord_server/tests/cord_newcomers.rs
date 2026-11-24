@@ -1,4 +1,4 @@
-//! Postgres-backed tests for newcomer links
+//! Database tests for newcomer links
 //! (`cord_server::invite::redemption_queries`, and accept after a
 //! redemption in `cord_server::invite::queries`).
 //!
@@ -26,13 +26,11 @@
 //! sweep and the spine's auth cleanup, which closes the expired session it
 //! deletes through the closer they're handed, and they end on shutdown.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
-//! schema, so the scenarios run in order from one test function:
-//!
-//! ```bash
-//! cargo test -p cord_server --test cord_newcomers -- --ignored
-//! ```
+//! The scenarios run in order from one test function, over a database of
+//! their own (`common::fresh_db`), but for the tests on PostgreSQL alone:
+//! the races that observe a lock wait, which only PostgreSQL shows, and the
+//! expiry sweep with the upkeep tasks, whose `SKIP LOCKED` pass needs
+//! row-granular locks pglet doesn't have yet.
 
 #![expect(
     clippy::expect_used,
@@ -46,8 +44,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{
-    accept, add_member, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
-    fresh_db_pool, in_tx, lock_waiters, mint, purge_account_steps, redeem, redemption_list,
+    accept, add_member, await_lock_waiters, await_lock_waiters_or_finished, create_cord, fresh_db,
+    fresh_postgres_db, in_tx, lock_waiters, mint, purge_account_steps, redeem, redemption_list,
     seed_actor, status_of,
 };
 use cord_server::cord_authz::CordRole;
@@ -194,9 +192,8 @@ async fn redemption_counts(pool: &Pool, cord_id: Uuid, invite_id: Uuid) -> (i64,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn newcomer_links_admit_new_people() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let admin = seed_admin(&pool, "admin").await;
     let cord = create_cord(&pool, "the porch", admin).await;
 
@@ -217,6 +214,18 @@ async fn newcomer_links_admit_new_people() {
         .await;
     scenario_a_soft_deleted_minter_closes_the_link(&pool, &cord).await;
     scenario_a_purged_minter_fails_closed(&pool, &cord).await;
+    scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
+    scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
+    scenario_a_purge_of_an_accepted_newcomer(&pool, &cord, admin).await;
+}
+
+/// The races on real row locks, which only PostgreSQL shows waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "postgres-only: lock waits observed through `pg_stat_activity`"]
+async fn newcomer_links_race_removals_and_purges_in_lock_order() {
+    let pool = fresh_postgres_db().await;
+    let admin = seed_admin(&pool, "admin").await;
+    let cord = create_cord(&pool, "the porch", admin).await;
     for removal in [
         MinterRemoval::Delete,
         MinterRemoval::Revoke,
@@ -232,11 +241,23 @@ async fn newcomer_links_admit_new_people() {
     scenario_a_purge_a_leave_and_an_accept(&pool, &cord).await;
     scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(&pool).await;
     scenario_a_purge_of_the_newcomer_mid_fallback_accept(&pool, &cord).await;
+}
+
+/// The expiry sweep, which skips a link another transaction holds, alone and
+/// as the server's upkeep runs it beside the spine's auth cleanup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "pglet: row-granular SKIP LOCKED (pglet skips every row while another transaction holds its one writer lock)"]
+async fn the_expiry_sweep_releases_dead_reservations() {
+    let pool = fresh_postgres_db().await;
+    let admin = seed_admin(&pool, "admin").await;
+    let cord = create_cord(&pool, "the porch", admin).await;
+    // links past the grace with nothing waiting, which the sweep releases
+    // nothing from, and a live link closed to newcomers, which it leaves alone
+    scenario_accept_within_the_grace(&pool, &cord, admin).await;
     scenario_dead_links_never_say_whether_a_username_is_free(&pool, &cord, admin).await;
-    scenario_redemptions_never_overshoot_max_uses(&pool, &cord, admin).await;
+    scenario_a_demoted_minter_closes_the_link(&pool, &cord).await;
     scenario_the_expiry_sweep(&pool, &cord, admin).await;
     scenario_the_upkeep_tasks(&pool, &cord, admin).await;
-    scenario_a_purge_of_an_accepted_newcomer(&pool, &cord, admin).await;
 }
 
 /// A redemption creates the spine invite and the row and spends one use;

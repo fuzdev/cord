@@ -1,4 +1,4 @@
-//! Postgres-backed tests for cord invite links
+//! Database tests for cord invite links
 //! (`cord_server::invite::queries`).
 //!
 //! What only the database can show: the table keeps a digest, never the
@@ -8,13 +8,8 @@
 //! and spends one use, an existing member spends none, and concurrent
 //! accepts never spend more uses than the link has.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
-//! schema, so the scenarios run in order from one test function:
-//!
-//! ```bash
-//! cargo test -p cord_server --test cord_invites -- --ignored
-//! ```
+//! Its scenarios run in order from one test function, over a database of
+//! its own (`common::fresh_db`).
 
 #![expect(
     clippy::unwrap_used,
@@ -25,7 +20,7 @@
 
 mod common;
 
-use common::{accept, create_cord, fresh_db_pool, mint, seed_actor, status_of};
+use common::{accept, create_cord, fresh_db, mint, seed_actor, status_of};
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_member_queries::query_cord_members;
 use cord_server::cord_queries::CordRow;
@@ -51,9 +46,8 @@ async fn cord_grant_count(pool: &Pool, cord_id: Uuid, actor_id: Uuid) -> i64 {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
 async fn invite_links_admit_existing_accounts() {
-    let pool = fresh_db_pool().await;
+    let pool = fresh_db().await;
     let owner = seed_actor(&pool, "owner").await;
     let guest = seed_actor(&pool, "guest").await;
     let cord = create_cord(&pool, "the porch", owner).await;

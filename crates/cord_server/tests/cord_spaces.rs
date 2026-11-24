@@ -1,4 +1,4 @@
-//! Postgres-backed tests for a cord's spaces (`cord_server::cord_space_queries`).
+//! Database tests for a cord's spaces (`cord_server::cord_space_queries`).
 //!
 //! What only the database can show: a space is a private child cell of its
 //! cord with no `created_by` and the cord's role-shaped grants stamped on it,
@@ -12,13 +12,10 @@
 //! every verb; and the cap on live spaces holds, under concurrent creates
 //! too.
 //!
-//! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
-//! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
-//! schema, so the scenarios run in order from one test function:
-//!
-//! ```bash
-//! cargo test -p cord_server --test cord_spaces -- --ignored
-//! ```
+//! The scenarios run in order from one test function, over a database of
+//! their own on PostgreSQL alone (`common::fresh_postgres_db`): the seeding
+//! concatenates `jsonb`, which pglet doesn't have yet. The ones that observe
+//! a lock wait, which only PostgreSQL shows, are a test of their own.
 
 #![expect(
     clippy::expect_used,
@@ -29,7 +26,7 @@ mod common;
 
 use common::{
     add_member, assert_refused, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
-    fresh_db_pool, in_tx, lock_waiters, purge_account_steps, seed_actor,
+    fresh_postgres_db, in_tx, lock_waiters, purge_account_steps, seed_actor,
 };
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CORD_STAMPED_GRANTS, CordRow};
@@ -138,31 +135,10 @@ struct Den {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires PostgreSQL with the cord_schema_ready_test database"]
+#[ignore = "pglet: jsonb || jsonb"]
 async fn spaces_are_cord_cells_its_managers_shape() {
-    let pool = fresh_db_pool().await;
-    let owner = seed_actor(&pool, "owner").await;
-    let admin = seed_actor(&pool, "admin").await;
-    let member = seed_actor(&pool, "member").await;
-    let stranger = seed_actor(&pool, "stranger").await;
-    let instance_admin = seed_actor(&pool, "operator").await;
-    {
-        let client = pool.get().await.expect("pool.get");
-        query_create_role_grant(&client, &instance_admin, ROLE_ADMIN, None, None, None, None)
-            .await
-            .expect("global admin grant");
-    }
-    let cord = create_cord(&pool, "the den", owner).await;
-    add_member(&pool, cord.id, admin, CordRole::Admin).await;
-    add_member(&pool, cord.id, member, CordRole::Member).await;
-    let den = Den {
-        cord,
-        owner,
-        admin,
-        member,
-        stranger,
-        instance_admin,
-    };
+    let pool = fresh_postgres_db().await;
+    let den = seed_den(&pool).await;
 
     scenario_a_space_is_a_child_cell(&pool, &den).await;
     scenario_list_order(&pool, &den).await;
@@ -171,11 +147,46 @@ async fn spaces_are_cord_cells_its_managers_shape() {
     scenario_rename_keeps_the_rest(&pool, &den).await;
     scenario_delete(&pool, &den).await;
     scenario_the_role_is_read_afresh(&pool, &den).await;
-    scenario_a_demotion_holding_the_lock(&pool).await;
     scenario_the_cap(&pool).await;
     scenario_concurrent_creates_at_the_cap(&pool).await;
+}
+
+/// The writes that queue on a lock, which only PostgreSQL shows waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "postgres-only: lock waits observed through `pg_stat_activity` and `pg_blocking_pids`"]
+async fn space_writes_queue_on_their_locks() {
+    let pool = fresh_postgres_db().await;
+    let den = seed_den(&pool).await;
+    scenario_a_demotion_holding_the_lock(&pool).await;
     for write in [SpaceWrite::Rename, SpaceWrite::Delete] {
         scenario_a_purge_of_the_writer_mid_write(&pool, &den, write).await;
+    }
+}
+
+/// The den every scenario starts from: a cord with an owner, an admin, and a
+/// member, plus a stranger and an instance admin outside it.
+async fn seed_den(pool: &Pool) -> Den {
+    let owner = seed_actor(pool, "owner").await;
+    let admin = seed_actor(pool, "admin").await;
+    let member = seed_actor(pool, "member").await;
+    let stranger = seed_actor(pool, "stranger").await;
+    let instance_admin = seed_actor(pool, "operator").await;
+    {
+        let client = pool.get().await.expect("pool.get");
+        query_create_role_grant(&client, &instance_admin, ROLE_ADMIN, None, None, None, None)
+            .await
+            .expect("global admin grant");
+    }
+    let cord = create_cord(pool, "the den", owner).await;
+    add_member(pool, cord.id, admin, CordRole::Admin).await;
+    add_member(pool, cord.id, member, CordRole::Member).await;
+    Den {
+        cord,
+        owner,
+        admin,
+        member,
+        stranger,
+        instance_admin,
     }
 }
 
