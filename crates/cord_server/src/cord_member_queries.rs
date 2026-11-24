@@ -8,13 +8,16 @@
 //! sees or can target. `live_role_grant_sql` is that rule in SQL, and every
 //! read of who holds a role goes through it.
 //!
-//! Every change starts by locking the cord's cell row ([`query_cord_lock`]),
-//! then reads the membership afresh and applies the rules in
-//! [`crate::cord_authz`] to that read, not to the request's role-grant
-//! snapshot. Membership changes on one cord therefore run one at a time, so
-//! two owners stepping down together can't both pass the last-owner check,
-//! and a caller whose demotion committed first can't act on the power they
-//! lost. Invite accepts take the same lock ([`crate::invite::queries`]).
+//! Every change starts by taking the cord's scope lock shared (the spine's
+//! `query_scope_lock_shared`, keyed by the cord id, the lock its
+//! `query_create_role_grant` takes on a cord-scoped grant), then locks the
+//! cord's cell row ([`query_cord_lock`]), then reads the membership afresh
+//! and applies the rules in [`crate::cord_authz`] to that read, not to the
+//! request's role-grant snapshot. Membership changes on one cord therefore
+//! run one at a time, so two owners stepping down together can't both pass
+//! the last-owner check, and a caller whose demotion committed first can't
+//! act on the power they lost. Invite accepts take the same lock
+//! ([`crate::invite::queries`]).
 //!
 //! The other managing verbs (renaming the cord, minting and revoking its
 //! links) take no lock: they read the caller's role afresh with a plain
@@ -29,12 +32,24 @@
 //! creates the new one. The spine's own grant paths can't touch cord roles
 //! ([`crate::roles`]), so this lock covers every writer.
 //!
+//! The scope lock comes first, holding no row, because a teardown of the
+//! cord would take it exclusive and then revoke the cord's grants before it
+//! touched the cord's row: a change that held the cord's row (or a grant's)
+//! and then waited on the scope lock, inside the grant, would close a cycle
+//! with it. Taken first, a change waits out a teardown in flight and then
+//! finds the cord gone, and a teardown that starts later waits for the
+//! change and then ends what it wrote. Remove and leave grant nothing but
+//! take it too, through the same read: they hold the cord's row and then
+//! lock offer and grant rows, the rows a teardown takes before it reaches
+//! the cord's. Nothing in Cord takes the lock exclusive yet, so today this is
+//! the order a teardown will need.
+//!
 //! Call the change functions inside a transaction; the lock is held until it
 //! ends.
 
 use deadpool_postgres::GenericClient;
 use fuz_auth::role_grant_offer_queries::query_revoke_role_grant;
-use fuz_auth::{query_create_role_grant, role_grant_active_sql};
+use fuz_auth::{query_create_role_grant, query_scope_lock_shared, role_grant_active_sql};
 use fuz_cell::CellError;
 use fuz_db::iso8601_timestamp_column;
 use uuid::Uuid;
@@ -91,6 +106,12 @@ pub(crate) fn live_cord_grant_sql(select: &str, conditions: &str) -> String {
 /// The one way Cord's verbs confer a cord role: a cord-scoped grant through
 /// the spine's `query_create_role_grant`, with no expiry. The caller keeps
 /// the one-role-per-(actor, cord) rule.
+///
+/// The spine's query takes the cord's scope lock shared, so a caller holding
+/// any row takes that lock first (`query_scope_lock_shared` on `cord_id`),
+/// as the member changes and invite accept do; cord create holds only the
+/// cord row its own transaction inserted, which no other transaction can
+/// see, let alone wait on.
 ///
 /// # Errors
 ///
@@ -383,12 +404,19 @@ impl CordMemberChange {
     }
 }
 
-/// Lock the cord and read its members, then find the caller among them.
+/// Take the cord's scope lock shared, lock the cord, and read its members,
+/// then find the caller among them.
+///
+/// The scope lock before the cord's row, as the spine orders it (the module
+/// doc has why); the grant a role set goes on to create re-takes it, free.
 async fn lock_and_read<C: GenericClient + ?Sized>(
     client: &C,
     cord_id: Uuid,
     caller_actor_id: Uuid,
 ) -> Result<(Vec<CordMember>, CordMember), CordMemberError> {
+    query_scope_lock_shared(client, cord_id)
+        .await
+        .map_err(CellError::Db)?;
     if query_cord_lock(client, cord_id).await?.is_none() {
         return Err(CordMemberError::CordNotFound);
     }

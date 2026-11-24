@@ -7,8 +7,10 @@
 //! cord's lock; nobody removes themself; the unlocked managing verbs' role
 //! read sees a demotion or removal the request's snapshot doesn't;
 //! soft-deleted actors aren't members; two owners leaving at once can't
-//! both get out; and an invite accept racing a removal and a role change on
-//! the same actor ends with at most one role and no deadlock.
+//! both get out; an invite accept racing a removal and a role change on
+//! the same actor ends with at most one role and no deadlock; and a role set
+//! and an accept take the cord's scope lock before any row, so with the lock
+//! held exclusive (as a teardown would) they wait holding nothing.
 //!
 //! `#[ignore]`d (needs Postgres; shares the `schema_ready` suite's database
 //! and its `CORD_SCHEMA_READY_TEST_URL` override). It resets the `public`
@@ -43,6 +45,7 @@ use cord_server::invite::queries::{
 };
 use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
 use fuz_auth::account_queries::{query_account_lock_for_purge, query_account_purge_advisory_lock};
+use fuz_auth::query_scope_lock_exclusive;
 use fuz_db::Pool;
 use uuid::Uuid;
 
@@ -135,6 +138,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
     let (shed, host) = scenario_the_unlocked_verbs_read_the_role_afresh(&pool, stranger).await;
     scenario_accept_remove_and_role_set_race(&pool, &shed, host).await;
     scenario_a_purge_of_a_renamer_mid_remove(&pool).await;
+    scenario_the_scope_lock_comes_first(&pool).await;
 }
 
 /// Owners first, soft-deleted actors left out.
@@ -790,4 +794,123 @@ async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
     assert!(purged.is_ok(), "the purge commits: {purged:?}");
     assert!(removed.is_ok(), "the remove commits: {removed:?}");
     assert_eq!(roster(pool, cord.id).await, vec![(host, CordRole::Owner)]);
+}
+
+/// Take `sql`'s row lock with `NOWAIT` in a transaction of its own, rolled
+/// back: `Err` when another transaction holds a conflicting lock.
+async fn try_row_lock(pool: &Pool, sql: &str, id: Uuid) -> Result<(), String> {
+    let mut client = pool.get().await.expect("pool.get");
+    let tx = client.transaction().await.expect("begin");
+    let result = tx
+        .query(sql, &[&id])
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"));
+    tx.rollback().await.expect("rollback");
+    result
+}
+
+const CORD_ROW_PROBE: &str = "SELECT 1 FROM cell WHERE id = $1 FOR NO KEY UPDATE NOWAIT";
+const LINK_ROW_PROBE: &str = "SELECT 1 FROM cord_invite WHERE id = $1 FOR NO KEY UPDATE NOWAIT";
+// the purge's lock, which conflicts with accept's `FOR KEY SHARE`
+const ACCOUNT_ROW_PROBE: &str = "SELECT 1 FROM account WHERE id = $1 FOR UPDATE NOWAIT";
+
+/// With the cord's scope lock held exclusive, as a teardown of the cord
+/// would hold it while it revokes the cord's grants and then reaches the
+/// cord's row, a role set and an accept wait on that lock before taking any
+/// row: the cord's row (and accept's link and minter account) stay free to
+/// another transaction, so the teardown could take them. Released, both
+/// complete.
+async fn scenario_the_scope_lock_comes_first(pool: &Pool) {
+    let host = seed_actor(pool, "scope_host").await;
+    let target = seed_actor(pool, "scope_target").await;
+    let joiner = seed_actor(pool, "scope_joiner").await;
+    let cord = create_cord(pool, "the scope lock", host).await;
+    add_member(pool, cord.id, target, CordRole::Member).await;
+    let (token, invite_id) = mint(pool, cord.id, host, None, None, false).await;
+    let host_account: Uuid = {
+        let client = pool.get().await.expect("pool.get");
+        client
+            .query_one("SELECT account_id FROM actor WHERE id = $1", &[&host])
+            .await
+            .expect("the actor")
+            .get(0)
+    };
+    let waiting_before = lock_waiters(pool).await;
+
+    // the teardown's first statement, held open
+    let mut teardown_client = pool.get().await.expect("pool.get");
+    let teardown = teardown_client.transaction().await.expect("begin");
+    query_scope_lock_exclusive(&teardown, cord.id)
+        .await
+        .expect("the scope lock, exclusive");
+
+    let setting = tokio::spawn({
+        let pool = pool.clone();
+        let cord_id = cord.id;
+        async move {
+            in_tx!(pool, |tx| query_cord_member_role_set(
+                &tx,
+                cord_id,
+                host,
+                target,
+                CordRole::Admin
+            )
+            .await)
+        }
+    });
+    let accepting = tokio::spawn({
+        let pool = pool.clone();
+        let token_hash = hash_cord_invite_token(&token);
+        async move {
+            in_tx!(pool, |tx| query_cord_invite_accept(
+                &tx,
+                &token_hash,
+                joiner
+            )
+            .await)
+        }
+    });
+    await_lock_waiters(
+        pool,
+        waiting_before + 2,
+        "the role set and the accept wait on the scope lock",
+    )
+    .await;
+    assert!(!setting.is_finished() && !accepting.is_finished());
+
+    // neither holds a row while it waits
+    let cord_row = try_row_lock(pool, CORD_ROW_PROBE, cord.id).await;
+    let link_row = try_row_lock(pool, LINK_ROW_PROBE, invite_id).await;
+    let account_row = try_row_lock(pool, ACCOUNT_ROW_PROBE, host_account).await;
+
+    teardown.commit().await.expect("release the scope lock");
+    let set = setting.await.expect("the role set task");
+    let accepted = accepting.await.expect("the accept task");
+    assert!(
+        cord_row.is_ok(),
+        "the cord's row is free while they wait: {cord_row:?}"
+    );
+    assert!(
+        link_row.is_ok(),
+        "the link's row is free while accept waits: {link_row:?}"
+    );
+    assert!(
+        account_row.is_ok(),
+        "the minter's account is free while accept waits: {account_row:?}"
+    );
+    assert!(set.is_ok(), "the role set completes: {set:?}");
+    assert!(
+        accepted.as_ref().is_ok_and(|a| a.role_grant_id.is_some()),
+        "the accept joins: {accepted:?}"
+    );
+    let mut members = roster(pool, cord.id).await;
+    members.sort();
+    let mut expected = vec![
+        (host, CordRole::Owner),
+        (target, CordRole::Admin),
+        (joiner, CordRole::Member),
+    ];
+    expected.sort();
+    assert_eq!(members, expected);
 }

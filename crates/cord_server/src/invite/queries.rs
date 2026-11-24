@@ -10,14 +10,16 @@
 //! once `use_count` reaches `max_uses`, and active otherwise. Reads compute
 //! the expiry against the database clock, so every check agrees on "now".
 //!
-//! Accepting a link ([`query_cord_invite_accept`]) locks the cord's row (as
-//! the member changes in [`crate::cord_member_queries`] do), then its
-//! minter's account, then the link's, so concurrent accepts can't push
-//! `use_count` past `max_uses` and can't race a membership change. The cord
-//! and link locks are `FOR NO KEY UPDATE`: enough to serialize the writers
-//! (a revoke's UPDATE waits on the link's lock), and no stronger. The
-//! table's own CHECK refuses an overshoot too. Redeeming a newcomer link
-//! ([`crate::invite::redemption_queries`]) takes the link's lock as well.
+//! Accepting a link ([`query_cord_invite_accept`]) takes the cord's scope
+//! lock shared and locks the cord's row (as the member changes in
+//! [`crate::cord_member_queries`] do, which has why the scope lock comes
+//! first), then its minter's account, then the link's, so concurrent
+//! accepts can't push `use_count` past `max_uses` and can't race a
+//! membership change. The cord and link locks are `FOR NO KEY UPDATE`:
+//! enough to serialize the writers (a revoke's UPDATE waits on the link's
+//! lock), and no stronger. The table's own CHECK refuses an overshoot too.
+//! Redeeming a newcomer link ([`crate::invite::redemption_queries`]) takes
+//! the link's lock as well.
 //!
 //! Both lock the link's minter's account row before the link's, the link
 //! read unlocked to find the minter and re-checked under its lock. A purge
@@ -55,7 +57,7 @@
 //! client or inside the action's transaction.
 
 use deadpool_postgres::GenericClient;
-use fuz_auth::{generate_session_token, hash_session_token};
+use fuz_auth::{generate_session_token, hash_session_token, query_scope_lock_shared};
 use fuz_cell::CellError;
 use fuz_db::tokio_postgres::Row;
 use fuz_db::{col, iso8601_timestamp_expr, qualify_columns};
@@ -652,9 +654,10 @@ pub struct CordInviteAccepted {
 /// Accept the link whose token hashes to `token_hash`, as the actor
 /// `actor_id`.
 ///
-/// Locks the cord's row, then key-shares the minter's account row and locks
-/// the link's ([`query_cord_invite_lock_with_minter_account`]), then the
-/// caller's pending redemption of the link, if they have one
+/// Takes the cord's scope lock shared and locks the cord's row, then
+/// key-shares the minter's account row and locks the link's
+/// ([`query_cord_invite_lock_with_minter_account`]), then the caller's
+/// pending redemption of the link, if they have one
 /// ([`query_cord_invite_redemption_pending_for_actor`]): an unaccepted
 /// redemption whose signup invite the caller's account claimed, or, when
 /// their signup claimed none (open signup, or an older invite matching their
@@ -688,11 +691,16 @@ pub async fn query_cord_invite_accept<C: GenericClient + ?Sized>(
     token_hash: &str,
     actor_id: Uuid,
 ) -> Result<CordInviteAccepted, CordInviteError> {
-    // the cord's lock first, then the minter's, then the link's (the module
-    // doc has why); a link's cord never changes, so it is read unlocked
+    // the cord's scope lock first, holding no row, then the cord's lock, then
+    // the minter's, then the link's (the module doc has why); a link's cord
+    // never changes, so it is read unlocked, and the grant below re-takes the
+    // scope lock, free
     let Some(unlocked) = query_cord_invite_by_token_hash(client, token_hash).await? else {
         return Err(CordInviteError::NotFound);
     };
+    query_scope_lock_shared(client, unlocked.cord_id)
+        .await
+        .map_err(CellError::Db)?;
     let Some(cord) = query_cord_lock(client, unlocked.cord_id).await? else {
         return Err(CordInviteError::NotFound);
     };

@@ -156,14 +156,20 @@ The load-bearing rules. Each module named holds the full reasoning.
   after the IDOR mask. Space names share the cord name rules and
   validator, with their own length. (`cord_space_queries.rs`)
 - **Serialization.** Every membership change (role set, remove, leave,
-  accept) locks the cord's cell row, then re-reads membership and applies
+  accept) takes the cord's scope lock shared (the spine's
+  `query_scope_lock_shared`, keyed by the cord id), holding no row, then
+  locks the cord's cell row, then re-reads membership and applies
   the rules to that read, never the request's snapshot; this relies on
   READ COMMITTED, which `cordd` checks at boot, refusing to serve (exit
   `2`) when `default_transaction_isolation` is anything else. The other
   managing writes (rename, invite create and revoke) take no cord lock and
   read the caller's role afresh inside the transaction; minting a newcomer
   link also re-reads the caller's global `admin` grant, under a share
-  lock. Accept locks the cord, then the link's minter's account, then the
+  lock. The scope lock comes first because a cord teardown (not yet
+  built) would take it exclusive and revoke the cord's grants before
+  touching its row; cord create needs none, granting on a row its own
+  transaction inserted.
+  Accept locks the cord, then the link's minter's account, then the
   link, then the redemption; redeem locks the minter's account, then the
   link, and no cord. Revoke must not take the cord lock after the link's.
   The minter's account comes before the link because a purge holds it,

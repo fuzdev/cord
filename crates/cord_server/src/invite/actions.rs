@@ -66,9 +66,10 @@
 //! transaction (`require_cord_manager_fresh`), not from the request's
 //! role-grant snapshot, which the dispatcher takes before the transaction
 //! opens: an admin removed in that gap can't mint a link to rejoin through.
-//! Neither takes the cord's row lock. Accept locks the link and then the
-//! cord, so a revoke that locked the cord and then the link could deadlock
-//! against it. List is a read, so it trusts the snapshot.
+//! Neither takes the cord's row lock. Accept locks the cord, then the
+//! link's minter's account, then the link, so a revoke, whose UPDATE locks
+//! the link, must not take the cord's lock after it. List is a read, so it
+//! trusts the snapshot.
 //!
 //! Create is rate-limited per account (the spine's
 //! [`RateLimitClass::Account`], as on `role_grant_assign`), since each call
@@ -616,8 +617,8 @@ async fn handle_cord_invite_revoke<C: GenericClient + ?Sized>(
     auth: &RequestActorContext,
     input: &CordInviteRevokeInput,
 ) -> Result<Value, JsonrpcError> {
-    // no cord lock: accept locks the link then the cord, and this UPDATE
-    // locks the link, so taking the cord first would invert that order
+    // no cord lock: accept locks the cord and then the link, and this UPDATE
+    // locks the link, so a cord lock taken after it would invert that order
     require_cord_manager_fresh(
         client,
         "cord_invite_revoke",
