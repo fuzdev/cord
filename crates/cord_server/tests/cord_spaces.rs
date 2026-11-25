@@ -13,9 +13,8 @@
 //! too.
 //!
 //! The scenarios run in order from one test function, over a database of
-//! their own on PostgreSQL alone (`common::fresh_postgres_db`): the seeding
-//! concatenates `jsonb`, which pglet doesn't have yet. The ones that observe
-//! a lock wait, which only PostgreSQL shows, are a test of their own.
+//! their own (`common::fresh_db`). The ones that observe a lock wait, which
+//! only PostgreSQL shows, are a test of their own.
 
 #![expect(
     clippy::expect_used,
@@ -26,7 +25,7 @@ mod common;
 
 use common::{
     add_member, assert_refused, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
-    fresh_postgres_db, in_tx, lock_waiters, purge_account_steps, seed_actor,
+    fresh_db, fresh_postgres_db, in_tx, lock_waiters, purge_account_steps, seed_actor,
 };
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CORD_STAMPED_GRANTS, CordRow};
@@ -135,9 +134,8 @@ struct Den {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "pglet: jsonb || jsonb"]
 async fn spaces_are_cord_cells_its_managers_shape() {
-    let pool = fresh_postgres_db().await;
+    let pool = fresh_db().await;
     let den = seed_den(&pool).await;
 
     scenario_a_space_is_a_child_cell(&pool, &den).await;
