@@ -75,8 +75,7 @@ pub struct RunAppOptions {
     /// The spine's swap points. Production: [`fuz_auth::Argon2idHasher`],
     /// [`DEFAULT_ADDR`], [`fuz_http::DEFAULT_DRAIN_TIMEOUT`], every limiter
     /// enforced (cord's invite limiter too, built through the same mode), no
-    /// daemon token, no pre-migration hook. Only `testing_cordd` fills the
-    /// seams.
+    /// daemon token. Only `testing_cordd` fills the seams.
     pub spine: SpineRunOptions,
     /// Extra action specs folded into the registry after cord's own, the
     /// `testing_cordd` seam for the `_testing_*` actions. Production passes

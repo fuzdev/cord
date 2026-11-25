@@ -106,10 +106,9 @@ pub enum BuiltRouter {
 
 /// Build the top-level router.
 ///
-/// Boots the spine core through `fuz_actions::server::create_app_backend` —
-/// the READ COMMITTED check (the membership serialization relies on it, and
-/// it runs before anything writes), the pre-migration hook (`testing_cordd`'s
-/// env-gated schema reset), the migration chain, the keeper resolved into the
+/// Boots the spine core through `fuz_actions::server::create_app_backend` — the
+/// READ COMMITTED check (the membership serialization relies on it, and it runs
+/// before anything writes), the migration chain, the keeper resolved into the
 /// daemon-token state `testing_cordd` injects, bootstrap availability, the
 /// revocation listeners (sockets and admin audit streams), the audit-row
 /// fan-out to those streams, and `/ready` — then composes cord over it.

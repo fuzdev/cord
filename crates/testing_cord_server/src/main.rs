@@ -22,9 +22,7 @@
 //! Its command line is `cordd`'s: no arguments (or `start`) serves,
 //! `db-status` reports, `--help` prints usage, and anything else exits `2`.
 //! It requires `CORD_DAEMON_TOKEN_DIR`: the daemon token written under it is
-//! the keeper credential `_testing_reset` authenticates with. With
-//! `FUZ_TESTING_RESET_DB_ON_STARTUP=true` it drops and recreates the
-//! database's `public` schema before migrating.
+//! the keeper credential `_testing_reset` authenticates with.
 //!
 //! Beside the spine's `_testing_reset` it registers `_testing_drain_effects`,
 //! the barrier that awaits in-flight fire-and-forget audit writes (a

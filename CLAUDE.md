@@ -551,9 +551,8 @@ every spine audit emitter tracks its in-flight writes),
 `_testing_db_invariants` (the auth schema's invariants, which the
 cross-process setup checks after each test),
 `_testing_shorten_credential_expiry` (an account's credentials expiring
-seconds from now, for the spine's credential-deadline suite), cord's
-`_testing_cord_invite_expire`, and a schema wipe on boot when
-`FUZ_TESTING_RESET_DB_ON_STARTUP` is true. Its two action seams are
+seconds from now, for the spine's credential-deadline suite), and cord's
+`_testing_cord_invite_expire`. Its two action seams are
 `RunAppOptions` fields `cordd` passes as `None`:
 `extra_action_specs_factory` (the spine's, given the app and the spine's
 runtime) mounts the `_testing_*` actions after cord's own, and
