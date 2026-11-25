@@ -419,7 +419,7 @@ import.
 ## Commands
 
 ```bash
-gro check     # typecheck, test, gen --check, lint, format check
+gro check     # typecheck, test, gen --check, format check
 gro typecheck # typecheck only (faster iteration)
 gro test      # vitest, the unit project
 gro gen       # regenerate the action_* modules
