@@ -620,9 +620,11 @@ The `cross_backend_rust` vitest project runs
 `testing_cordd` through fuz_app's cross-backend harness; each test fires
 `_testing_reset`. Its global setup builds the binary first
 (`prepare_cargo_binary`, with `-p` since `default-members` excludes it;
-`FUZ_TESTING_NO_REBUILD=1` skips the build) and creates the database when it's
-missing. It's gated behind `FUZ_TEST_CROSS_BACKEND`, so a bare `gro test`
-skips it. `spine_suites` runs fuz_app's shipped spine suites in one
+`FUZ_TESTING_NO_REBUILD=1` skips the build) and opens its database: a
+`pglet_server` of its own, built in cord's Cargo workspace, or under
+`FUZ_TEST_POSTGRES_URL` a PostgreSQL database `fuz_testing_cord_rust`
+dropped after the run. It's gated behind `FUZ_TEST_CROSS_BACKEND`, so a
+bare `gro test` skips it. `spine_suites` runs fuz_app's shipped spine suites in one
 `describe_spine_cross_suites` call, gated on the mount flags
 `cord_backend_config.ts` states, with the suites cord can't run excluded with
 their reasons; `auth` covers what those leave out (the one-shot bootstrap, the
@@ -639,8 +641,5 @@ the shared steps `cord_cross_helpers.ts`.
 
 ```bash
 npm run test:cross   # FUZ_TEST_CROSS_BACKEND=1 vitest run --project cross_backend_rust
+FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres npm run test:cross   # on PostgreSQL
 ```
-
-`CORD_CROSS_BACKEND_TEST_URL` overrides its database (`cord_test_rust`),
-whose `public` schema `testing_cordd` wipes on every boot, so point it only
-at a throwaway database.

@@ -16,7 +16,7 @@ import { make_cross_backend_project } from '@fuzdev/fuz_app/testing/cross_backen
 import { CORD_SITE_DOMAIN, CORD_SITE_PATHS, is_cord_site_path } from './src/lib/cord_site.ts';
 
 // The `cross_backend_rust` project spawns the real `testing_cordd` over HTTP
-// and needs Postgres, so it's gated behind `FUZ_TEST_CROSS_BACKEND` and a bare
+// (building it and a `pglet_server`), so it's gated behind `FUZ_TEST_CROSS_BACKEND` and a bare
 // `gro test` stays in-process. Run it with `npm run test:cross`.
 const cross_backend_projects = process.env.FUZ_TEST_CROSS_BACKEND
 	? [

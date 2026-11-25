@@ -227,17 +227,16 @@ test creates and drops a database of its own:
 FUZ_TEST_POSTGRES_URL=postgres://localhost/postgres cargo test --workspace -- --include-ignored
 ```
 
-The end-to-end tests need Postgres, and wipe the `public` schema of their
-database, so give them a throwaway one:
+The end-to-end tests run `testing_cordd` over a `pglet_server` of their
+own, or, with `FUZ_TEST_POSTGRES_URL` set, a PostgreSQL database created
+and dropped for the run:
 
 ```bash
 # end-to-end tests of auth, cords, members, invites, newcomer links, and
-# spaces, plus fuz_app's shared spine suites: build testing_cordd, create
-# its database (cord_test_rust) when missing, and drive it over HTTP
+# spaces, plus fuz_app's shared spine suites: build testing_cordd and
+# pglet_server, and drive testing_cordd over HTTP
 npm run test:cross
 ```
-
-`CORD_CROSS_BACKEND_TEST_URL` overrides its database URL.
 
 ## Deploying
 

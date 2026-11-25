@@ -5,17 +5,14 @@
  * limiters over the same `run_app`).
  *
  * The shared shape (the `/api/*` paths, `HOST`, the bootstrap block, cookie
- * keys, the daemon-token dir, and the `FUZ_TESTING_RESET_DB_ON_STARTUP`
- * self-wipe) comes from fuz_app's `make_default_rust_backend_config`; this
- * declares only what differs. Origins come from it too: the
- * `http://localhost:*` allowlist with the `FUZ_ALLOW_ORIGIN_WILDCARDS` opt-in
- * its wildcard needs, so cord sets neither.
+ * keys, and the daemon-token dir) comes from fuz_app's
+ * `make_default_rust_backend_config`; this declares only what differs.
+ * Origins come from it too: the `http://localhost:*` allowlist with the
+ * `FUZ_ALLOW_ORIGIN_WILDCARDS` opt-in its wildcard needs, so cord sets
+ * neither.
  *
- * The binary needs a real Postgres database (`tokio-postgres` can't reach an
- * in-process one); the global setup creates it when it's missing.
- * `CORD_CROSS_BACKEND_TEST_URL` overrides the URL. The binary drops and
- * recreates the database's `public` schema on every boot, so point it only at
- * a throwaway database.
+ * The database is the global setup's: a `pglet_server` of its own, or a fresh
+ * PostgreSQL database under `FUZ_TEST_POSTGRES_URL`.
  *
  * @module
  */
@@ -30,9 +27,6 @@ import {
 	make_default_rust_backend_config,
 	rust_default_capabilities
 } from '@fuzdev/fuz_app/testing/cross_backend/default_backend_configs.ts';
-
-/** The default test database; `CORD_CROSS_BACKEND_TEST_URL` overrides it. */
-export const CORD_CROSS_BACKEND_DEFAULT_URL = 'postgres://localhost/cord_test_rust';
 
 /** Must match `CORD_SESSION_COOKIE_NAME` in `crates/cord_server/src/router.rs`. */
 export const CORD_SESSION_COOKIE_NAME = 'cord_session';
@@ -59,8 +53,10 @@ export const CORD_CARGO_BINARY: CargoBinaryOptions = {
  * `/api/rpc` and `/api/ws`, the admin audit SSE stream, and `/ready`. Cords
  * are cells, but cord mounts its own verbs over them, not the cell verbs, and
  * no fact store.
+ *
+ * @param database_url - the database the global setup provisioned
  */
-export const rust_backend_config = (): BackendConfig => ({
+export const rust_backend_config = (database_url: string): BackendConfig => ({
 	...make_default_rust_backend_config({
 		name: 'rust',
 		port: 14261,
@@ -96,7 +92,7 @@ export const rust_backend_config = (): BackendConfig => ({
 			]
 		},
 		start_command: [resolve_cargo_binary_path(CORD_CARGO_BINARY)],
-		database_url: process.env.CORD_CROSS_BACKEND_TEST_URL || CORD_CROSS_BACKEND_DEFAULT_URL,
+		database_url,
 		// `RUST_LOG` targets are crate names
 		rust_log: 'info,cord_server=info,testing_cord_server=info',
 		// the keeper credential `_testing_reset` authenticates with
