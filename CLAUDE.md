@@ -592,7 +592,9 @@ live in `#[cfg(test)]` modules; `router.rs`'s redeem-budget test drives the
 dispatcher over a bare database. The suites in `crates/cord_server/tests/`
 are `schema_ready.rs` (the fixture's drift guard), `columns.rs` (the column
 projections), `cords.rs`, `cord_members.rs`, `cord_invites.rs`,
-`cord_newcomers.rs`, and `cord_spaces.rs`, sharing `tests/common/` (the
+`cord_newcomers.rs`, `cord_spaces.rs`, and `cord_rpc.rs` (every cord verb
+through `build_router`'s assembled router: its auth spec, its params, and
+per family an admitted caller and the IDOR mask), sharing `tests/common/` (the
 fresh database, the actor and grant seeding, `in_tx!`, the lock-wait
 observers, the recording closer, and the `columns.rs` assertion come from
 the spine's `fuz_testing`); each module doc lists what it covers.
