@@ -13,7 +13,7 @@
 //! held exclusive (as a teardown would) they wait holding nothing.
 //!
 //! The scenarios run in order from one test function, over a database of
-//! their own (`common::fresh_db`), but for the ones that observe a lock
+//! their own (`common::DB`), but for the ones that observe a lock
 //! wait, which only PostgreSQL shows: those are a test of their own, on
 //! PostgreSQL alone.
 
@@ -26,10 +26,7 @@
 
 mod common;
 
-use common::{
-    add_member, assert_refused, await_lock_waiters, create_cord, fresh_db, fresh_postgres_db,
-    in_tx, lock_waiters, mint, purge_account_steps, seed_actor,
-};
+use common::{DB, add_member, assert_refused, create_cord, mint, purge_account_steps, seed_actor};
 use cord_server::cord_authz::{CordRole, cord_role_in};
 use cord_server::cord_member_queries::{
     CORD_REVOKE_REASON_LEAVE, CORD_REVOKE_REASON_REMOVE, CORD_REVOKE_REASON_ROLE_SET,
@@ -44,6 +41,7 @@ use cord_server::roles::{CORD_MEMBER, CORD_SCOPE_KIND};
 use fuz_auth::account_queries::{query_account_lock_for_purge, query_account_purge_advisory_lock};
 use fuz_auth::query_scope_lock_exclusive;
 use fuz_db::Pool;
+use fuz_testing::{backend_pid, in_tx, until_blocked_by, until_lock_waiters};
 use uuid::Uuid;
 
 /// The members as (actor, role), owners first.
@@ -105,7 +103,7 @@ struct Porch {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn membership_changes_keep_one_role_and_an_owner() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let owner = seed_actor(&pool, "owner").await;
     let admin = seed_actor(&pool, "admin").await;
     let member = seed_actor(&pool, "member").await;
@@ -139,7 +137,7 @@ async fn membership_changes_keep_one_role_and_an_owner() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "postgres-only: lock waits observed through `pg_stat_activity`"]
 async fn membership_changes_take_their_locks_in_order() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     scenario_a_purge_of_a_renamer_mid_remove(&pool).await;
     scenario_the_scope_lock_comes_first(&pool).await;
 }
@@ -175,60 +173,55 @@ async fn scenario_only_owners_set_roles(pool: &Pool, porch: &Porch) {
         other,
         stranger,
     } = porch.clone();
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             admin,
             member,
             CordRole::Admin
-        )
-        .await),
-        "Forbidden",
+        )),
+        CordMemberError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             member,
             member,
             CordRole::Owner
-        )
-        .await),
-        "Forbidden",
+        )),
+        CordMemberError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             stranger,
             member,
             CordRole::Admin
-        )
-        .await),
-        "CordNotFound",
+        )),
+        CordMemberError::CordNotFound,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             owner,
             stranger,
             CordRole::Admin
-        )
-        .await),
-        "MemberNotFound",
+        )),
+        CordMemberError::MemberNotFound,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             Uuid::nil(),
             owner,
             member,
             CordRole::Admin
-        )
-        .await),
-        "CordNotFound",
+        )),
+        CordMemberError::CordNotFound,
     );
 
     // promote a member: the old grant is revoked, the new one is the only
@@ -239,8 +232,7 @@ async fn scenario_only_owners_set_roles(pool: &Pool, porch: &Porch) {
         owner,
         member,
         CordRole::Admin
-    )
-    .await)
+    ))
     .expect("promote");
     assert_eq!(change.member.role, CordRole::Member);
     assert_eq!(change.revoked.len(), 1);
@@ -267,8 +259,7 @@ async fn scenario_only_owners_set_roles(pool: &Pool, porch: &Porch) {
         owner,
         member,
         CordRole::Admin
-    )
-    .await)
+    ))
     .expect("no-op");
     assert!(!change.changed());
 
@@ -281,8 +272,7 @@ async fn scenario_only_owners_set_roles(pool: &Pool, porch: &Porch) {
         owner,
         other,
         CordRole::Member
-    )
-    .await)
+    ))
     .expect("normalize");
     assert!(
         active_grants(pool, cord.id)
@@ -305,28 +295,26 @@ async fn scenario_the_last_owner_stays(pool: &Pool, porch: &Porch) {
         other,
         ..
     } = porch.clone();
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             owner,
             owner,
             CordRole::Admin
-        )
-        .await),
-        "LastOwner",
+        )),
+        CordMemberError::LastOwner,
     );
-    assert_refused(
-        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, owner).await),
-        "LastOwner",
+    assert_refused!(
+        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, owner)),
+        CordMemberError::LastOwner,
     );
     // removing yourself is leaving, so the remove verb refuses it outright
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_remove(
             &tx, cord.id, owner, owner
-        )
-        .await),
-        "SelfRemove",
+        )),
+        CordMemberError::SelfRemove,
     );
 
     // a second owner lets the first step down
@@ -336,8 +324,7 @@ async fn scenario_the_last_owner_stays(pool: &Pool, porch: &Porch) {
         owner,
         admin,
         CordRole::Owner
-    )
-    .await)
+    ))
     .expect("second owner");
     in_tx!(pool, |tx| query_cord_member_role_set(
         &tx,
@@ -345,8 +332,7 @@ async fn scenario_the_last_owner_stays(pool: &Pool, porch: &Porch) {
         owner,
         owner,
         CordRole::Member
-    )
-    .await)
+    ))
     .expect("step down");
     assert_eq!(
         roster(pool, cord.id).await,
@@ -359,16 +345,15 @@ async fn scenario_the_last_owner_stays(pool: &Pool, porch: &Porch) {
         ]
     );
     // the one who stepped down has no owner power left, under the lock
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             owner,
             owner,
             CordRole::Owner
-        )
-        .await),
-        "Forbidden",
+        )),
+        CordMemberError::Forbidden,
     );
     // `admin` is now the only owner
 }
@@ -385,42 +370,37 @@ async fn scenario_remove(pool: &Pool, porch: &Porch) {
     // the last-owner scenario made `admin` the only owner, `member` an admin
     let (new_owner, new_admin) = (admin, member);
     // an admin removes plain members only
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_remove(
             &tx, cord.id, new_admin, new_owner
-        )
-        .await),
-        "Forbidden",
+        )),
+        CordMemberError::Forbidden,
     );
     // nobody removes themself, whatever their role
     for caller in [new_owner, new_admin, other] {
-        assert_refused(
+        assert_refused!(
             in_tx!(pool, |tx| query_cord_member_remove(
                 &tx, cord.id, caller, caller
-            )
-            .await),
-            "SelfRemove",
+            )),
+            CordMemberError::SelfRemove,
         );
     }
     // a member removes no one
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_remove(
             &tx, cord.id, other, owner
-        )
-        .await),
-        "Forbidden",
+        )),
+        CordMemberError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_remove(
             &tx, cord.id, new_admin, stranger
-        )
-        .await),
-        "MemberNotFound",
+        )),
+        CordMemberError::MemberNotFound,
     );
     let change = in_tx!(pool, |tx| query_cord_member_remove(
         &tx, cord.id, new_admin, other
-    )
-    .await)
+    ))
     .expect("admin removes a member");
     assert_eq!(change.revoked.len(), 1);
     assert_eq!(
@@ -430,17 +410,16 @@ async fn scenario_remove(pool: &Pool, porch: &Porch) {
     // the owner removes an admin
     in_tx!(pool, |tx| query_cord_member_remove(
         &tx, cord.id, new_owner, new_admin
-    )
-    .await)
+    ))
     .expect("owner removes an admin");
     assert_eq!(
         roster(pool, cord.id).await,
         vec![(new_owner, CordRole::Owner), (owner, CordRole::Member)]
     );
     // a removed member is out: they can't act on the cord
-    assert_refused(
-        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, other).await),
-        "CordNotFound",
+    assert_refused!(
+        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, other)),
+        CordMemberError::CordNotFound,
     );
 }
 
@@ -449,7 +428,7 @@ async fn scenario_leave(pool: &Pool, porch: &Porch) {
         cord, owner, admin, ..
     } = porch.clone();
     let new_owner = admin;
-    in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, owner).await).expect("a member leaves");
+    in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, owner)).expect("a member leaves");
     assert_eq!(
         revoke_reasons(pool, cord.id, owner).await.last().unwrap(),
         CORD_REVOKE_REASON_LEAVE
@@ -484,20 +463,19 @@ async fn scenario_soft_deleted_actors_arent_members(pool: &Pool, porch: &Porch) 
         vec![(new_owner, CordRole::Owner)]
     );
     // so a soft-deleted owner doesn't count toward keeping the cord owned
-    assert_refused(
-        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, new_owner).await),
-        "LastOwner",
+    assert_refused!(
+        in_tx!(pool, |tx| query_cord_leave(&tx, cord.id, new_owner)),
+        CordMemberError::LastOwner,
     );
-    assert_refused(
+    assert_refused!(
         in_tx!(pool, |tx| query_cord_member_role_set(
             &tx,
             cord.id,
             new_owner,
             stranger,
             CordRole::Member
-        )
-        .await),
-        "MemberNotFound",
+        )),
+        CordMemberError::MemberNotFound,
     );
 }
 
@@ -592,8 +570,7 @@ async fn scenario_the_unlocked_verbs_read_the_role_afresh(
         host,
         deputy,
         CordRole::Member
-    )
-    .await)
+    ))
     .expect("demote");
     assert_eq!(cord_role_in(&stale, shed.id), Some(CordRole::Admin));
     assert!(matches!(
@@ -604,8 +581,7 @@ async fn scenario_the_unlocked_verbs_read_the_role_afresh(
     let stale = snapshot().await;
     in_tx!(pool, |tx| query_cord_member_remove(
         &tx, shed.id, host, deputy
-    )
-    .await)
+    ))
     .expect("remove");
     assert_eq!(cord_role_in(&stale, shed.id), Some(CordRole::Member));
     assert!(matches!(
@@ -746,8 +722,7 @@ async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
         &tx,
         cord.id,
         "the shed, renamed",
-    )
-    .await)
+    ))
     .expect("rename")
     .expect("the cord exists");
     let renamer_account: Uuid = {
@@ -758,11 +733,11 @@ async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
             .expect("the actor")
             .get(0)
     };
-    let waiting_before = lock_waiters(pool).await;
 
     // the purge's lock and the target's account row, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
+    let purge_pid = backend_pid(&purge).await;
     query_account_purge_advisory_lock(&purge)
         .await
         .expect("the purge lock");
@@ -778,13 +753,12 @@ async fn scenario_a_purge_of_a_renamer_mid_remove(pool: &Pool) {
         async move {
             in_tx!(pool, |tx| query_cord_member_remove(
                 &tx, cord_id, host, renamer
-            )
-            .await)
+            ))
         }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        purge_pid,
         "the remove holds the cord and waits on the renamer's account",
     )
     .await;
@@ -839,8 +813,6 @@ async fn scenario_the_scope_lock_comes_first(pool: &Pool) {
             .expect("the actor")
             .get(0)
     };
-    let waiting_before = lock_waiters(pool).await;
-
     // the teardown's first statement, held open
     let mut teardown_client = pool.get().await.expect("pool.get");
     let teardown = teardown_client.transaction().await.expect("begin");
@@ -858,8 +830,7 @@ async fn scenario_the_scope_lock_comes_first(pool: &Pool) {
                 host,
                 target,
                 CordRole::Admin
-            )
-            .await)
+            ))
         }
     });
     let accepting = tokio::spawn({
@@ -870,13 +841,13 @@ async fn scenario_the_scope_lock_comes_first(pool: &Pool) {
                 &tx,
                 &token_hash,
                 joiner
-            )
-            .await)
+            ))
         }
     });
-    await_lock_waiters(
+    // both wait on the teardown, so two waiters in the test's database
+    until_lock_waiters(
         pool,
-        waiting_before + 2,
+        2,
         "the role set and the accept wait on the scope lock",
     )
     .await;

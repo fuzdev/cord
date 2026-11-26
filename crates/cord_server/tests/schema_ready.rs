@@ -9,7 +9,7 @@
 //! fresh bootstrap.
 //!
 //! It runs in plain `cargo test` over a database of its own
-//! (`common::fresh_db`: pglet by default, PostgreSQL under
+//! (`common::DB`: pglet by default, PostgreSQL under
 //! `FUZ_TEST_POSTGRES_URL`); the column map is the same on either engine.
 //!
 //! ```bash
@@ -22,13 +22,13 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::fresh_db;
+use common::DB;
 use fuz_testing::assert_expected_schema_fixture;
 
 #[tokio::test]
 async fn committed_expected_schema_matches_fresh_bootstrap() {
     // the exact chain `build_router` runs, on a freshly reset schema
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     assert_expected_schema_fixture(
         &pool,
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expected_schema.json"),

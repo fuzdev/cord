@@ -589,8 +589,11 @@ dispatcher over a bare database. The suites in `crates/cord_server/tests/`
 are `schema_ready.rs` (the fixture's drift guard), `columns.rs` (the column
 projections), `cords.rs`, `cord_members.rs`, `cord_invites.rs`,
 `cord_newcomers.rs`, and `cord_spaces.rs`, sharing `tests/common/` (the
-fresh database, the actor seeding, and the `columns.rs` assertion come from
+fresh database, the actor and grant seeding, `in_tx!`, the lock-wait
+observers, the recording closer, and the `columns.rs` assertion come from
 the spine's `fuz_testing`); each module doc lists what it covers.
+`request_reads_census.rs` holds `clippy.toml`'s disallows of axum's lenient
+query and path readers in place (the spine's shared census).
 `transaction_isolation.rs` boots `cordd`'s router on a database set to
 `repeatable read` and asserts the refusal comes before any migration.
 `cordd_args.rs` needs no database: the real binary's command line and its
@@ -598,7 +601,7 @@ start-failure exit codes.
 
 A test of what only PostgreSQL has (a lock wait seen through
 `pg_stat_activity`, `ALTER DATABASE … SET`) opens its database with
-`fresh_postgres_db` (`TestEngine::Postgres`) and carries
+`DB.postgres_only().open()` (`TestEngine::Postgres`) and carries
 `#[ignore = "postgres-only: <why>"]`; one waiting on a pglet feature
 carries `#[ignore = "pglet: <feature>"]` and the same engine. The
 PostgreSQL leg runs everything:
@@ -615,7 +618,9 @@ UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready
 ```
 
 GitHub CI's `rust` job runs the PostgreSQL leg on a Postgres service
-(`-p cord_server`, the crate with database tests).
+(`-p cord_server`, the crate with database tests); `xtask`'s
+`tests/db_suite_lists.rs` holds that `-p` list to the crates with database
+tests.
 
 A run killed before its tests' drops ran leaves `fuz_testing_*` databases
 behind; drop them by that prefix.

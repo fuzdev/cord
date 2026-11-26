@@ -9,7 +9,7 @@
 //! accepts never spend more uses than the link has.
 //!
 //! Its scenarios run in order from one test function, over a database of
-//! its own (`common::fresh_db`).
+//! its own (`common::DB`).
 
 #![expect(
     clippy::unwrap_used,
@@ -20,7 +20,7 @@
 
 mod common;
 
-use common::{accept, create_cord, fresh_db, mint, seed_actor, status_of};
+use common::{DB, accept, create_cord, mint, seed_actor, status_of};
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_member_queries::query_cord_members;
 use cord_server::cord_queries::CordRow;
@@ -47,7 +47,7 @@ async fn cord_grant_count(pool: &Pool, cord_id: Uuid, actor_id: Uuid) -> i64 {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invite_links_admit_existing_accounts() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let owner = seed_actor(&pool, "owner").await;
     let guest = seed_actor(&pool, "guest").await;
     let cord = create_cord(&pool, "the porch", owner).await;

@@ -13,7 +13,7 @@
 //! too.
 //!
 //! The scenarios run in order from one test function, over a database of
-//! their own (`common::fresh_db`). The ones that observe a lock wait, which
+//! their own (`common::DB`). The ones that observe a lock wait, which
 //! only PostgreSQL shows, are a test of their own.
 
 #![expect(
@@ -23,26 +23,24 @@
 
 mod common;
 
-use common::{
-    add_member, assert_refused, await_lock_waiters, await_lock_waiters_or_finished, create_cord,
-    fresh_db, fresh_postgres_db, in_tx, lock_waiters, purge_account_steps, seed_actor,
-};
+use common::{DB, add_member, assert_refused, create_cord, purge_account_steps, seed_actor};
 use cord_server::cord_authz::CordRole;
 use cord_server::cord_queries::{CORD_STAMPED_GRANTS, CordRow};
 use cord_server::cord_space_queries::{
     CORD_SPACE_CELL_KIND, CORD_SPACE_COUNT_MAX, CordSpaceError, CordSpaceKind, CordSpaceRow,
     query_cord_space_create, query_cord_space_delete, query_cord_space_rename, query_cord_spaces,
 };
+use fuz_auth::ROLE_ADMIN;
 use fuz_auth::account_queries::query_account_purge_advisory_lock;
 use fuz_auth::actor_queries::{
     query_count_active_accounts_with_global_role_locked, query_role_grant_find_active_for_actor,
 };
-use fuz_auth::{ROLE_ADMIN, query_create_role_grant};
 use fuz_cell::cell_grant_queries::query_cell_grant_list_for_cell;
 use fuz_cell::cell_queries::{CellListParams, query_cell_get, query_cell_list};
 use fuz_cell::cell_view_sql::CellViewer;
 use fuz_cell::{CellGrantLevel, CellVisibility};
 use fuz_db::Pool;
+use fuz_testing::{backend_pid, grant_role, in_tx, until_blocked_by, until_lock_waiters_or};
 use uuid::Uuid;
 
 async fn create(
@@ -57,8 +55,7 @@ async fn create(
         caller,
         CordSpaceKind::Line,
         name
-    )
-    .await)
+    ))
 }
 
 async fn rename(
@@ -70,8 +67,7 @@ async fn rename(
 ) -> Result<CordSpaceRow, CordSpaceError> {
     in_tx!(pool, |tx| query_cord_space_rename(
         &tx, cord_id, space_id, caller, name
-    )
-    .await)
+    ))
 }
 
 async fn delete(
@@ -82,8 +78,7 @@ async fn delete(
 ) -> Result<CordSpaceRow, CordSpaceError> {
     in_tx!(pool, |tx| query_cord_space_delete(
         &tx, cord_id, space_id, caller
-    )
-    .await)
+    ))
 }
 
 async fn list(pool: &Pool, cord_id: Uuid) -> Vec<CordSpaceRow> {
@@ -135,7 +130,7 @@ struct Den {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spaces_are_cord_cells_its_managers_shape() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let den = seed_den(&pool).await;
 
     scenario_a_space_is_a_child_cell(&pool, &den).await;
@@ -153,7 +148,7 @@ async fn spaces_are_cord_cells_its_managers_shape() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "postgres-only: lock waits observed through `pg_stat_activity` and `pg_blocking_pids`"]
 async fn space_writes_queue_on_their_locks() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let den = seed_den(&pool).await;
     scenario_a_demotion_holding_the_lock(&pool).await;
     for write in [SpaceWrite::Rename, SpaceWrite::Delete] {
@@ -169,12 +164,7 @@ async fn seed_den(pool: &Pool) -> Den {
     let member = seed_actor(pool, "member").await;
     let stranger = seed_actor(pool, "stranger").await;
     let instance_admin = seed_actor(pool, "operator").await;
-    {
-        let client = pool.get().await.expect("pool.get");
-        query_create_role_grant(&client, &instance_admin, ROLE_ADMIN, None, None, None, None)
-            .await
-            .expect("global admin grant");
-    }
+    grant_role(pool, instance_admin, ROLE_ADMIN).await;
     let cord = create_cord(pool, "the den", owner).await;
     add_member(pool, cord.id, admin, CordRole::Admin).await;
     add_member(pool, cord.id, member, CordRole::Member).await;
@@ -275,8 +265,7 @@ async fn scenario_list_order(pool: &Pool, den: &Den) {
         let second =
             query_cord_space_create(&tx, den.cord.id, den.owner, CordSpaceKind::Line, "y").await?;
         Ok::<_, CordSpaceError>((first, second))
-    }
-    .await)
+    })
     .expect("two at once");
     assert_eq!(first.created_at, second.created_at);
     let tail: Vec<Uuid> = list(pool, den.cord.id)
@@ -304,23 +293,23 @@ async fn scenario_roles(pool: &Pool, den: &Den) {
     rename(pool, den.cord.id, by_admin.id, den.owner, "owner renamed")
         .await
         .expect("an owner renames an admin's space");
-    assert_refused(
+    assert_refused!(
         create(pool, den.cord.id, den.member, "mine").await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         rename(pool, den.cord.id, by_admin.id, den.member, "mine").await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         delete(pool, den.cord.id, by_admin.id, den.member).await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
     // a member asking about a space that isn't there still learns only that
     // they can't manage spaces
-    assert_refused(
+    assert_refused!(
         delete(pool, den.cord.id, Uuid::nil(), den.member).await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
     assert_eq!(names(pool, den.cord.id).await, ["owner renamed"]);
     delete(pool, den.cord.id, by_admin.id, den.admin)
@@ -340,44 +329,44 @@ async fn scenario_outside_the_cord(pool: &Pool, den: &Den) {
         .expect("create elsewhere");
 
     for outsider in [den.stranger, den.instance_admin] {
-        assert_refused(
+        assert_refused!(
             create(pool, den.cord.id, outsider, "taken over").await,
-            "CordNotFound",
+            CordSpaceError::CordNotFound,
         );
         for space_id in [space.id, foreign.id, Uuid::nil()] {
-            assert_refused(
+            assert_refused!(
                 rename(pool, den.cord.id, space_id, outsider, "taken over").await,
-                "CordNotFound",
+                CordSpaceError::CordNotFound,
             );
-            assert_refused(
+            assert_refused!(
                 delete(pool, den.cord.id, space_id, outsider).await,
-                "CordNotFound",
+                CordSpaceError::CordNotFound,
             );
         }
     }
     // no such cord at all reads the same
-    assert_refused(
+    assert_refused!(
         create(pool, Uuid::nil(), den.owner, "nowhere").await,
-        "CordNotFound",
+        CordSpaceError::CordNotFound,
     );
-    assert_refused(
+    assert_refused!(
         create(pool, space.id, den.owner, "a space is no cord").await,
-        "CordNotFound",
+        CordSpaceError::CordNotFound,
     );
     // the den's owner isn't in `elsewhere`
-    assert_refused(
+    assert_refused!(
         rename(pool, elsewhere.id, foreign.id, den.owner, "taken over").await,
-        "CordNotFound",
+        CordSpaceError::CordNotFound,
     );
     // naming another cord's space under the den, or the den itself as a space
     for space_id in [foreign.id, den.cord.id, elsewhere.id, Uuid::nil()] {
-        assert_refused(
+        assert_refused!(
             rename(pool, den.cord.id, space_id, den.owner, "taken over").await,
-            "SpaceNotFound",
+            CordSpaceError::SpaceNotFound,
         );
-        assert_refused(
+        assert_refused!(
             delete(pool, den.cord.id, space_id, den.owner).await,
-            "SpaceNotFound",
+            CordSpaceError::SpaceNotFound,
         );
     }
     assert_eq!(names(pool, elsewhere.id).await, ["theirs"]);
@@ -439,13 +428,13 @@ async fn scenario_delete(pool: &Pool, den: &Den) {
         .expect("delete");
     assert_eq!(deleted, gone);
     assert_eq!(list(pool, den.cord.id).await, vec![keep.clone()]);
-    assert_refused(
+    assert_refused!(
         delete(pool, den.cord.id, gone.id, den.owner).await,
-        "SpaceNotFound",
+        CordSpaceError::SpaceNotFound,
     );
-    assert_refused(
+    assert_refused!(
         rename(pool, den.cord.id, gone.id, den.owner, "back").await,
-        "SpaceNotFound",
+        CordSpaceError::SpaceNotFound,
     );
     let client = pool.get().await.expect("pool.get");
     let row = client
@@ -482,20 +471,19 @@ async fn scenario_the_role_is_read_afresh(pool: &Pool, den: &Den) {
             deputy,
             CordRole::Member,
         )
-        .await
     })
     .expect("demote");
-    assert_refused(
+    assert_refused!(
         create(pool, den.cord.id, deputy, "again").await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         rename(pool, den.cord.id, space.id, deputy, "again").await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
-    assert_refused(
+    assert_refused!(
         delete(pool, den.cord.id, space.id, deputy).await,
-        "Forbidden",
+        CordSpaceError::Forbidden,
     );
     in_tx!(pool, |tx| {
         cord_server::cord_member_queries::query_cord_member_remove(
@@ -504,12 +492,11 @@ async fn scenario_the_role_is_read_afresh(pool: &Pool, den: &Den) {
             den.owner,
             deputy,
         )
-        .await
     })
     .expect("remove");
-    assert_refused(
+    assert_refused!(
         rename(pool, den.cord.id, space.id, deputy, "again").await,
-        "CordNotFound",
+        CordSpaceError::CordNotFound,
     );
     delete(pool, den.cord.id, space.id, den.owner)
         .await
@@ -529,9 +516,9 @@ async fn scenario_the_cap(pool: &Pool) {
                 .expect("under the cap"),
         );
     }
-    assert_refused(
+    assert_refused!(
         create(pool, cord.id, owner, "one more").await,
-        "LimitReached",
+        CordSpaceError::LimitReached,
     );
     assert_eq!(list(pool, cord.id).await.len(), CORD_SPACE_COUNT_MAX);
     let freed = spaces.pop().expect("a space");
@@ -541,9 +528,9 @@ async fn scenario_the_cap(pool: &Pool) {
     create(pool, cord.id, owner, "one more")
         .await
         .expect("a deleted space frees its place");
-    assert_refused(
+    assert_refused!(
         create(pool, cord.id, owner, "and another").await,
-        "LimitReached",
+        CordSpaceError::LimitReached,
     );
 }
 
@@ -599,7 +586,7 @@ async fn scenario_concurrent_creates_at_the_cap(pool: &Pool) {
         let created = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(created, 1, "round {round}: {results:?}");
         for result in results.into_iter().filter(Result::is_err) {
-            assert_refused(result, "LimitReached");
+            assert_refused!(result, CordSpaceError::LimitReached);
         }
         let spaces = list(pool, cord.id).await;
         assert_eq!(spaces.len(), CORD_SPACE_COUNT_MAX, "round {round}");
@@ -618,11 +605,7 @@ async fn scenario_a_demotion_holding_the_lock(pool: &Pool) {
     add_member(pool, cord.id, deputy, CordRole::Admin).await;
     let mut client = pool.get().await.expect("pool.get");
     let demotion = client.transaction().await.expect("begin");
-    let demotion_pid: i32 = demotion
-        .query_one("SELECT pg_backend_pid()", &[])
-        .await
-        .expect("pid")
-        .get(0);
+    let demotion_pid = backend_pid(&demotion).await;
     cord_server::cord_member_queries::query_cord_member_role_set(
         &demotion,
         cord.id,
@@ -637,32 +620,19 @@ async fn scenario_a_demotion_holding_the_lock(pool: &Pool) {
         let cord_id = cord.id;
         async move { create(&pool, cord_id, deputy, "slipped in").await }
     });
-    // wait until the create is queued on the cord lock the demotion holds
-    let probe = pool.get().await.expect("pool.get");
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    while probe
-        .query_one(
-            "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
-            &[&demotion_pid],
-        )
-        .await
-        .expect("probe")
-        .get::<_, i64>(0)
-        == 0
-    {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the create never queued on the cord lock"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
+    until_blocked_by(
+        pool,
+        demotion_pid,
+        "the create queues on the cord lock the demotion holds",
+    )
+    .await;
     assert!(!create.is_finished(), "the create waits on the cord lock");
     demotion.commit().await.expect("commit the demotion");
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), create)
         .await
         .expect("no hang")
         .expect("join");
-    assert_refused(result, "Forbidden");
+    assert_refused!(result, CordSpaceError::Forbidden);
     assert!(list(pool, cord.id).await.is_empty());
 }
 
@@ -693,12 +663,12 @@ async fn scenario_a_purge_of_the_writer_mid_write(pool: &Pool, den: &Den, write:
             .expect("the actor")
             .get(0)
     };
-    let waiting_before = lock_waiters(pool).await;
 
     // the hold: the writer's grant, which the purge's cascade deletes after
     // their actor row
     let mut hold_client = pool.get().await.expect("pool.get");
     let hold = hold_client.transaction().await.expect("begin");
+    let hold_pid = backend_pid(&hold).await;
     hold.execute(
         "SELECT 1 FROM role_grant WHERE actor_id = $1 FOR UPDATE",
         &[&writer],
@@ -717,9 +687,9 @@ async fn scenario_a_purge_of_the_writer_mid_write(pool: &Pool, den: &Den, write:
             tx.commit().await
         }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        hold_pid,
         &format!("{suffix}: the purge waits on the held grant"),
     )
     .await;
@@ -737,10 +707,11 @@ async fn scenario_a_purge_of_the_writer_mid_write(pool: &Pool, den: &Den, write:
             }
         }
     });
-    await_lock_waiters_or_finished(
+    // the purge is one waiter; a write that waits (on the purge) is the second
+    until_lock_waiters_or(
         pool,
-        waiting_before + 2,
-        &writing,
+        2,
+        || writing.is_finished(),
         &format!("{suffix}: the write waits or commits"),
     )
     .await;

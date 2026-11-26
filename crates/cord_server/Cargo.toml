@@ -41,14 +41,13 @@ uuid.workspace = true
 
 [dev-dependencies]
 # Dev-only: the spine's shared database-test harness (`fuz_testing`'s
-# `fresh_db`, `seed`, and the column-projection guard). A dev-dependency never
+# `fresh_test_db`, the seeding, the lock-wait observers, the doubles, and the
+# column-projection guard). A dev-dependency never
 # reaches the `cordd` binary, and `cargo xtask check-release` walks runtime
 # edges only.
 fuz_testing.workspace = true
-# `ServiceExt::oneshot` for the in-process router tests.
-tower.workspace = true
 # Re-declare fuz_http (already a normal dep) with the test-only
-# `GatedRouter::into_router_for_testing`, so the router tests can drive the
+# `GatedRouter::send_for_testing`, so the router tests can drive the
 # composed router in-process. Enabled from a dev-dependency it stays out of
 # every build that compiles no tests; `cargo xtask check-release` refuses it on
 # a normal edge.

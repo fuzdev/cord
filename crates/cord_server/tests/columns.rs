@@ -8,11 +8,11 @@
 //! fails here until it's registered there. The assertion over them is the
 //! spine's shared `fuz_testing::assert_column_projections`.
 //!
-//! It runs over a database of its own (`common::fresh_db`).
+//! It runs over a database of its own (`common::DB`).
 
 mod common;
 
-use common::fresh_db;
+use common::DB;
 use cord_server::migrations::CORD_COLUMN_PROJECTIONS;
 use fuz_auth::AUTH_COLUMN_PROJECTIONS;
 use fuz_cell::CELL_COLUMN_PROJECTIONS;
@@ -21,7 +21,7 @@ use fuz_testing::assert_column_projections;
 
 #[tokio::test]
 async fn columns_match_live_schema() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     assert_column_projections(
         &pool,
         &[

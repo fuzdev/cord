@@ -27,7 +27,7 @@
 //! deletes through the closer they're handed, and they end on shutdown.
 //!
 //! The scenarios run in order from one test function, over a database of
-//! their own (`common::fresh_db`), but for the tests on PostgreSQL alone:
+//! their own (`common::DB`), but for the tests on PostgreSQL alone:
 //! the races that observe a lock wait, which only PostgreSQL shows, and the
 //! expiry sweep with the upkeep tasks, whose `SKIP LOCKED` pass needs
 //! row-granular locks pglet doesn't have yet.
@@ -41,11 +41,10 @@
 mod common;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{
-    accept, add_member, await_lock_waiters, await_lock_waiters_or_finished, create_cord, fresh_db,
-    fresh_postgres_db, in_tx, lock_waiters, mint, purge_account_steps, redeem, redemption_list,
+    DB, accept, add_member, create_cord, mint, purge_account_steps, redeem, redemption_list,
     seed_actor, status_of,
 };
 use cord_server::cord_authz::CordRole;
@@ -62,6 +61,7 @@ use cord_server::invite::redemption_queries::{
 use cord_server::invite::sweep::{
     CORD_INVITE_EXPIRE_AUDIT_EVENT, CordInviteExpireReleased, cord_invite_sweep_pass,
 };
+use cord_server::roles::CORD_SCOPE_KIND;
 use cord_server::runtime::extra_upkeep;
 use fuz_auth::account_queries::{
     query_account_lock_for_purge, query_account_lock_for_revoke, query_account_purge_advisory_lock,
@@ -77,21 +77,22 @@ use fuz_auth::invite_queries::{
 use fuz_auth::role_grant_offer_queries::query_revoke_role_grant;
 use fuz_auth::{
     AuditEmitter, AuditLogEvent, ConnectionCloseTarget, ConnectionCloser,
-    CreateRoleGrantOfferInput, ROLE_ADMIN, query_create_role_grant, query_role_grant_offer_create,
+    CreateRoleGrantOfferInput, ROLE_ADMIN, query_role_grant_offer_create,
 };
 use fuz_cell::CellError;
 use fuz_db::Pool;
 use fuz_db::tokio_postgres::error::SqlState;
 use fuz_http::Upkeep;
+use fuz_testing::{
+    RecordingConnectionCloser, backend_pid, grant_role, grant_scoped_role, in_tx, until_blocked_by,
+    until_lock_waiters, until_lock_waiters_or,
+};
 use uuid::Uuid;
 
 /// Seed an actor holding a global `admin` grant.
 async fn seed_admin(pool: &Pool, username: &str) -> Uuid {
     let actor = seed_actor(pool, username).await;
-    let client = pool.get().await.expect("pool.get");
-    query_create_role_grant(&client, &actor, ROLE_ADMIN, None, None, None, None)
-        .await
-        .expect("grant admin");
+    grant_role(pool, actor, ROLE_ADMIN).await;
     actor
 }
 
@@ -193,7 +194,7 @@ async fn redemption_counts(pool: &Pool, cord_id: Uuid, invite_id: Uuid) -> (i64,
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn newcomer_links_admit_new_people() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let admin = seed_admin(&pool, "admin").await;
     let cord = create_cord(&pool, "the porch", admin).await;
 
@@ -223,7 +224,7 @@ async fn newcomer_links_admit_new_people() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "postgres-only: lock waits observed through `pg_stat_activity`"]
 async fn newcomer_links_race_removals_and_purges_in_lock_order() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let admin = seed_admin(&pool, "admin").await;
     let cord = create_cord(&pool, "the porch", admin).await;
     for removal in [
@@ -248,7 +249,7 @@ async fn newcomer_links_race_removals_and_purges_in_lock_order() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "pglet: row-granular SKIP LOCKED (pglet skips every row while another transaction holds its one writer lock)"]
 async fn the_expiry_sweep_releases_dead_reservations() {
-    let pool = fresh_postgres_db().await;
+    let pool = DB.postgres_only().open().await;
     let admin = seed_admin(&pool, "admin").await;
     let cord = create_cord(&pool, "the porch", admin).await;
     // links past the grace with nothing waiting, which the sweep releases
@@ -761,15 +762,9 @@ async fn scenario_a_scoped_admin_grant_is_no_authority(
     demoted_link: &str,
 ) {
     {
+        // a scoped admin, written directly
+        grant_scoped_role(pool, demoted, ROLE_ADMIN, CORD_SCOPE_KIND, cord.id).await;
         let client = pool.get().await.expect("pool.get");
-        client
-            .execute(
-                "INSERT INTO role_grant (actor_id, role, scope_kind, scope_id)
-                 VALUES ($1, $2, 'cord', $3)",
-                &[&demoted, &ROLE_ADMIN, &cord.id],
-            )
-            .await
-            .expect("a scoped admin, written directly");
         for (actor, holds) in [(demoted, false), (admin, true)] {
             assert_eq!(
                 query_actor_holds_global_admin(&client, actor)
@@ -901,11 +896,11 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
             .expect("the admin grant")
             .get(0)
     };
-    let waiting_before = lock_waiters(pool).await;
 
     // the stall: the guard locks the minter's actor row after its account row
     let mut stall_client = pool.get().await.expect("pool.get");
     let stall = stall_client.transaction().await.expect("begin");
+    let stall_pid = backend_pid(&stall).await;
     stall
         .execute(
             "SELECT 1 FROM actor WHERE id = $1 FOR NO KEY UPDATE",
@@ -976,9 +971,9 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
             tx.commit().await.expect("commit the removal");
         }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        stall_pid,
         &format!("{removal:?}: the removal stalls at the minter's actor"),
     )
     .await;
@@ -987,20 +982,20 @@ async fn scenario_a_removal_of_the_minter_mid_redeem(
         let pool = pool.clone();
         async move { redeem(&pool, &link, "newcomer_mid_removal").await }
     });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while lock_waiters(pool).await < waiting_before + 2 {
-        assert!(
-            !redeeming.is_finished(),
-            "{removal:?}: the redemption waits on the minter's account row, \
-             but finished first: {:?}",
-            redeeming.await
-        );
-        assert!(
-            Instant::now() < deadline,
-            "{removal:?}: the redemption waits"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // the removal is one waiter; the redemption, on the removal, the second
+    let waited = until_lock_waiters_or(
+        pool,
+        2,
+        || redeeming.is_finished(),
+        &format!("{removal:?}: the redemption waits"),
+    )
+    .await;
+    assert!(
+        waited,
+        "{removal:?}: the redemption waits on the minter's account row, \
+         but finished first: {:?}",
+        redeeming.await
+    );
 
     stall.commit().await.expect("release the stall");
     removing.await.expect("the removal, no deadlock");
@@ -1075,10 +1070,10 @@ async fn scenario_a_purge_of_the_minter_mid_accept(
         NewcomerSignup::Claimed => sign_up(pool, &username).await,
         NewcomerSignup::Unclaimed => seed_actor(pool, &username).await,
     };
-    let waiting_before = lock_waiters(pool).await;
 
     let mut stall_client = pool.get().await.expect("pool.get");
     let stall_tx = stall_client.transaction().await.expect("begin");
+    let stall_pid = backend_pid(&stall_tx).await;
     let (sql, id) = match stall {
         AcceptStall::Cord => (
             "SELECT 1 FROM cell WHERE id = $1 FOR NO KEY UPDATE",
@@ -1096,9 +1091,9 @@ async fn scenario_a_purge_of_the_minter_mid_accept(
         let link = link.clone();
         async move { accept(&pool, &link, newcomer).await }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        stall_pid,
         &format!("{label}: the accept waits at the stall"),
     )
     .await;
@@ -1114,10 +1109,11 @@ async fn scenario_a_purge_of_the_minter_mid_accept(
             tx.commit().await
         }
     });
-    await_lock_waiters_or_finished(
+    // the accept is one waiter; a purge that waits is the second
+    until_lock_waiters_or(
         pool,
-        waiting_before + 2,
-        &purging,
+        2,
+        || purging.is_finished(),
         &format!("{label}: the purge waits or commits"),
     )
     .await;
@@ -1159,11 +1155,11 @@ async fn scenario_a_purge_a_leave_and_an_accept(pool: &Pool, cord: &CordRow) {
     let leaver = seed_admin(pool, "leaving_three_way").await;
     add_member(pool, cord.id, leaver, CordRole::Member).await;
     let joiner = seed_actor(pool, "joining_three_way").await;
-    let waiting_before = lock_waiters(pool).await;
 
     // the purge's lock and guard, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
+    let purge_pid = backend_pid(&purge).await;
     query_account_purge_advisory_lock(&purge)
         .await
         .expect("the purge lock");
@@ -1174,11 +1170,11 @@ async fn scenario_a_purge_a_leave_and_an_accept(pool: &Pool, cord: &CordRow) {
     let leaving = tokio::spawn({
         let pool = pool.clone();
         let cord_id = cord.id;
-        async move { in_tx!(pool, |tx| query_cord_leave(&tx, cord_id, leaver).await) }
+        async move { in_tx!(pool, |tx| query_cord_leave(&tx, cord_id, leaver)) }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        purge_pid,
         "the leave holds the cord and waits on its account",
     )
     .await;
@@ -1186,7 +1182,8 @@ async fn scenario_a_purge_a_leave_and_an_accept(pool: &Pool, cord: &CordRow) {
         let pool = pool.clone();
         async move { accept(&pool, &link, joiner).await }
     });
-    await_lock_waiters(pool, waiting_before + 2, "the accept waits").await;
+    // the leave is one waiter; the accept, on the leave, the second
+    until_lock_waiters(pool, 2, "the accept waits").await;
 
     let purged = purge_account_steps(&purge, minter, minter_account).await;
     let purged = match purged {
@@ -1215,17 +1212,16 @@ async fn scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(pool: &Poo
         &tx,
         cord.id,
         "the porch, renamed",
-    )
-    .await)
+    ))
     .expect("rename")
     .expect("the cord exists");
     let (link, link_id) = mint(pool, cord.id, minter, Some(3600), Some(3), false).await;
     let joiner = seed_actor(pool, "joining_renamed").await;
-    let waiting_before = lock_waiters(pool).await;
 
     // the purge's locks up to the minter's account, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
+    let purge_pid = backend_pid(&purge).await;
     query_account_purge_advisory_lock(&purge)
         .await
         .expect("the purge lock");
@@ -1242,9 +1238,9 @@ async fn scenario_a_purge_of_a_minter_who_renamed_the_cord_mid_accept(pool: &Poo
         let pool = pool.clone();
         async move { accept(&pool, &link, joiner).await }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        purge_pid,
         "the accept holds the cord and waits on the minter's account",
     )
     .await;
@@ -1276,11 +1272,11 @@ async fn scenario_a_purge_of_the_newcomer_mid_fallback_accept(pool: &Pool, cord:
     // open signup: an account with the username, the invite left unclaimed
     let newcomer = seed_actor(pool, "purged_mid_accept_newcomer").await;
     let newcomer_account = account_of(pool, newcomer).await;
-    let waiting_before = lock_waiters(pool).await;
 
     // the purge's locks up to the newcomer's account, held open
     let mut purge_client = pool.get().await.expect("pool.get");
     let purge = purge_client.transaction().await.expect("begin");
+    let purge_pid = backend_pid(&purge).await;
     query_account_purge_advisory_lock(&purge)
         .await
         .expect("the purge lock");
@@ -1294,9 +1290,9 @@ async fn scenario_a_purge_of_the_newcomer_mid_fallback_accept(pool: &Pool, cord:
         let pool = pool.clone();
         async move { accept(&pool, &link, newcomer).await }
     });
-    await_lock_waiters(
+    until_blocked_by(
         pool,
-        waiting_before + 1,
+        purge_pid,
         "the accept waits on the newcomer's account",
     )
     .await;
@@ -1579,34 +1575,6 @@ async fn scenario_the_expiry_sweep(pool: &Pool, cord: &CordRow, admin: Uuid) {
     ));
 }
 
-/// A `ConnectionCloser` recording every close it is asked for, by target.
-#[derive(Default)]
-struct RecordingCloser {
-    closed: std::sync::Mutex<Vec<ConnectionCloseTarget>>,
-}
-
-impl RecordingCloser {
-    fn record(&self, target: ConnectionCloseTarget) -> usize {
-        self.closed.lock().expect("lock").push(target);
-        0
-    }
-}
-
-impl ConnectionCloser for RecordingCloser {
-    fn close_connections(&self, target: &ConnectionCloseTarget) -> usize {
-        self.record(target.clone())
-    }
-}
-
-impl fuz_http::ShutdownCloser for RecordingCloser {
-    fn close_all_connections(&self) -> usize {
-        0
-    }
-    fn wait_closed(&self) -> fuz_http::ShutdownFuture<'_> {
-        Box::pin(std::future::ready(()))
-    }
-}
-
 /// The upkeep tasks' startup passes run both sweeps, the invite expiry sweep
 /// and the spine's auth cleanup, through the emitter and the closer they're
 /// handed (the auth cleanup closes the expired session it deletes, and not
@@ -1661,8 +1629,9 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
         let _ = tx.send(event);
         Box::pin(async {})
     }));
-    let recording = Arc::new(RecordingCloser::default());
-    let connection_closer: Arc<dyn ConnectionCloser> = Arc::<RecordingCloser>::clone(&recording);
+    let recording = Arc::new(RecordingConnectionCloser::default());
+    let connection_closer: Arc<dyn ConnectionCloser> =
+        Arc::<RecordingConnectionCloser>::clone(&recording);
     let shutdown = fuz_http::CancellationToken::new();
     // the spine's cleanup as its serve duties spawn it, beside cord's sweep as
     // `extra_upkeep` builds it
@@ -1707,7 +1676,7 @@ async fn scenario_the_upkeep_tasks(pool: &Pool, cord: &CordRow, admin: Uuid) {
     // the auth cleanup sweeps sessions before it audits offers, so its
     // session close has run by the time the offer's audit arrives
     assert_eq!(
-        *recording.closed.lock().expect("lock"),
+        recording.closed(),
         [ConnectionCloseTarget::Session("upkeep-expired".to_owned())],
         "the auth cleanup closes the expired session it deleted, and only that"
     );

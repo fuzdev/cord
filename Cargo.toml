@@ -33,9 +33,6 @@ fuz_testing = { path = "../fuz/crates/fuz_testing" }
 # Async runtime + web framework.
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "sync", "fs", "signal", "time", "process", "io-util"] }
 axum = { version = "0.8", features = ["ws"] }
-# `ServiceExt::oneshot`, for driving a composed `Router` in-process without
-# binding a socket (dev-only).
-tower = "0.5"
 
 # Logging.
 tracing = "0.1"

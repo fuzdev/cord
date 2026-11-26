@@ -261,12 +261,10 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use fuz_auth::RateLimiterMode;
     use fuz_http::InputShape;
-    use tower::ServiceExt;
 
     const FOREIGN_ORIGIN: &str = "https://elsewhere.example";
 
-    /// Send one request, with the TCP peer `serve_with_shutdown` would supply,
-    /// and return the status and body.
+    /// Send one request from the test peer and return the status and body.
     async fn send(
         router: GatedRouter,
         method: &str,
@@ -292,32 +290,19 @@ mod tests {
         if let Some(length) = content_length {
             builder = builder.header("content-length", length.to_string());
         }
-        let mut req = builder.body(Body::empty()).expect("request builds");
-        req.extensions_mut().insert(axum::extract::ConnectInfo(
-            "127.0.0.1:50000"
-                .parse::<std::net::SocketAddr>()
-                .expect("peer parses"),
-        ));
-        let res = router
-            .into_router_for_testing()
-            .oneshot(req)
-            .await
-            .expect("router responds");
-        let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
-            .await
-            .expect("body reads");
+        let req = builder.body(Body::empty()).expect("request builds");
+        let res = router.send_for_testing(req, fuz_http::TEST_PEER).await;
         (
-            status,
-            String::from_utf8(bytes.to_vec()).expect("utf8 body"),
+            res.status(),
+            String::from_utf8(res.into_body().to_vec()).expect("utf8 body"),
         )
     }
 
-    /// A full app over a lazy pool: `create_pool` doesn't connect, so nothing
-    /// here contacts a database unless a handler queries it.
+    /// A full app over a lazy pool on the unreachable database: nothing here
+    /// contacts one, and a handler that queries fails.
     fn lazy_app() -> CordApp {
         lazy_app_over(
-            "postgres://localhost/cord_unused",
+            fuz_testing::UNREACHABLE_DATABASE_URL,
             RateLimiterMode::Enforced,
         )
     }
@@ -351,21 +336,16 @@ mod tests {
     }
 
     /// The spine core built without booting (its pool is lazy), over
-    /// `database_url` and `rate_limiters`.
+    /// `database_url` and `rate_limiters`, allowing `test_env`'s origins.
     fn lazy_app_over(database_url: &str, rate_limiters: RateLimiterMode) -> CordApp {
-        let backend = fuz_actions::server::build_app_backend(
-            &test_env(Some(database_url)),
+        CordApp::new(fuz_testing::test_app_backend(
             &CORD_BACKEND_SPEC,
-            &SpineBackendOptions {
+            fuz_testing::TestAppBackendOptions {
+                database_url,
                 rate_limiters,
-                ..SpineBackendOptions::production(
-                    Arc::new(fuz_auth::Argon2idHasher::new()),
-                    fuz_auth::AuthCleanupSchedule::Off,
-                )
+                ..fuz_testing::TestAppBackendOptions::inert(test_env(None).allowed_origins)
             },
-        )
-        .expect("the core builds without touching the DB");
-        CordApp::new(backend)
+        ))
     }
 
     fn full_router() -> GatedRouter {
@@ -525,7 +505,7 @@ mod tests {
         assert!(lazy_app().cord_invite_redeem_rate_limiter.is_some());
         // `testing_cordd`'s mode, so the cross suite redeems unthrottled
         let disabled = lazy_app_over(
-            "postgres://localhost/cord_unused",
+            fuz_testing::UNREACHABLE_DATABASE_URL,
             RateLimiterMode::DisabledForTesting,
         );
         assert!(disabled.cord_invite_redeem_rate_limiter.is_none());
@@ -538,27 +518,17 @@ mod tests {
         peer: &str,
         body: &serde_json::Value,
     ) -> (StatusCode, serde_json::Value) {
-        let mut req = Request::builder()
+        let req = Request::builder()
             .method("POST")
             .uri("/api/rpc")
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .expect("request builds");
-        req.extensions_mut().insert(axum::extract::ConnectInfo(
-            peer.parse::<std::net::SocketAddr>().expect("peer parses"),
-        ));
-        let res = router
-            .into_router_for_testing()
-            .oneshot(req)
-            .await
-            .expect("router responds");
-        let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), 1 << 16)
-            .await
-            .expect("body reads");
+        let peer = peer.parse().expect("peer parses");
+        let res = router.send_for_testing(req, peer).await;
         (
-            status,
-            serde_json::from_slice(&bytes).expect("a JSON-RPC response"),
+            res.status(),
+            serde_json::from_slice(res.body()).expect("a JSON-RPC response"),
         )
     }
 
@@ -571,12 +541,13 @@ mod tests {
     async fn redeem_refuses_past_its_budget_per_ip() {
         use crate::invite::actions::CORD_INVITE_REDEEM_RATE_LIMIT_MAX_ATTEMPTS;
 
-        let db = fuz_testing::fresh_test_db(fuz_testing::TestingDbOptions {
+        let db = fuz_testing::TestingDbOptions {
             suite: "cord_server_router",
             migrations: &[],
             setup_sql: None,
             engine: fuz_testing::TestEngine::Any,
-        })
+        }
+        .open()
         .await;
         let app = lazy_app_over(db.url(), RateLimiterMode::Enforced);
         let router = full_router_over(&app);

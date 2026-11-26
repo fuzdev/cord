@@ -7,7 +7,7 @@
 //! exactly the cord's members through those grants.
 //!
 //! Its scenarios run in order from one test function, over a database of
-//! its own (`common::fresh_db`).
+//! its own (`common::DB`).
 
 #![expect(
     clippy::expect_used,
@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{fresh_db, seed_actor};
+use common::{DB, seed_actor};
 use cord_server::cord_queries::{
     CORD_CELL_KIND, CORD_STAMPED_GRANTS, query_cord_admin_list, query_cord_create, query_cord_get,
     query_cord_rename, query_cords_by_ids,
@@ -57,7 +57,7 @@ async fn cell_list_shows(pool: &Pool, actor_id: Uuid, cord_id: Uuid) -> bool {
 
 #[tokio::test]
 async fn cords_are_structural_cells_governed_by_role_grants() {
-    let pool = fresh_db().await;
+    let pool = DB.open().await;
     let owner = seed_actor(&pool, "owner").await;
     let member = seed_actor(&pool, "member").await;
     let stranger = seed_actor(&pool, "stranger").await;
