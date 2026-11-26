@@ -32,6 +32,7 @@ import {
 	safe_integer,
 	string,
 	transform,
+	with_default_fn,
 	type Infer
 } from '@fuzdev/fuz_schema/schema.ts';
 import { meta } from '@fuzdev/fuz_schema/meta.ts';
@@ -389,7 +390,7 @@ export type CordCreateInput = Infer<typeof CordCreateInput>;
 export const CordCreateOutput = object({ cord: CordJson });
 export type CordCreateOutput = Infer<typeof CordCreateOutput>;
 
-export const CordListInput = object({ acting: ActingActor });
+export const CordListInput = with_default_fn(object({ acting: ActingActor }), () => ({}));
 export type CordListInput = Infer<typeof CordListInput>;
 
 export const CordListOutput = object({ cords: array(CordJson) });
@@ -417,7 +418,7 @@ export type CordUpdateInput = Infer<typeof CordUpdateInput>;
 export const CordUpdateOutput = object({ cord: CordJson });
 export type CordUpdateOutput = Infer<typeof CordUpdateOutput>;
 
-export const CordAdminListInput = object({ acting: ActingActor });
+export const CordAdminListInput = with_default_fn(object({ acting: ActingActor }), () => ({}));
 export type CordAdminListInput = Infer<typeof CordAdminListInput>;
 
 export const CordAdminListOutput = object({ cords: array(CordAdminJson) });

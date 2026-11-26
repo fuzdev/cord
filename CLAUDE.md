@@ -551,7 +551,10 @@ every spine audit emitter tracks its in-flight writes),
 `_testing_db_invariants` (the auth schema's invariants, which the
 cross-process setup checks after each test),
 `_testing_shorten_credential_expiry` (an account's credentials expiring
-seconds from now, for the spine's credential-deadline suite), and cord's
+seconds from now, for the spine's credential-deadline suite),
+`_testing_credential_read` and `_testing_origin_check` (the credential and
+origin readers the spine's conformance suites drive),
+`_testing_flood_notifications` (the outbound-overflow burst), and cord's
 `_testing_cord_invite_expire`. Its two action seams are
 `RunAppOptions` fields `cordd` passes as `None`:
 `extra_action_specs_factory` (the spine's, given the app and the spine's
@@ -571,8 +574,9 @@ dev-dependency for its database suites, an edge the audit ignores).
 (`cord_action_specs.test.ts`, `cord_roles.test.ts`), the generated surface
 (`action_specs.test.ts`), and the state classes, the socket (its
 re-checks, reopens, and waiting requests), and the RPC client's routing and
-push dispatch (`src/test/ui/`, the socket over `FakeSocketClient` and
-`FakeTimers`).
+push dispatch (`src/test/ui/`: the socket over real
+`FrontendWebsocketClient`s on fuz_app's mock sockets, `socket_clients.ts`,
+and `FakeTimers`; the state classes over fuz_app's `create_stub_api`).
 Its setup file, `src/test/logged_error_gate.ts`, installs fuz_app's
 logged-error gate: a test fails on any error it logs unless it declares it
 (`expect_logged_error` for one it provokes, `allow_logged_error` with a
@@ -629,7 +633,7 @@ The `cross_backend_rust` vitest project runs
 `src/test/cross_backend/*.cross.test.ts` over real HTTP against a spawned
 `testing_cordd` through fuz_app's cross-backend harness; each test fires
 `_testing_reset`. Its global setup builds the binary first
-(`prepare_cargo_binary`, with `-p` since `default-members` excludes it;
+(its `cargo_binaries` entry, with `-p` since `default-members` excludes it;
 `FUZ_TESTING_NO_REBUILD=1` skips the build) and opens its database: a
 `pglet_server` of its own, built in cord's Cargo workspace, or under
 `FUZ_TEST_POSTGRES_URL` a PostgreSQL database `fuz_testing_cord_rust`

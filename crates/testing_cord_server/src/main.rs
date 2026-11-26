@@ -30,7 +30,10 @@
 //! the read the cross-process setup checks the auth schema's invariants
 //! through after each test, `_testing_shorten_credential_expiry`, which pulls
 //! an account's session and token expiries close so a test can watch its open socket and audit stream
-//! close when they lapse, and cord's own test seams
+//! close when they lapse, the conformance backdoors the spine's cross suites drive
+//! (`_testing_credential_read` and `_testing_origin_check`, the credential and
+//! origin readers over their shared tables, and `_testing_flood_notifications`,
+//! the outbound-overflow burst), and cord's own test seams
 //! ([`cord_testing_actions`]), all under the same daemon-token gate. Last,
 //! through the `final_action_specs_factory` seam, it mounts
 //! `_testing_action_manifest`
@@ -43,6 +46,7 @@ mod cord_testing_actions;
 
 use std::net::SocketAddr;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use cord_server::router::cord_migration_namespaces;
 use cord_server::runtime::{
@@ -102,7 +106,15 @@ async fn main() -> ExitCode {
                 &[fuz_cell::CELL_DROP_TABLES, CORD_TABLES].concat(),
             )),
         )?;
-        specs.push(fuz_testing::create_testing_shorten_credential_expiry_action_spec());
+        specs.extend([
+            fuz_testing::create_testing_shorten_credential_expiry_action_spec(),
+            fuz_testing::create_testing_credential_read_action_spec(
+                Arc::clone(&runtime.keyring),
+                runtime.session_cookie_name,
+            ),
+            fuz_testing::create_testing_origin_check_action_spec(),
+            fuz_testing::create_testing_flood_notifications_action_spec(),
+        ]);
         specs.push(cord_testing_actions::create_testing_cord_invite_expire_action_spec());
         Ok(specs)
     });

@@ -11,14 +11,17 @@ import { svelte_preprocess_mdz } from '@fuzdev/mdz/svelte_preprocess_mdz.ts';
 import { svelte_preprocess_fuz_code } from '@fuzdev/fuz_code/svelte_preprocess_fuz_code.ts';
 import { vite_plugin_fuz_css } from '@fuzdev/fuz_css/vite_plugin_fuz_css.ts';
 import { vite_plugin_pkg_json } from '@fuzdev/fuz_ui/vite_plugin_pkg_json.ts';
-import { make_cross_backend_project } from '@fuzdev/fuz_app/testing/cross_backend/make_cross_backend_project.ts';
+import {
+	cross_backend_enabled,
+	make_cross_backend_project
+} from '@fuzdev/fuz_app/testing/cross_backend/make_cross_backend_project.ts';
 
 import { CORD_SITE_DOMAIN, CORD_SITE_PATHS, is_cord_site_path } from './src/lib/cord_site.ts';
 
 // The `cross_backend_rust` project spawns the real `testing_cordd` over HTTP
 // (building it and a `pglet_server`), so it's gated behind `FUZ_TEST_CROSS_BACKEND` and a bare
 // `gro test` stays in-process. Run it with `npm run test:cross`.
-const cross_backend_projects = process.env.FUZ_TEST_CROSS_BACKEND
+const cross_backend_projects = cross_backend_enabled()
 	? [
 			make_cross_backend_project({
 				name: 'cross_backend_rust',

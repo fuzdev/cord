@@ -25,8 +25,15 @@ import {
 	CordSocket
 } from '#lib/ui/cord_socket.svelte.ts';
 
-import { FakeSocketClient } from './fake_socket_client.ts';
 import { FakeTimers } from './fake_timers.ts';
+import {
+	install_socket_clients,
+	type DrivenSocketClient,
+	type SocketClients
+} from './socket_clients.ts';
+
+// fuz_app's client opens no socket off the browser (`esm-env`'s `BROWSER`, no seam)
+vi.mock('esm-env', () => ({ BROWSER: true, DEV: true, NODE: true }));
 
 const ADA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const BEA = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -34,15 +41,24 @@ const BEA = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 interface SocketHarness {
 	socket: CordSocket;
 	/** Every client the socket built, oldest first. */
-	clients: Array<FakeSocketClient>;
+	clients: Array<DrivenSocketClient>;
 	/** The session probes the socket made, by the account each asked about. */
 	probes: { count: number; account_ids: Array<string> };
 	ended: { count: number };
 	timers: FakeTimers;
 }
 
+/** The mock sockets and timers the test's clients run on, put back after each test. */
+let installed: SocketClients | null = null;
+
+/** Real clients over mock sockets, for one test. */
+const install = (): SocketClients => {
+	installed ??= install_socket_clients();
+	return installed;
+};
+
 /**
- * A `CordSocket` over fake clients and timers. `probe` answers each session
+ * A `CordSocket` over real clients on mock sockets, and fake timers of its own. `probe` answers each session
  * probe; `end_session` runs when one finds the session gone.
  */
 const create_socket = (
@@ -53,7 +69,7 @@ const create_socket = (
 		browser?: boolean;
 	} = {}
 ): SocketHarness => {
-	const clients: Array<FakeSocketClient> = [];
+	const { clients, create_client } = install();
 	const probes: SocketHarness['probes'] = { count: 0, account_ids: [] };
 	const ended = { count: 0 };
 	const timers = new FakeTimers();
@@ -68,11 +84,7 @@ const create_socket = (
 			await options.end_session?.(socket);
 		},
 		get_account_id: options.get_account_id,
-		create_client: () => {
-			const client = new FakeSocketClient();
-			clients.push(client);
-			return client;
-		},
+		create_client,
 		browser: options.browser ?? true,
 		timers
 	});
@@ -99,13 +111,15 @@ const settled = async (
 	}
 };
 
-/** Let pending promise callbacks run. */
-const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+/** Let pending promise callbacks run (`setImmediate`, which the fake timers leave real). */
+const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 const json_response = (status: number, body: unknown): Response =>
 	new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 afterEach(() => {
+	installed?.restore();
+	installed = null;
 	vi.unstubAllGlobals();
 });
 
@@ -182,6 +196,7 @@ describe('CordSocket lifecycle', () => {
 		clients[0]!.push({ n: 1 });
 		socket.set_account(BEA);
 		assert.strictEqual(clients[0]!.message_handler_count, 0, 'unsubscribed from the old client');
+		assert.strictEqual(clients[1]!.message_handler_count, 1, 'subscribed to the new one');
 		clients[0]!.push({ n: 2 });
 		clients[1]!.push({ n: 3 });
 		assert.deepEqual(seen, ['{"n":1}', '{"n":3}']);
@@ -469,7 +484,7 @@ describe('CordSocket session recheck', () => {
 	test('a socket revoked again soon after a reopen reopens on a backoff', async () => {
 		const { socket, clients, timers } = create_socket({ probe: () => Promise.resolve('valid') });
 		socket.set_account(ADA);
-		const revoke_and_recheck = async (): Promise<FakeSocketClient> => {
+		const revoke_and_recheck = async (): Promise<DrivenSocketClient> => {
 			const client = clients.at(-1)!;
 			client.open();
 			client.close(4001);
@@ -582,7 +597,6 @@ describe('CordSocket requests', () => {
 		await flush();
 		const client = clients[0]!;
 		assert.strictEqual(client.requests.length, 0);
-		assert.strictEqual(client.queued.length, 1);
 		client.open();
 		assert.strictEqual(client.requests[0]!.method, 'cord_list');
 		client.requests[0]!.resolve({ cords: [] });
@@ -623,9 +637,14 @@ describe('CordSocket requests', () => {
 		socket.set_account(ADA);
 		const client = clients[0]!;
 		const listed = settled(socket.request('cord_list', {}));
+		let done = false;
+		void listed.then(() => {
+			done = true;
+		});
 		await flush();
 		timers.advance(CORD_SOCKET_WAIT_TIMEOUT - 1);
-		assert.strictEqual(client.queued.length, 1);
+		await flush();
+		assert.ok(!done, 'still waiting a tick short');
 		timers.advance(1);
 		const { error } = await listed;
 		assert.deepEqual(to_code_and_reason(error), [
@@ -633,7 +652,6 @@ describe('CordSocket requests', () => {
 			CORD_SOCKET_WAIT_TIMEOUT_REASON
 		]);
 		assert.strictEqual(to_message(error), CORD_SOCKET_WAIT_TIMEOUT_MESSAGE);
-		assert.strictEqual(client.queued.length, 0);
 		client.open();
 		assert.strictEqual(client.requests.length, 0, 'never sent');
 	});
@@ -757,9 +775,10 @@ describe('CordSocket requests', () => {
 		client.open();
 		const listed = settled(socket.request('cord_list', {}));
 		await flush();
-		const unavailable = new Error('database unavailable') as Error & { code: number };
-		unavailable.code = JSONRPC_ERROR_CODES.service_unavailable;
-		client.requests[0]!.reject(unavailable as never);
+		client.requests[0]!.reject({
+			code: JSONRPC_ERROR_CODES.service_unavailable,
+			message: 'database unavailable'
+		});
 		const { error } = await listed;
 		assert.deepEqual(to_code_and_reason(error), [
 			JSONRPC_ERROR_CODES.service_unavailable,
@@ -925,7 +944,7 @@ describe('CordSocket over CordAuthState', () => {
 			)
 		);
 		const auth_state = new CordAuthState();
-		const clients: Array<FakeSocketClient> = [];
+		const { clients, create_client } = install();
 		const socket: CordSocket = new CordSocket({
 			probe_session: (account_id, signal) => auth_state.probe_session(account_id, signal),
 			end_session: async () => {
@@ -933,11 +952,7 @@ describe('CordSocket over CordAuthState', () => {
 				// the root layout's account effect
 				socket.set_account(auth_state.signed_in ? (auth_state.account?.id ?? null) : null);
 			},
-			create_client: () => {
-				const client = new FakeSocketClient();
-				clients.push(client);
-				return client;
-			},
+			create_client,
 			browser: true
 		});
 		await auth_state.check_session();

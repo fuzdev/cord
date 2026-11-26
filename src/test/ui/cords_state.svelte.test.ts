@@ -1,11 +1,12 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 
 import { ERROR_CORD_NAME_INVALID, type CordJson } from '#lib/cord_action_specs.ts';
 import { AdminCordsState, CordState, CordsState } from '#lib/ui/cords_state.svelte.ts';
 import { CORD_SOCKET_LOST_MESSAGE, CORD_SOCKET_LOST_REASON } from '#lib/ui/cord_errors.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const cord = (name: string, role: CordJson['role'] = 'cord_owner'): CordJson =>
 	({
@@ -18,7 +19,9 @@ const cord = (name: string, role: CordJson['role'] = 'cord_owner'): CordJson =>
 describe('CordsState', () => {
 	test('fetch loads the caller’s cords', async () => {
 		const state = new CordsState({
-			api: stub_api({ cord_list: () => Promise.resolve({ cords: [cord('the porch')] }) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_list: () => Promise.resolve({ cords: [cord('the porch')] })
+			})
 		});
 		await state.fetch();
 		assert.isTrue(state.list.succeeded);
@@ -31,7 +34,7 @@ describe('CordsState', () => {
 	test('create_cord creates, appends to the list without a reload, and returns the new cord', async () => {
 		let lists = 0;
 		const state = new CordsState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_create: (input: { name: string }) => Promise.resolve({ cord: cord(input.name) }),
 				cord_list: () => {
 					lists++;
@@ -52,7 +55,7 @@ describe('CordsState', () => {
 	test('a create during an in-flight refresh refetches, so the stale answer keeps the new cord', async () => {
 		const resolvers: Array<(v: { cords: Array<CordJson> }) => void> = [];
 		const state = new CordsState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_create: (input: { name: string }) => Promise.resolve({ cord: cord(input.name) }),
 				cord_list: () => new Promise((r) => resolvers.push(r))
 			})
@@ -73,7 +76,9 @@ describe('CordsState', () => {
 
 	test('a failed create returns undefined and keeps the error', async () => {
 		const state = new CordsState({
-			api: stub_api({ cord_create: () => Promise.reject(new Error('forbidden')) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_create: () => Promise.reject(new Error('forbidden'))
+			})
 		});
 		assert.isUndefined(await state.create_cord('the porch'));
 		assert.strictEqual(state.create.error, 'forbidden');
@@ -81,7 +86,9 @@ describe('CordsState', () => {
 
 	test('a create refused for its name shows the name rules', async () => {
 		const state = new CordsState({
-			api: stub_api({ cord_create: () => Promise.reject(rpc_error(ERROR_CORD_NAME_INVALID)) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_create: () => Promise.reject(rpc_error(ERROR_CORD_NAME_INVALID))
+			})
 		});
 		assert.isUndefined(await state.create_cord('the porch'));
 		assert.match(state.create.error!, /A cord name is 1 to/);
@@ -91,7 +98,9 @@ describe('CordsState', () => {
 		const porch = cord('the porch');
 		const yard = { ...cord('the yard'), id: '22222222-2222-4222-8222-222222222222' } as CordJson;
 		const state = new CordsState({
-			api: stub_api({ cord_list: () => Promise.resolve({ cords: [porch, yard] }) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_list: () => Promise.resolve({ cords: [porch, yard] })
+			})
 		});
 		await state.fetch();
 		state.put_cord({ ...porch, name: 'the stoop' });
@@ -111,7 +120,9 @@ describe('CordsState', () => {
 		const porch = cord('the porch');
 		const yard = { ...cord('the yard'), id: '22222222-2222-4222-8222-222222222222' } as CordJson;
 		const state = new CordsState({
-			api: stub_api({ cord_list: () => Promise.resolve({ cords: [porch, yard] }) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_list: () => Promise.resolve({ cords: [porch, yard] })
+			})
 		});
 		await state.fetch();
 		state.remove_cord(porch.id);
@@ -126,7 +137,9 @@ describe('CordsState', () => {
 
 	test('reset forgets the cords', async () => {
 		const state = new CordsState({
-			api: stub_api({ cord_list: () => Promise.resolve({ cords: [cord('the porch')] }) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_list: () => Promise.resolve({ cords: [cord('the porch')] })
+			})
 		});
 		await state.fetch();
 		state.reset();
@@ -139,7 +152,7 @@ describe('CordsState', () => {
 		let resolve_retry!: (v: { cords: Array<CordJson> }) => void;
 		let retrying = false;
 		const state = new CordsState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_list: () => {
 					if (retrying) return new Promise((r) => (resolve_retry = r));
 					return fail
@@ -173,7 +186,9 @@ describe('CordsState', () => {
 	test('reset during an in-flight fetch keeps its cords out', async () => {
 		let resolve_list!: (v: { cords: Array<CordJson> }) => void;
 		const state = new CordsState({
-			api: stub_api({ cord_list: () => new Promise((r) => (resolve_list = r)) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_list: () => new Promise((r) => (resolve_list = r))
+			})
 		});
 		const fetching = state.fetch();
 		state.reset();
@@ -188,7 +203,7 @@ describe('CordsState', () => {
 describe('CordState', () => {
 	test('fetch then rename updates the loaded cord', async () => {
 		const state = new CordState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_get: () => Promise.resolve({ cord: cord('the porch') }),
 				cord_update: (input: { name: string }) => Promise.resolve({ cord: cord(input.name) })
 			})
@@ -201,7 +216,7 @@ describe('CordState', () => {
 
 	test('a rename refused for its name shows the name rules', async () => {
 		const state = new CordState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_get: () => Promise.resolve({ cord: cord('the porch') }),
 				cord_update: () => Promise.reject(rpc_error(ERROR_CORD_NAME_INVALID))
 			})
@@ -213,7 +228,9 @@ describe('CordState', () => {
 
 	test('a failed fetch leaves no cord', async () => {
 		const state = new CordState({
-			api: stub_api({ cord_get: () => Promise.reject(new Error('cord not found')) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_get: () => Promise.reject(new Error('cord not found'))
+			})
 		});
 		await state.fetch(cord('x').id);
 		assert.isNull(state.cord);
@@ -225,7 +242,9 @@ describe('CordState', () => {
 		const yard = { ...cord('the yard'), id: '22222222-2222-4222-8222-222222222222' } as CordJson;
 		const resolvers: Array<(v: { cord: CordJson }) => void> = [];
 		const state = new CordState({
-			api: stub_api({ cord_get: () => new Promise((r) => resolvers.push(r)) })
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_get: () => new Promise((r) => resolvers.push(r))
+			})
 		});
 		const first = state.fetch(cord('x').id);
 		const second = state.fetch(yard.id);
@@ -241,7 +260,7 @@ describe('CordState', () => {
 		const yard = { ...cord('the yard'), id: '22222222-2222-4222-8222-222222222222' } as CordJson;
 		let resolve_update!: (v: { cord: CordJson }) => void;
 		const state = new CordState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_get: (input: { cord_id: string }) =>
 					Promise.resolve({ cord: input.cord_id === yard.id ? yard : cord('the porch') }),
 				cord_update: () => new Promise((r) => (resolve_update = r))
@@ -262,7 +281,11 @@ describe('the cord read slots', () => {
 	test('show a dropped connection in cord’s words, not the error’s own text', async () => {
 		const lost = () =>
 			Promise.reject(rpc_error(CORD_SOCKET_LOST_REASON, JSONRPC_ERROR_CODES.service_unavailable));
-		const api = stub_api({ cord_list: lost, cord_get: lost, cord_admin_list: lost });
+		const api = create_stub_api<ThrowingApi<FrontendActionsApi>>({
+			cord_list: lost,
+			cord_get: lost,
+			cord_admin_list: lost
+		});
 		const cords = new CordsState({ api });
 		await cords.fetch();
 		const one = new CordState({ api });

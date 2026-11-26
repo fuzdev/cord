@@ -1,4 +1,6 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 import {
@@ -8,8 +10,7 @@ import {
 } from '#lib/cord_action_specs.ts';
 import type { CordRole } from '#lib/cord_roles.ts';
 import { CordPageState } from '#lib/ui/cord_page_state.svelte.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const PORCH_ID = '11111111-1111-4111-8111-111111111111' as Uuid;
 const YARD_ID = '22222222-2222-4222-8222-222222222222' as Uuid;
@@ -36,7 +37,7 @@ const create_page = (methods: Record<string, (input: any) => Promise<unknown>>) 
 		actor_id: ALICE
 	});
 	const cord_page = new CordPageState({
-		api: stub_api(methods),
+		api: create_stub_api<ThrowingApi<FrontendActionsApi>>(methods),
 		get_cord_id: () => route.cord_id,
 		get_self_actor_id: () => route.actor_id
 	});

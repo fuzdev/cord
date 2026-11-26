@@ -1,4 +1,6 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { is } from '@fuzdev/fuz_schema/schema.ts';
 import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
@@ -20,8 +22,7 @@ import {
 	to_cord_invite_minter,
 	to_cord_join_url
 } from '#lib/ui/cord_invites_state.svelte.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const CORD_ID = '11111111-1111-4111-8111-111111111111' as Uuid;
 const INVITE_ID = '33333333-3333-4333-8333-333333333333' as Uuid;
@@ -163,7 +164,7 @@ describe('CordInvitesState', () => {
 		let lists = 0;
 		const older = invite({ id: '44444444-4444-4444-8444-444444444444' as Uuid });
 		const state = new CordInvitesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_list: () => {
 					lists++;
 					return Promise.resolve({ invites: [older] });
@@ -191,7 +192,7 @@ describe('CordInvitesState', () => {
 
 	test('a refused mint keeps its reason in words', async () => {
 		const state = new CordInvitesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_create: () => Promise.reject(rpc_error(ERROR_CORD_INVITE_NEWCOMER_FORBIDDEN))
 			})
 		});
@@ -204,7 +205,7 @@ describe('CordInvitesState', () => {
 
 	test('revoke_invite updates the link in place', async () => {
 		const state = new CordInvitesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_list: () => Promise.resolve({ invites: [invite()] }),
 				cord_invite_revoke: () =>
 					Promise.resolve({
@@ -220,7 +221,7 @@ describe('CordInvitesState', () => {
 
 	test('fetching another cord forgets the minted link', async () => {
 		const state = new CordInvitesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_list: () => Promise.resolve({ invites: [] }),
 				cord_invite_create: () => Promise.resolve({ invite: invite(), token: 'tok' })
 			})
@@ -235,7 +236,7 @@ describe('CordInvitesState', () => {
 	test('a revoke of a link the server no longer has says so, to a manager, and reloads', async () => {
 		let lists = 0;
 		const state = new CordInvitesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_list: () => {
 					lists++;
 					return Promise.resolve({ invites: lists === 1 ? [invite()] : [] });
@@ -256,8 +257,8 @@ describe('CordInvitesState', () => {
 		let release_create!: () => void;
 		const lists: Array<string> = [];
 		const state = new CordInvitesState({
-			api: stub_api({
-				cord_invite_list: async (input: { cord_id: Uuid }) => {
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_invite_list: async (input: { cord_id: string }) => {
 					lists.push(input.cord_id);
 					if (input.cord_id === CORD_ID && lists.length === 1) {
 						await new Promise<void>((r) => (release_list = r));

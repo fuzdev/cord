@@ -1,4 +1,3 @@
-import { prepare_cargo_binary } from '@fuzdev/fuz_app/testing/cross_backend/cargo_binary.ts';
 import { create_cross_backend_global_setup } from '@fuzdev/fuz_app/testing/cross_backend/create_cross_backend_global_setup.ts';
 
 import { CORD_CARGO_BINARY, rust_backend_config } from './cord_backend_config.ts';
@@ -9,6 +8,5 @@ import { CORD_CARGO_BINARY, rust_backend_config } from './cord_backend_config.ts
 // and provides the serialized handle as `backend_handle`.
 export default create_cross_backend_global_setup({
 	configs: { rust: rust_backend_config },
-	databases: { rust: CORD_CARGO_BINARY },
-	before_spawn: { rust: () => prepare_cargo_binary(CORD_CARGO_BINARY) }
+	cargo_binaries: { rust: CORD_CARGO_BINARY }
 });

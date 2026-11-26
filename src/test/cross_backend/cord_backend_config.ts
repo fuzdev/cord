@@ -32,8 +32,8 @@ import {
 export const CORD_SESSION_COOKIE_NAME = 'cord_session';
 
 /**
- * The `testing_cordd` binary, built by the global setup's `before_spawn`
- * (`prepare_cargo_binary`) ahead of the spawn. `-p` is needed: the
+ * The `testing_cordd` binary, the global setup's `cargo_binaries` entry,
+ * built ahead of the spawn with its `pglet_server`. `-p` is needed: the
  * workspace's `default-members` is `cord_server` alone.
  */
 export const CORD_CARGO_BINARY: CargoBinaryOptions = {
@@ -85,6 +85,9 @@ export const rust_backend_config = (database_url: string): BackendConfig =>
 				'_testing_drain_effects',
 				'_testing_db_invariants',
 				'_testing_shorten_credential_expiry',
+				'_testing_credential_read',
+				'_testing_origin_check',
+				'_testing_flood_notifications',
 				'_testing_action_manifest'
 			]
 		},

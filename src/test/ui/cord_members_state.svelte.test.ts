@@ -1,4 +1,6 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 import {
@@ -8,8 +10,7 @@ import {
 } from '#lib/cord_action_specs.ts';
 import type { CordRole } from '#lib/cord_roles.ts';
 import { CordMembersState } from '#lib/ui/cord_members_state.svelte.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const CORD_ID = '11111111-1111-4111-8111-111111111111' as Uuid;
 const OTHER_CORD_ID = '22222222-2222-4222-8222-222222222222' as Uuid;
@@ -23,7 +24,7 @@ const member = (actor_id: string, username: string, role: CordRole): CordMemberJ
 const create_members_api = (initial: Array<CordMemberJson>) => {
 	let members = initial;
 	const calls: Array<string> = [];
-	const api = stub_api({
+	const api = create_stub_api<ThrowingApi<FrontendActionsApi>>({
 		cord_member_list: () => {
 			calls.push('list');
 			return Promise.resolve({ members });
@@ -33,7 +34,7 @@ const create_members_api = (initial: Array<CordMemberJson>) => {
 			members = members.map((m) =>
 				m.actor_id === input.actor_id ? { ...m, role: input.role } : m
 			);
-			return Promise.resolve({ member: members.find((m) => m.actor_id === input.actor_id) });
+			return Promise.resolve({ member: members.find((m) => m.actor_id === input.actor_id)! });
 		},
 		cord_member_remove: (input: { actor_id: string }) => {
 			calls.push(`remove:${input.actor_id}`);
@@ -85,7 +86,7 @@ describe('CordMembersState', () => {
 		let lists = 0;
 		let role_sets = 0;
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () =>
 					++lists === 1
 						? Promise.resolve({ members: [member(BOB, 'bob', 'cord_member')] })
@@ -124,7 +125,7 @@ describe('CordMembersState', () => {
 		let lists = 0;
 		let removes = 0;
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () =>
 					++lists === 1
 						? Promise.resolve({ members: [member(BOB, 'bob', 'cord_member')] })
@@ -152,7 +153,7 @@ describe('CordMembersState', () => {
 	test('a refused role change keeps its reason, in words, and still reloads', async () => {
 		let lists = 0;
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () => {
 					lists++;
 					return Promise.resolve({ members: [member(ALICE, 'alice', 'cord_owner')] });
@@ -180,7 +181,7 @@ describe('CordMembersState', () => {
 		);
 
 		const refused = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () => Promise.resolve({ members: [] }),
 				cord_member_remove: () => Promise.reject(rpc_error(ERROR_CORD_MEMBER_FORBIDDEN))
 			})
@@ -201,7 +202,7 @@ describe('CordMembersState', () => {
 
 	test('a refused leave keeps its reason', async () => {
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () => Promise.resolve({ members: [] }),
 				cord_leave: () => Promise.reject(rpc_error(ERROR_CORD_LAST_OWNER))
 			})
@@ -212,7 +213,9 @@ describe('CordMembersState', () => {
 	});
 
 	test('does nothing before a cord is loaded', async () => {
-		const state = new CordMembersState({ api: stub_api({}) });
+		const state = new CordMembersState({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({})
+		});
 		assert.isFalse(await state.set_role(BOB, 'cord_admin'));
 		assert.isFalse(await state.remove_member(BOB));
 		assert.isFalse(await state.leave_cord());
@@ -222,7 +225,7 @@ describe('CordMembersState', () => {
 		let answer: Array<CordMemberJson> = [member(ALICE, 'alice', 'cord_owner')];
 		let release!: () => void;
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: async () => {
 					if (answer.length === 0) await new Promise<void>((r) => (release = r));
 					return { members: answer };
@@ -241,8 +244,8 @@ describe('CordMembersState', () => {
 	test('drops a late response for a cord the state has moved off', async () => {
 		let release_first!: () => void;
 		const state = new CordMembersState({
-			api: stub_api({
-				cord_member_list: async (input: { cord_id: Uuid }) => {
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_member_list: async (input: { cord_id: string }) => {
 					if (input.cord_id === CORD_ID) {
 						await new Promise<void>((r) => (release_first = r));
 						return { members: [member(ALICE, 'alice', 'cord_owner')] };
@@ -266,7 +269,7 @@ describe('CordMembersState', () => {
 	test('loaded_cord_id names the cord once its list loads, and survives a failed refresh', async () => {
 		let fail = false;
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () =>
 					fail
 						? Promise.reject(new TypeError('fetch failed'))
@@ -290,8 +293,8 @@ describe('CordMembersState', () => {
 		let release_role_set!: () => void;
 		const lists: Array<string> = [];
 		const state = new CordMembersState({
-			api: stub_api({
-				cord_member_list: (input: { cord_id: Uuid }) => {
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_member_list: (input: { cord_id: string }) => {
 					lists.push(input.cord_id);
 					return Promise.resolve({ members: [] });
 				},
@@ -315,7 +318,7 @@ describe('CordMembersState', () => {
 		const held = <T>(value: T): Promise<T> =>
 			new Promise<T>((resolve) => releases.push(() => resolve(value)));
 		const state = new CordMembersState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_member_list: () => Promise.resolve({ members: [member(BOB, 'bob', 'cord_member')] }),
 				cord_member_role_set: () => held({ member: member(BOB, 'bob', 'cord_admin') }),
 				cord_member_remove: () => held({ ok: true })

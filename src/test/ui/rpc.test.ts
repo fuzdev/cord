@@ -6,24 +6,27 @@ import { CORD_SOCKET_WAIT_TIMEOUT, CordSocket } from '#lib/ui/cord_socket.svelte
 import { to_cord_error_message } from '#lib/ui/cord_errors.ts';
 import { create_cord_rpc } from '#lib/ui/rpc.ts';
 
-import { FakeSocketClient } from './fake_socket_client.ts';
 import { FakeTimers } from './fake_timers.ts';
+import { install_socket_clients, type SocketClients } from './socket_clients.ts';
+
+// fuz_app's client opens no socket off the browser (`esm-env`'s `BROWSER`, no seam)
+vi.mock('esm-env', () => ({ BROWSER: true, DEV: true, NODE: true }));
 
 const ADA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const GRANT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
-/** The RPC client over a socket on fake clients, signed in as Ada unless `signed_out`. */
+/** The mock sockets and timers the test's clients run on, put back after each test. */
+let installed: SocketClients | null = null;
+
+/** The RPC client over a socket on real clients over mock sockets, signed in as Ada unless `signed_out`. */
 const create_rpc = (options: { handlers?: FrontendActionHandlers; signed_out?: boolean } = {}) => {
-	const clients: Array<FakeSocketClient> = [];
+	installed ??= install_socket_clients();
+	const { clients, create_client } = installed;
 	const timers = new FakeTimers();
 	const socket = new CordSocket({
 		probe_session: () => Promise.resolve('valid'),
 		end_session: () => Promise.resolve(),
-		create_client: () => {
-			const client = new FakeSocketClient();
-			clients.push(client);
-			return client;
-		},
+		create_client,
 		browser: true,
 		timers
 	});
@@ -52,10 +55,12 @@ const stub_http = (): Array<string> => {
 	return urls;
 };
 
-/** Let the transport's async message handler run. */
-const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+/** Let the transport's async message handler run (`setImmediate`, which the fake timers leave real). */
+const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 afterEach(() => {
+	installed?.restore();
+	installed = null;
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });

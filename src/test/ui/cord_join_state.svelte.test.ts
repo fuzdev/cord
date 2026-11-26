@@ -1,4 +1,6 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import { is } from '@fuzdev/fuz_schema/schema.ts';
 
 import {
@@ -33,8 +35,7 @@ import {
 } from '#lib/ui/cord_join_state.svelte.ts';
 
 import { CORD_RATE_LIMITED_MESSAGE } from '#lib/ui/cord_errors.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const CORD = {
 	id: '11111111-1111-4111-8111-111111111111',
@@ -624,7 +625,7 @@ describe('CordJoinState', () => {
 	test('fetch_preview previews for the identity asked, and skips a token no link can have', async () => {
 		const tokens: Array<string> = [];
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_preview: (input: { token: string }) => {
 					tokens.push(input.token);
 					return Promise.resolve({
@@ -649,7 +650,7 @@ describe('CordJoinState', () => {
 
 	test('accept_invite joins, and marks a dead link', async () => {
 		const joining = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_accept: () => Promise.resolve({ cord: cord_json, joined: true })
 			})
 		});
@@ -657,7 +658,7 @@ describe('CordJoinState', () => {
 		assert.strictEqual((await joining.accept_invite())?.id, CORD.id);
 
 		const dead = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_accept: () => Promise.reject(rpc_error(ERROR_CORD_INVITE_REVOKED))
 			})
 		});
@@ -669,7 +670,7 @@ describe('CordJoinState', () => {
 	test('join_as_newcomer runs redeem, signup, then accept, back to back', async () => {
 		const steps: Array<string> = [];
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_redeem: (input: { token: string; username: string }) => {
 					steps.push(`redeem:${input.token}:${input.username}`);
 					return Promise.resolve({ cord: CORD, username: 'newcomer', created: true });
@@ -698,7 +699,7 @@ describe('CordJoinState', () => {
 	});
 
 	test('join_as_newcomer checks the fields before sending anything', async () => {
-		const state = new CordJoinState({ api: stub_api({}) });
+		const state = new CordJoinState({ api: create_stub_api<ThrowingApi<FrontendActionsApi>>({}) });
 		state.set_token(TOKEN);
 		const outcome = await state.join_as_newcomer('newcomer', 'short', 'short', () => {
 			throw new Error('no signup expected');
@@ -713,7 +714,9 @@ describe('CordJoinState', () => {
 			ERROR_CORD_INVITE_USERNAME_INVALID
 		]) {
 			const state = new CordJoinState({
-				api: stub_api({ cord_invite_redeem: () => Promise.reject(rpc_error(reason)) })
+				api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+					cord_invite_redeem: () => Promise.reject(rpc_error(reason))
+				})
 			});
 			state.set_token(TOKEN);
 			const outcome = await state.join_as_newcomer('newcomer', password, password, () => {
@@ -733,7 +736,9 @@ describe('CordJoinState', () => {
 			ERROR_CORD_INVITE_NOT_FOUND
 		]) {
 			const state = new CordJoinState({
-				api: stub_api({ cord_invite_redeem: () => Promise.reject(rpc_error(reason)) })
+				api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+					cord_invite_redeem: () => Promise.reject(rpc_error(reason))
+				})
 			});
 			state.set_token(TOKEN);
 			const outcome = await state.join_as_newcomer('newcomer', password, password, () => {
@@ -747,7 +752,7 @@ describe('CordJoinState', () => {
 	test('join_as_newcomer stops at a failed signup, and a retry redeems again', async () => {
 		let redeems = 0;
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_redeem: () => {
 					redeems++;
 					return Promise.resolve({ cord: CORD, username: 'newcomer', created: redeems === 1 });
@@ -770,7 +775,7 @@ describe('CordJoinState', () => {
 
 	test('join_as_newcomer reports a failed accept after signing up, for a retry', async () => {
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_redeem: () =>
 					Promise.resolve({ cord: CORD, username: 'newcomer', created: true }),
 				cord_invite_accept: () => Promise.reject(new TypeError('fetch failed'))
@@ -832,8 +837,8 @@ describe('CordJoinState', () => {
 		previews: Array<CordInvitePreviewOutput>,
 		methods: Record<string, (input: any) => Promise<unknown>> = {}
 	) =>
-		stub_api({
-			cord_invite_preview: () => Promise.resolve(previews.shift()),
+		create_stub_api<ThrowingApi<FrontendActionsApi>>({
+			cord_invite_preview: () => Promise.resolve(previews.shift()!),
 			cord_invite_redeem: () =>
 				Promise.resolve({ cord: CORD, username: 'newcomer', created: true }),
 			...methods
@@ -933,7 +938,7 @@ describe('CordJoinState', () => {
 		let previews = 0;
 		let finish_signup!: (ok: boolean) => void;
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_preview: () => {
 					previews++;
 					return Promise.resolve(preview_output());
@@ -985,7 +990,7 @@ describe('CordJoinState', () => {
 				let finish_preview!: () => void;
 				let previews = 0;
 				const state = new CordJoinState({
-					api: stub_api({
+					api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 						// the first preview answers at once, the re-preview when released
 						cord_invite_preview: () =>
 							++previews === 1
@@ -1024,7 +1029,7 @@ describe('CordJoinState', () => {
 			() => Promise.reject(rpc_error(ERROR_CORD_INVITE_EXPIRED))
 		];
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_preview: () => previews.shift()!(),
 				cord_invite_redeem: () => Promise.reject(new TypeError('fetch failed'))
 			})
@@ -1056,7 +1061,7 @@ describe('CordJoinState', () => {
 		});
 		const { storage, stored } = memory_storage({ token: TOKEN, redeemed: REDEEMED });
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_preview: () => Promise.resolve(preview_output()),
 				cord_invite_redeem: () => Promise.reject(rate_limited)
 			}),
@@ -1097,7 +1102,7 @@ describe('CordJoinState', () => {
 		let finish_preview!: () => void;
 		let calls = 0;
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_preview: () =>
 					++calls === 1
 						? Promise.resolve(preview_output())
@@ -1120,7 +1125,7 @@ describe('CordJoinState', () => {
 	test('a refusal of the reserved username drops the redemption, which no longer holds', async () => {
 		const { storage, stored } = memory_storage({ token: TOKEN, redeemed: REDEEMED });
 		const state = new CordJoinState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_invite_redeem: () => Promise.reject(rpc_error(ERROR_CORD_INVITE_USERNAME_UNAVAILABLE))
 			}),
 			storage
@@ -1143,7 +1148,10 @@ describe('CordJoinState', () => {
 
 	test('forget_on_logout drops the redemption and the stored link, keeping the token', async () => {
 		const { storage, stored } = memory_storage({ token: TOKEN, redeemed: REDEEMED });
-		const state = new CordJoinState({ api: stub_api({}), storage });
+		const state = new CordJoinState({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({}),
+			storage
+		});
 		state.load('');
 		state.forget_on_logout();
 		assert.isNull(state.redeemed);
@@ -1152,7 +1160,10 @@ describe('CordJoinState', () => {
 	});
 
 	test('load keeps the token in memory when storage is blocked and the fragment is gone', () => {
-		const state = new CordJoinState({ api: stub_api({}), storage: blocked_storage });
+		const state = new CordJoinState({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({}),
+			storage: blocked_storage
+		});
 		state.load(`#${TOKEN}`);
 		assert.strictEqual(state.token, TOKEN);
 		state.load('');

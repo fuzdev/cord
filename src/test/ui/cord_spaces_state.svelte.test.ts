@@ -1,4 +1,6 @@
 import { assert, describe, test } from 'vitest';
+import { create_stub_api, rpc_error } from '@fuzdev/fuz_app/testing/stub_api.ts';
+import type { ThrowingApi } from '@fuzdev/fuz_app/actions/rpc_client.ts';
 import type { Uuid } from '@fuzdev/fuz_app/primitive_schemas.ts';
 
 import {
@@ -9,8 +11,7 @@ import {
 } from '#lib/cord_action_specs.ts';
 import { CORD_SPACE_NAME_RULE } from '#lib/ui/cord_errors.ts';
 import { CordSpacesState } from '#lib/ui/cord_spaces_state.svelte.ts';
-
-import { rpc_error, stub_api } from './stub_api.ts';
+import type { FrontendActionsApi } from '#lib/action_metatypes.ts';
 
 const PORCH = '11111111-1111-4111-8111-111111111111' as Uuid;
 const YARD = '22222222-2222-4222-8222-222222222222' as Uuid;
@@ -29,26 +30,26 @@ const space = (id: Uuid, name: string, cord_id: Uuid = PORCH): CordSpaceJson => 
 const create_spaces_api = (initial: Record<string, Array<CordSpaceJson>>) => {
 	const by_cord = new Map(Object.entries(initial));
 	const calls: Array<string> = [];
-	const api = stub_api({
+	const api = create_stub_api<ThrowingApi<FrontendActionsApi>>({
 		cord_space_list: (input: { cord_id: string }) => {
 			calls.push(`list:${input.cord_id}`);
 			return Promise.resolve({ spaces: by_cord.get(input.cord_id) ?? [] });
 		},
-		cord_space_create: (input: { cord_id: Uuid; name: string }) => {
+		cord_space_create: (input: { cord_id: string; name: string }) => {
 			calls.push(`create:${input.name}`);
-			const created = space(LOFT, input.name, input.cord_id);
+			const created = space(LOFT, input.name, input.cord_id as Uuid);
 			by_cord.set(input.cord_id, [...(by_cord.get(input.cord_id) ?? []), created]);
 			return Promise.resolve({ space: created });
 		},
-		cord_space_update: (input: { cord_id: string; space_id: Uuid; name: string }) => {
+		cord_space_update: (input: { cord_id: string; space_id: string; name: string }) => {
 			calls.push(`update:${input.space_id}`);
 			const spaces = (by_cord.get(input.cord_id) ?? []).map((s) =>
 				s.id === input.space_id ? { ...s, name: input.name } : s
 			);
 			by_cord.set(input.cord_id, spaces);
-			return Promise.resolve({ space: spaces.find((s) => s.id === input.space_id) });
+			return Promise.resolve({ space: spaces.find((s) => s.id === input.space_id)! });
 		},
-		cord_space_delete: (input: { cord_id: string; space_id: Uuid }) => {
+		cord_space_delete: (input: { cord_id: string; space_id: string }) => {
 			calls.push(`delete:${input.space_id}`);
 			by_cord.set(
 				input.cord_id,
@@ -64,7 +65,7 @@ const create_spaces_api = (initial: Record<string, Array<CordSpaceJson>>) => {
 const create_held_lists = () => {
 	const answers: Array<(spaces: Array<CordSpaceJson>) => void> = [];
 	const cord_space_list = () =>
-		new Promise((resolve) => {
+		new Promise<{ spaces: Array<CordSpaceJson> }>((resolve) => {
 			answers.push((spaces) => resolve({ spaces }));
 		});
 	return { answers, cord_space_list };
@@ -92,11 +93,13 @@ describe('CordSpacesState', () => {
 	test('a response for a cord the state moved off is dropped', async () => {
 		const finish: Record<string, () => void> = {};
 		const state = new CordSpacesState({
-			api: stub_api({
-				cord_space_list: (input: { cord_id: Uuid }) =>
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
+				cord_space_list: (input: { cord_id: string }) =>
 					new Promise((resolve) => {
 						finish[input.cord_id] = () =>
-							resolve({ spaces: [space(HEARTH, `${input.cord_id} hearth`, input.cord_id)] });
+							resolve({
+								spaces: [space(HEARTH, `${input.cord_id} hearth`, input.cord_id as Uuid)]
+							});
 					})
 			})
 		});
@@ -114,7 +117,7 @@ describe('CordSpacesState', () => {
 	test('moving to another cord forgets the last one’s list and write errors', async () => {
 		const { api } = create_spaces_api({ [PORCH]: [space(HEARTH, 'hearth')] });
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: (input) => api.cord_space_list(input),
 				cord_space_update: () => Promise.reject(rpc_error(ERROR_CORD_SPACE_FORBIDDEN))
 			})
@@ -154,7 +157,7 @@ describe('CordSpacesState', () => {
 
 	test('a refused create maps its reason to words and changes nothing', async () => {
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: () => Promise.resolve({ spaces: [] }),
 				cord_space_create: () => Promise.reject(rpc_error(ERROR_CORD_SPACE_NAME_INVALID))
 			})
@@ -168,7 +171,7 @@ describe('CordSpacesState', () => {
 	test('a create that lands after a move to another cord leaves that cord’s list alone', async () => {
 		let finish_create!: () => void;
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: () => Promise.resolve({ spaces: [] }),
 				cord_space_create: () =>
 					new Promise((resolve) => {
@@ -187,7 +190,7 @@ describe('CordSpacesState', () => {
 	test('a create that lands while a load runs reloads, so the older load can’t drop the new space', async () => {
 		const lists = create_held_lists();
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: lists.cord_space_list,
 				cord_space_create: () => Promise.resolve({ space: space(LOFT, 'loft') })
 			})
@@ -224,7 +227,7 @@ describe('CordSpacesState', () => {
 	test('a rename refused for a space that’s gone reloads the list', async () => {
 		let lists = 0;
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: () =>
 					Promise.resolve({ spaces: lists++ === 0 ? [space(HEARTH, 'hearth')] : [] }),
 				cord_space_update: () => Promise.reject(rpc_error(ERROR_CORD_SPACE_NOT_FOUND))
@@ -241,7 +244,7 @@ describe('CordSpacesState', () => {
 	test('a rename that lands while a load runs reloads, so the older load can’t undo it', async () => {
 		const lists = create_held_lists();
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: lists.cord_space_list,
 				cord_space_update: () => Promise.resolve({ space: space(HEARTH, 'den') })
 			})
@@ -277,7 +280,7 @@ describe('CordSpacesState', () => {
 	test('a delete that lands while a load runs reloads, so the older load can’t bring it back', async () => {
 		const lists = create_held_lists();
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: lists.cord_space_list,
 				cord_space_delete: () => Promise.resolve({ ok: true })
 			})
@@ -298,7 +301,7 @@ describe('CordSpacesState', () => {
 
 	test('deleting a space the server no longer has counts as deleted', async () => {
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: () => Promise.resolve({ spaces: [space(HEARTH, 'hearth')] }),
 				cord_space_delete: () => Promise.reject(rpc_error(ERROR_CORD_SPACE_NOT_FOUND))
 			})
@@ -311,7 +314,7 @@ describe('CordSpacesState', () => {
 
 	test('a delete refused for another reason keeps the space and its error', async () => {
 		const state = new CordSpacesState({
-			api: stub_api({
+			api: create_stub_api<ThrowingApi<FrontendActionsApi>>({
 				cord_space_list: () => Promise.resolve({ spaces: [space(HEARTH, 'hearth')] }),
 				cord_space_delete: () => Promise.reject(rpc_error(ERROR_CORD_SPACE_FORBIDDEN))
 			})
