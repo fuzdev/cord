@@ -91,8 +91,9 @@ export default defineConfig(({ mode }) => {
 					extends: true,
 					test: {
 						name: 'unit',
-						include: ['src/**/*.test.ts'],
-						exclude: ['src/test/cross_backend/**'],
+						include: ['src/test/**/*.test.ts'],
+						exclude: ['src/test/**/*.cross.test.ts'],
+						setupFiles: ['./src/test/logged_error_gate.ts'],
 						sequence: { groupOrder: 1 }
 					}
 				},

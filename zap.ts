@@ -136,7 +136,7 @@ const CSP = spa_csp({ wasm_unsafe_eval: true });
 // headers. Its 60s read and send timeouts hold an idle socket open: the
 // frontend's client sends a heartbeat once either direction has been idle for
 // fuz_app's `DEFAULT_HEARTBEAT_INTERVAL`, and `cordd` answers it, so a frame
-// passes each way well inside them (`src/test/ui/cord_socket.test.ts` pins
+// passes each way well inside them (`src/test/ui/cord_socket.svelte.test.ts` pins
 // the relation). A signed-in frontend sends every request over the socket,
 // so the block's rate limit counts its upgrade, not those requests; the
 // server's own per-action limits count them.

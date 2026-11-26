@@ -1,4 +1,5 @@
 import { afterEach, assert, describe, test, vi } from 'vitest';
+import { expect_logged_error } from '@fuzdev/fuz_app/testing/logged_errors.ts';
 
 import type { FrontendActionHandlers } from '#lib/frontend_action_types.ts';
 import { CORD_SOCKET_WAIT_TIMEOUT, CordSocket } from '#lib/ui/cord_socket.svelte.ts';
@@ -110,6 +111,7 @@ describe('create_cord_rpc', () => {
 	});
 
 	test('a sign-out drops a waiting request rather than sending it over HTTP', async () => {
+		expect_logged_error('[peer] send request failed: cord_list');
 		const urls = stub_http();
 		const { rpc, socket, client } = create_rpc();
 		const listed = rpc.api.cord_list({}).catch((e: unknown) => e);
@@ -125,6 +127,7 @@ describe('create_cord_rpc', () => {
 	});
 
 	test('a request that waits out the timeout says it wasn’t sent', async () => {
+		expect_logged_error('[peer] send request failed: cord_list');
 		stub_http();
 		const { rpc, timers } = create_rpc();
 		const listed = rpc.api.cord_list({}).catch((e: unknown) => e);
@@ -134,6 +137,7 @@ describe('create_cord_rpc', () => {
 	});
 
 	test('a request lost with the connection says it may have gone through', async () => {
+		expect_logged_error('[peer] send request failed: cord_create');
 		stub_http();
 		const { rpc, client } = create_rpc();
 		client.open();
@@ -171,8 +175,8 @@ describe('create_cord_rpc', () => {
 	});
 
 	test('a listed notification with no handler is dropped quietly', async () => {
+		// the logged-error gate fails the test on any error it logs
 		const warn = vi.spyOn(console, 'warn');
-		const error = vi.spyOn(console, 'error');
 		const { client } = create_rpc();
 		client.open();
 		client.push({
@@ -188,6 +192,5 @@ describe('create_cord_rpc', () => {
 		});
 		await settle();
 		assert.strictEqual(warn.mock.calls.length, 0);
-		assert.strictEqual(error.mock.calls.length, 0);
 	});
 });

@@ -31,9 +31,6 @@ import {
 /** Must match `CORD_SESSION_COOKIE_NAME` in `crates/cord_server/src/router.rs`. */
 export const CORD_SESSION_COOKIE_NAME = 'cord_session';
 
-/** The admin audit stream `fuz_realtime::audit_stream_router` mounts. */
-export const CORD_AUDIT_STREAM_PATH = '/api/admin/audit/stream';
-
 /**
  * The `testing_cordd` binary, built by the global setup's `before_spawn`
  * (`prepare_cargo_binary`) ahead of the spawn. `-p` is needed: the
@@ -56,8 +53,8 @@ export const CORD_CARGO_BINARY: CargoBinaryOptions = {
  *
  * @param database_url - the database the global setup provisioned
  */
-export const rust_backend_config = (database_url: string): BackendConfig => ({
-	...make_default_rust_backend_config({
+export const rust_backend_config = (database_url: string): BackendConfig =>
+	make_default_rust_backend_config({
 		name: 'rust',
 		port: 14261,
 		cookie_name: CORD_SESSION_COOKIE_NAME,
@@ -97,6 +94,4 @@ export const rust_backend_config = (database_url: string): BackendConfig => ({
 		rust_log: 'info,cord_server=info,testing_cord_server=info',
 		// the keeper credential `_testing_reset` authenticates with
 		daemon_token_dir_env: 'CORD_DAEMON_TOKEN_DIR'
-	}),
-	sse_path: CORD_AUDIT_STREAM_PATH
-});
+	});

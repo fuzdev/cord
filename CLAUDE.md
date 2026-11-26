@@ -467,8 +467,8 @@ workspace (paths in the root `Cargo.toml`); they aren't published, so cargo
 resolves only with that checkout and a `pglet/` checkout beside it
 (`fuz_testing` path-depends on pglet's server crate, and cargo loads it for
 any build). GitHub CI's `rust` job checks out fuz and pglet at `main`
-beside this repo and runs fmt, clippy, and `cargo test` on pglet, beside the
-frontend check. `default-members` is `cord_server` alone, so a bare `cargo build`
+beside this repo and runs fmt, clippy, and `cargo test` on pglet, then the
+PostgreSQL leg on a Postgres service, beside the frontend check. `default-members` is `cord_server` alone, so a bare `cargo build`
 never builds `testing_cordd`. Crates opt into the workspace lints
 (`[lints] workspace = true`): `unsafe_code` forbidden, clippy
 all/pedantic/nursery/cargo, and `unwrap_used`/`expect_used`/`panic` at warn,
@@ -511,7 +511,7 @@ What's cord-specific, beyond the stock fuz_app recipes:
   headers carry it; the client's heartbeat, sent once either direction has
   been idle for `DEFAULT_HEARTBEAT_INTERVAL` (checked every half interval),
   keeps a frame each way inside its 60s read and send timeouts, and inside
-  `cordd`'s own receive timeout (`cord_socket.test.ts` pins both). The
+  `cordd`'s own receive timeout (`cord_socket.svelte.test.ts` pins both). The
   `/api` rate limit counts the upgrade, not the requests sent over the
   socket after it.
 - **The deploy** builds locally (`cargo xtask check-release`, the release
@@ -573,6 +573,11 @@ dev-dependency for its database suites, an edge the audit ignores).
 re-checks, reopens, and waiting requests), and the RPC client's routing and
 push dispatch (`src/test/ui/`, the socket over `FakeSocketClient` and
 `FakeTimers`).
+Its setup file, `src/test/logged_error_gate.ts`, installs fuz_app's
+logged-error gate: a test fails on any error it logs unless it declares it
+(`expect_logged_error` for one it provokes, `allow_logged_error` with a
+reason for one it tolerates). A test file is named for its module,
+`.svelte.` included (`ui/cords_state.svelte.test.ts`).
 
 Every database test opens a database of its own through the spine's
 `fuz_testing::fresh_test_db`: an in-process pglet server by default, so
@@ -609,7 +614,8 @@ engine (the column map is the same on either):
 UPDATE_SCHEMA_READY=1 cargo test -p cord_server --test schema_ready
 ```
 
-GitHub CI has no PostgreSQL leg, so the marked tests run only locally.
+GitHub CI's `rust` job runs the PostgreSQL leg on a Postgres service
+(`-p cord_server`, the crate with database tests).
 
 A run killed before its tests' drops ran leaves `fuz_testing_*` databases
 behind; drop them by that prefix.

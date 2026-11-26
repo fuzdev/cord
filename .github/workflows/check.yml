@@ -50,6 +50,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: cord_test
+          POSTGRES_PASSWORD: cord_test
+          POSTGRES_DB: cord_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     # `FUZ_REF` and `PGLET_REF` are the `fuz` and `pglet` commits cord is
     # checked against: both checked out at `main`, so the three move together.
     env:
@@ -109,10 +124,21 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      # The database tests run on in-process pglet; the Postgres-only and
-      # pglet-blocked ones stay ignored, as no job here has a PostgreSQL server.
+      # The database tests run on in-process pglet (`fuz_testing::fresh_test_db`);
+      # the Postgres-only and pglet-blocked ones stay ignored here.
       - name: Test
         run: cargo test --locked --workspace
+
+      # The PostgreSQL leg. `--include-ignored`: every DB test, and the
+      # Postgres-only and pglet-blocked ones beside them. Each test creates a
+      # database of its own through this server and role and drops it after
+      # (`fuz_testing::fresh_test_db`), so they run in parallel; the service's
+      # user is a superuser, so it has `CREATEDB`. `cord_server` is the crate
+      # with database tests.
+      - name: Test (Postgres)
+        env:
+          FUZ_TEST_POSTGRES_URL: postgres://cord_test:cord_test@localhost:5432/cord_test
+        run: cargo test --locked -p cord_server -- --include-ignored
 
       - name: Release dep-graph audit
         run: cargo xtask check-release

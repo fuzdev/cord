@@ -2,6 +2,7 @@ import { assert, describe, test } from 'vitest';
 import { inject_backend_handle } from '@fuzdev/fuz_app/testing/cross_backend/provided_context.ts';
 import { default_cross_process_setup } from '@fuzdev/fuz_app/testing/cross_backend/setup.ts';
 import { cross_rpc_call } from '@fuzdev/fuz_app/testing/cross_backend/cross_rpc.ts';
+import { SPINE_SSE_PATH } from '@fuzdev/fuz_app/testing/cross_backend/spine_surface_constants.ts';
 import { DEFAULT_TEST_PASSWORD } from '@fuzdev/fuz_app/testing/test_credentials.ts';
 import { JSONRPC_ERROR_CODES } from '@fuzdev/fuz_app/http/jsonrpc_errors.ts';
 import {
@@ -10,7 +11,7 @@ import {
 	ERROR_INSUFFICIENT_PERMISSIONS
 } from '@fuzdev/fuz_app/http/error_schemas.ts';
 
-import { CORD_AUDIT_STREAM_PATH, CORD_SESSION_COOKIE_NAME } from './cord_backend_config.ts';
+import { CORD_SESSION_COOKIE_NAME } from './cord_backend_config.ts';
 import { json_post } from './cord_cross_helpers.ts';
 
 /**
@@ -126,7 +127,7 @@ describe('audit stream gate', () => {
 	test('a member is 403', async () => {
 		const fixture = await setup_test();
 		const member = await fixture.create_account({ username: 'member' });
-		const res = await fixture.fresh_transport()(CORD_AUDIT_STREAM_PATH, {
+		const res = await fixture.fresh_transport()(SPINE_SSE_PATH, {
 			method: 'GET',
 			headers: member.create_session_headers()
 		});
@@ -137,7 +138,7 @@ describe('audit stream gate', () => {
 	test("the keeper's bearer token is refused, since the stream is session-only", async () => {
 		const fixture = await setup_test();
 		// no Origin: a bearer credential is discarded in a browser context
-		const res = await fixture.fresh_transport({ origin: null })(CORD_AUDIT_STREAM_PATH, {
+		const res = await fixture.fresh_transport({ origin: null })(SPINE_SSE_PATH, {
 			method: 'GET',
 			headers: fixture.create_bearer_headers()
 		});
